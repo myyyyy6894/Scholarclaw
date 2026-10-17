@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.13</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.scholarclaw</groupId>
+    <artifactId>sc-java-backend</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <name>sc-java-backend</name>
+    <description>ScholarClaw 业务与状态权威中心（Java 21 + Spring Boot 3.3.x 模块化单体，唯一连接 MySQL 与持有主密钥的服务）</description>
+
+    <properties>
+        <!-- 显式声明编译目标，不依赖 ~/.m2/settings.xml 中可能存在的历史 profile -->
+        <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <archunit.version>1.5.1</archunit.version>
+    </properties>
+
+    <dependencies>
+        <!-- MVC / Jackson / Tomcat：对外 REST 与 SSE，内部回调接口 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Jakarta Validation：04 §2.3.2 第 1 类异常（参数校验失败）的映射基础 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- 说明：MyBatis-Plus、Redis、RabbitMQ、Spring Security 依赖按任务分阶段引入，
+             不在 TASK-101 骨架阶段添加。理由见 sc-java-backend/README 与交付报告：
+             - MyBatis-Plus 的 starter 需要 DataSource，MySQL 到 TASK-201/TASK-104 才具备；
+             - Spring Security 的鉴权策略到 TASK-202 才真正落地，此阶段不引入以避免出现
+               “全部放行”的临时安全配置。 -->
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Strict DAG（02 §4.1）的可执行断言，测试期依赖 -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <compilerArgs>
+                        <!-- 让仅含 javadoc 的 package-info.java 也生成 package-info.class，
+                             否则各模块包内无任何 class，ArchUnit 的 Strict DAG 断言会退化为空层。 -->
+                        <arg>-Xpkginfo:always</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

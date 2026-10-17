@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- NFR-SEC-02 / 04 §2.3.3：明文与密文 API Key、JWT、内部令牌、密码不得进入日志。
+         本转换器在格式化阶段对整条日志消息做脱敏，而不是依赖调用方自觉。 -->
+    <conversionRule conversionWord="maskedMsg"
+                    converterClass="com.scholarclaw.common.logging.SensitiveDataMaskingConverter"/>
+
+    <!-- 02 §11：两侧日志统一输出 [trace_id={traceId}] [user_id={userId}] -->
+    <property name="SC_LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [trace_id=%X{trace_id}] [user_id=%X{user_id}] %logger{40} - %maskedMsg%n"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${SC_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

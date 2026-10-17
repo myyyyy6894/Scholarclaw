@@ -1,0 +1,23 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      # 显式声明响应字符集：JSON 虽按 RFC 8259 默认 UTF-8，但显式声明可避免
+      # 客户端与测试工具按 ISO-8859-1 解码导致中文乱码。
+      charset: UTF-8
+      force: true
+
+spring:
+  application:
+    name: sc-java-backend
+
+sc:
+  # 用户时区默认值与产品基线一致（01 §FR-DDL-001）。
+  # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
+  # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。
+  timezone: ${SC_TIMEZONE:Asia/Shanghai}
+  internal:
+    # Java <-> Python 内部调用鉴权令牌（02 §13.2：仅注入 sc-java-backend 与 sc-python-ai）。
+    # 默认留空表示“未注入”：此时 InternalTokenAuthFilter 对所有 /internal/** 请求一律拒绝（fail-closed），
+    # 真实令牌只通过环境变量注入，绝不写入仓库。
+    token: ${SC_INTERNAL_SERVICE_TOKEN:}

@@ -32,8 +32,9 @@ ScholarClaw/
 ├── ENVIRONMENT.md            # 仓库现状核验、ENV-01~ENV-12 差异风险、可复现命令清单
 ├── AGENT_HANDOFF.md          # 跨会话交接记忆入口
 ├── .agent-handoff/           # 交接状态文件（snapshot / risks / backlog / validation / decisions / workspace …）
-├── sc-java-backend/          # Java 业务与状态权威中心（当前已建立骨架）
-└── (待建) sc-python-ai/、Web 前端工程、docker-compose.yml
+├── sc-java-backend/          # Java 业务与状态权威中心（已建立骨架）
+├── sc-python-ai/             # Python 无状态 AI 计算引擎（已建立服务骨架）
+└── (待建) Web 前端工程、docker-compose.yml
 ```
 
 **开发方式：文档驱动。** `docs/01`~`docs/06` 是唯一依据；如发现文档之间不一致，先说明原因与方案并等待确认，不得擅自修改文档。
@@ -56,9 +57,23 @@ mvn -f sc-java-backend/pom.xml -B test
 
 **尚未验证：** 启动应用（`mvn spring-boot:run`）。当前无 MySQL/Redis 连接配置与环境变量注入，启动验证属 TASK-104 / TASK-105。
 
-### 3.2 Python / Web / 编排（待建，尚未验证）
+### 3.2 Python（已实测）
 
-`sc-python-ai`、Web 前端工程与 `docker-compose.yml` 尚未创建，对应任务为 TASK-102 / TASK-103 / TASK-104。命令清单见 `ENVIRONMENT.md` §3。
+```bash
+# 建虚拟环境并安装（本机 Python 3.13；容器内 pin 3.11，见 ENVIRONMENT.md ENV-02）
+python3 -m venv sc-python-ai/.venv
+sc-python-ai/.venv/bin/python -m pip install -e 'sc-python-ai[dev]'
+
+# 运行测试
+sc-python-ai/.venv/bin/python -m pytest          # 需在 sc-python-ai/ 目录下执行
+
+# 本地启动（仅绑定环回，不暴露到局域网；容器内由 Compose 决定绑定与端口）
+cd sc-python-ai
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
+```
+
+**尚未验证：** Web 前端工程与 `docker-compose.yml` 不存在（TASK-103 / TASK-104）；`sc-python-ai` 的
+ChromaDB 客户端（TASK-504）、RabbitMQ 消费者（TASK-502）与模型探测接口（TASK-302）均未落地。
 
 ---
 
@@ -70,8 +85,14 @@ mvn -f sc-java-backend/pom.xml -B test
 |---|---|---|---|
 | `sc.timezone` | `SC_TIMEZONE` | `Asia/Shanghai` | 用户时区与时间序列化基准。**必须显式固定**，严禁依赖宿主机/JVM 默认时区（见 `ENVIRONMENT.md` ENV-01） |
 | `sc.internal.token` | `SC_INTERNAL_SERVICE_TOKEN` | 空 | Java ↔ Python 内部调用鉴权令牌（请求头 `X-Internal-Token`）。**留空时 `InternalTokenAuthFilter` 对所有 `/internal/**` 一律拒绝（失败关闭）**，不会"跳过校验" |
+| `sc.storage`（Python） | `SC_STORAGE_RAW_PATH` | `/data/scholarclaw/storage/raw` | 共享卷只读挂载点；`sc-python-ai` 只读访问，绝不写入或删除源文件 |
+| `sc.log-level`（Python） | `SC_LOG_LEVEL` | `INFO` | 本服务日志级别 |
+| 模型出站超时（Python） | `SC_MODEL_CONNECT_TIMEOUT_SECONDS` / `SC_MODEL_READ_TIMEOUT_SECONDS` | `5` / `30` | 受控模型网关的出站超时 |
+| 本地模型白名单（Python） | `SC_ALLOW_LOCAL_MODEL_BASE_URL` / `SC_LOCAL_MODEL_ALLOWED_ORIGINS` | `false` / 空 | 默认关闭；显式开启后才允许校验本地 Ollama 白名单（消费方为 TASK-301 的 SSRF 校验） |
 
 其余环境变量（`SC_MASTER_KEY`、`SC_JWT_SECRET`、`SC_DB_PASSWORD` 等）随对应任务引入，注入边界见 `docs/02` §13.2。
+**`sc-python-ai` 只从上述白名单变量读取配置**，其 `app/core/config.py` 对白名单外的名字直接报错，
+并有源码级测试断言它不引用主密钥或数据库凭据。
 
 ---
 

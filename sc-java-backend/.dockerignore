@@ -1,0 +1,6 @@
+# 构建上下文只需那个可执行 jar 与 Dockerfile 本身。
+# 必须放行 target/*.jar：镜像要 COPY 它。
+*
+!Dockerfile
+!target/*.jar
+!target/*.jar.original

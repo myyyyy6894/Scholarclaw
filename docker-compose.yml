@@ -1,0 +1,303 @@
+# ============================================================================
+# ScholarClaw 单机部署编排
+#
+# 依据：docs/02 §2.4（部署拓扑）、§13.1（容器清单/网络边界/端口暴露）、
+#       §13.2（按容器最小权限注入环境变量）、§13.3（卷权限与健康检查依赖链）；
+#       ENVIRONMENT.md ENV-01（显式固定时区）、ENV-04（内部服务不得暴露宿主机端口）、
+#       ENV-05（容器内存上限）、ENV-06（pin 文档基线镜像标签）。
+#
+# 三条硬约束：
+#   1. 只有 sc-web-nginx 映射宿主机端口；数据库、中间件、Python 一律不映射（ENV-04）。
+#   2. 敏感变量用 environment 显式声明，**任何容器都不用 env_file**（02 §13.2）。
+#   3. 时区一律显式注入 TZ 与 SC_TIMEZONE，严禁依赖宿主机时区（ENV-01）。
+#
+# 用法：
+#   cp .env.example .env   # 填入真实值（.env 已 gitignore）
+#   docker compose config  # 校验编排
+#   docker compose up -d
+# ============================================================================
+
+name: scholarclaw
+
+networks:
+  # 仅 Nginx 与 Java：对外入口所在网络
+  scholarclaw-public:
+    name: scholarclaw-public
+    driver: bridge
+  # 数据库、中间件、Python、Java 之间的内部网络；不映射任何宿主机端口
+  scholarclaw-internal:
+    name: scholarclaw-internal
+    driver: bridge
+
+volumes:
+  vol_mysql_data:
+    name: vol_mysql_data
+  vol_redis_data:
+    name: vol_redis_data
+  vol_rabbitmq_data:
+    name: vol_rabbitmq_data
+  vol_chroma_data:
+    name: vol_chroma_data
+  # 原始课件共享卷：Java 读写，Python 只读挂载 /raw（02 §13.3）
+  vol_shared_storage:
+    name: vol_shared_storage
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # MySQL 8.0：唯一业务权威源（SoT），只由 sc-java-backend 连接
+  # ---------------------------------------------------------------------------
+  sc-mysql:
+    image: mysql:8.0
+    container_name: sc-mysql
+    restart: unless-stopped
+    networks: [scholarclaw-internal]
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      MYSQL_DATABASE: ${SC_DB_NAME:-scholarclaw}
+      MYSQL_USER: ${SC_DB_USER:-scholarclaw}
+      MYSQL_PASSWORD: ${SC_DB_PASSWORD:?SC_DB_PASSWORD 未设置，请先配置 .env}
+      MYSQL_ROOT_PASSWORD: ${SC_DB_ROOT_PASSWORD:?SC_DB_ROOT_PASSWORD 未设置，请先配置 .env}
+    # ENV-01：除 TZ 外再显式固定服务端时区与会话字符集，不依赖容器默认推导
+    command:
+      - --default-time-zone=+08:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - vol_mysql_data:/var/lib/mysql
+    mem_limit: 1536m
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  # ---------------------------------------------------------------------------
+  # Redis 7.2：只存带 TTL 的运行时状态；不做 MySQL 二级缓存（02 §8.2）
+  # ---------------------------------------------------------------------------
+  sc-redis:
+    image: redis:7.2-alpine
+    container_name: sc-redis
+    restart: unless-stopped
+    networks: [scholarclaw-internal]
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      SC_REDIS_PASSWORD: ${SC_REDIS_PASSWORD:?SC_REDIS_PASSWORD 未设置，请先配置 .env}
+    # noeviction：宁可写失败也不静默淘汰幂等键/黑名单，避免"防重失效"这类隐蔽故障
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 200mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - ${SC_REDIS_PASSWORD:?SC_REDIS_PASSWORD 未设置，请先配置 .env}
+    volumes:
+      - vol_redis_data:/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$SC_REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ 3.13：仅承载 rag.ingest.queue / rag.ingest.dlq（02 §3.1）
+  # 队列与 DLX 声明属 TASK-501，此处只提供 broker
+  # ---------------------------------------------------------------------------
+  sc-rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: sc-rabbitmq
+    restart: unless-stopped
+    networks: [scholarclaw-internal]
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      RABBITMQ_DEFAULT_USER: ${SC_RABBITMQ_USER:-scholarclaw}
+      RABBITMQ_DEFAULT_PASS: ${SC_RABBITMQ_PASSWORD:?SC_RABBITMQ_PASSWORD 未设置，请先配置 .env}
+    volumes:
+      - vol_rabbitmq_data:/var/lib/rabbitmq
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # ChromaDB 0.5.x：可重建的派生向量索引，由 Python 独占访问（02 §5.1）
+  # ---------------------------------------------------------------------------
+  sc-chromadb:
+    image: chromadb/chroma:0.5.23
+    container_name: sc-chromadb
+    restart: unless-stopped
+    networks: [scholarclaw-internal]
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/chroma
+      # 关闭匿名遥测：单机私有部署不外发任何使用数据
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - vol_chroma_data:/chroma/chroma
+    mem_limit: 1024m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/v1/heartbeat >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Java 业务与状态权威中心：唯一连接 MySQL、唯一持有 SC_MASTER_KEY
+  # ---------------------------------------------------------------------------
+  sc-java-backend:
+    build:
+      context: ./sc-java-backend
+    image: scholarclaw/sc-java-backend:1.0.0
+    container_name: sc-java-backend
+    restart: unless-stopped
+    depends_on:
+      sc-mysql:
+        condition: service_healthy
+      sc-redis:
+        condition: service_healthy
+      sc-rabbitmq:
+        condition: service_healthy
+    networks: [scholarclaw-public, scholarclaw-internal]
+    # 不映射宿主机端口：对外只经 sc-web-nginx 反向代理
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      SC_TIMEZONE: ${SC_TIMEZONE:-Asia/Shanghai}
+      SC_LOG_LEVEL: ${SC_LOG_LEVEL:-INFO}
+      # ↓ 仅本容器允许持有的敏感项（02 §13.2）
+      SC_MASTER_KEY: ${SC_MASTER_KEY:?SC_MASTER_KEY 未设置，请先配置 .env}
+      SC_JWT_SECRET: ${SC_JWT_SECRET:?SC_JWT_SECRET 未设置，请先配置 .env}
+      SC_DB_HOST: ${SC_DB_HOST:-sc-mysql}
+      SC_DB_PORT: ${SC_DB_PORT:-3306}
+      SC_DB_NAME: ${SC_DB_NAME:-scholarclaw}
+      SC_DB_USER: ${SC_DB_USER:-scholarclaw}
+      SC_DB_PASSWORD: ${SC_DB_PASSWORD:?SC_DB_PASSWORD 未设置，请先配置 .env}
+      SC_REDIS_HOST: ${SC_REDIS_HOST:-sc-redis}
+      SC_REDIS_PORT: ${SC_REDIS_PORT:-6379}
+      SC_REDIS_PASSWORD: ${SC_REDIS_PASSWORD:?SC_REDIS_PASSWORD 未设置，请先配置 .env}
+      SC_RABBITMQ_HOST: ${SC_RABBITMQ_HOST:-sc-rabbitmq}
+      SC_RABBITMQ_PORT: ${SC_RABBITMQ_PORT:-5672}
+      SC_RABBITMQ_USER: ${SC_RABBITMQ_USER:-scholarclaw}
+      SC_RABBITMQ_PASSWORD: ${SC_RABBITMQ_PASSWORD:?SC_RABBITMQ_PASSWORD 未设置，请先配置 .env}
+      SC_INTERNAL_SERVICE_TOKEN: ${SC_INTERNAL_SERVICE_TOKEN:?SC_INTERNAL_SERVICE_TOKEN 未设置，请先配置 .env}
+      SC_ALLOW_LOCAL_MODEL_BASE_URL: ${SC_ALLOW_LOCAL_MODEL_BASE_URL:-false}
+      SC_LOCAL_MODEL_ALLOWED_ORIGINS: ${SC_LOCAL_MODEL_ALLOWED_ORIGINS:-}
+      SC_IM_PUSH_ENABLED: ${SC_IM_PUSH_ENABLED:-false}
+      SC_ONEBOT_ACCESS_TOKEN: ${SC_ONEBOT_ACCESS_TOKEN:-}
+    volumes:
+      # 共享卷读写（Java 负责落盘与物理删除）
+      - vol_shared_storage:/data/scholarclaw/storage
+    mem_limit: 1024m
+    healthcheck:
+      # 过渡实现：本阶段只验证进程已监听端口。
+      # 完整健康检查接口 GET /internal/api/v1/health（04 §4.9.8）属 TASK-105，
+      # 届时改用：wget -q -O- http://127.0.0.1:8080/internal/api/v1/health
+      # （该接口对容器本机环回免 X-Internal-Token，见 04 API-CONF-03）
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8080"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # ---------------------------------------------------------------------------
+  # Python 无状态 AI 计算引擎：不连 MySQL/Redis、不持主密钥（02 §5.1、05 §3.1）
+  # ---------------------------------------------------------------------------
+  sc-python-ai:
+    build:
+      context: ./sc-python-ai
+      args:
+        # 构建期 PyPI 源。默认官方源；本机（容器内无宿主机代理）改用国内镜像加速，
+        # 通过 .env 的 SC_PIP_INDEX_URL 覆盖，仓库默认值保持官方源。
+        PIP_INDEX_URL: ${SC_PIP_INDEX_URL:-https://pypi.org/simple}
+    image: scholarclaw/sc-python-ai:1.0.0
+    container_name: sc-python-ai
+    restart: unless-stopped
+    depends_on:
+      sc-chromadb:
+        condition: service_healthy
+      sc-java-backend:
+        condition: service_healthy
+    networks: [scholarclaw-internal]
+    # ⚠️ 严禁出现：SC_MASTER_KEY、SC_DB_*、SC_REDIS_PASSWORD、SC_JWT_SECRET（02 §13.2）
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      SC_TIMEZONE: ${SC_TIMEZONE:-Asia/Shanghai}
+      SC_LOG_LEVEL: ${SC_LOG_LEVEL:-INFO}
+      SC_INTERNAL_SERVICE_TOKEN: ${SC_INTERNAL_SERVICE_TOKEN:?SC_INTERNAL_SERVICE_TOKEN 未设置，请先配置 .env}
+      SC_RABBITMQ_HOST: ${SC_RABBITMQ_HOST:-sc-rabbitmq}
+      SC_RABBITMQ_PORT: ${SC_RABBITMQ_PORT:-5672}
+      SC_RABBITMQ_USER: ${SC_RABBITMQ_USER:-scholarclaw}
+      SC_RABBITMQ_PASSWORD: ${SC_RABBITMQ_PASSWORD:?SC_RABBITMQ_PASSWORD 未设置，请先配置 .env}
+      SC_ALLOW_LOCAL_MODEL_BASE_URL: ${SC_ALLOW_LOCAL_MODEL_BASE_URL:-false}
+      SC_LOCAL_MODEL_ALLOWED_ORIGINS: ${SC_LOCAL_MODEL_ALLOWED_ORIGINS:-}
+      # 共享卷只读挂载点（容器内路径，Python 只读解析，绝不写入或删除源文件）
+      SC_STORAGE_RAW_PATH: /data/scholarclaw/storage/raw
+    volumes:
+      # 只读挂载共享卷的 **raw 子目录**（02 §13.3 的 `ro: /raw`）。
+      #
+      # 必须用 `volume.subpath`：若直接把卷根挂到 /data/scholarclaw/storage/raw，
+      # Java 写的 `<卷根>/raw/x.pdf` 在 Python 眼里会变成 `/…/raw/raw/x.pdf`，
+      # 两侧路径对不上（TASK-104 实测发现的真实缺陷）；而且那样 Python 会看到
+      # 整个存储根目录，超出「只读 /raw」的最小权限设计。
+      - type: volume
+        source: vol_shared_storage
+        target: /data/scholarclaw/storage/raw
+        read_only: true
+        volume:
+          subpath: raw
+    mem_limit: 1536m
+    healthcheck:
+      # python:3.11-slim 内无 curl/wget，用解释器自身探活
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/internal/ai/v1/health',timeout=3).status==200 else 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Nginx：唯一对外入口，托管 Vue 静态产物并反向代理 /api 与 /webhooks
+  # ---------------------------------------------------------------------------
+  sc-web-nginx:
+    build:
+      context: ./sc-web-frontend
+      args:
+        NPM_REGISTRY: ${SC_NPM_REGISTRY:-https://registry.npmjs.org/}
+    image: scholarclaw/sc-web-nginx:1.0.0
+    container_name: sc-web-nginx
+    restart: unless-stopped
+    depends_on:
+      sc-java-backend:
+        condition: service_healthy
+    networks: [scholarclaw-public]
+    ports:
+      # 唯一对外暴露的端口（02 §13.1 端口暴露红线）
+      - "${SC_WEB_HTTP_PORT:-80}:80"
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# 说明（有意未包含的服务）：
+#   sc-napcat-onebot —— 02 §13.1 标注为「可选」的 OneBot 11 客户端容器，且 MVP 验收不依赖它。
+#   社区镜像 tag 无法在无外部协议端的情况下验证，故留待 TASK-803（OneBot 适配器）落地时
+#   连同镜像 tag 一并确认，避免在此写下一个未经验证的镜像引用。

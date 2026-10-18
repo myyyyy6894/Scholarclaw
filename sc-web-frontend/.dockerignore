@@ -1,0 +1,9 @@
+# 必须排除：否则 `COPY . .` 会用宿主机的 node_modules 覆盖容器内刚装好的依赖
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+.env.*.local
+*.log
+Dockerfile

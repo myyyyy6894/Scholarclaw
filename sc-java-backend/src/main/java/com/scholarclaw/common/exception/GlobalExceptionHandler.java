@@ -1,6 +1,7 @@
 package com.scholarclaw.common.exception;
 
 import com.scholarclaw.common.response.Result;
+import jakarta.servlet.ServletException;
 import jakarta.validation.ConstraintViolationException;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -8,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -77,6 +79,43 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleMessageNotReadable(HttpMessageNotReadableException ex) {
         log.warn("请求体解析失败: {}", ex.getMostSpecificCause().getClass().getSimpleName());
         return validationFailure(null);
+    }
+
+    /**
+     * Spring MVC 自身抛出、且携带明确 HTTP 状态的异常：未匹配路由
+     * （{@code NoResourceFoundException}）、方法不允许、媒体类型不支持、请求参数缺失等。
+     *
+     * <p><b>为什么必须有这个处理器：</b>若只留 {@link #handleUnexpectedException}，
+     * 未匹配路由的 {@code NoResourceFoundException} 会被它接住并返回 {@code 500}，
+     * 于是「访问不存在的路径」变成服务器错误——TASK-104 在容器里实测时发现的真实缺陷。
+     *
+     * <p>写法说明：这些异常统一继承 {@code jakarta.servlet.ServletException} 并实现
+     * {@code org.springframework.web.ErrorResponse}。{@code @ExceptionHandler} 只接受
+     * {@code Throwable} 子类，不能直接写接口类型，因此按 {@code ServletException} 捕获、
+     * 再用 {@code ErrorResponse} 取状态码；不是 {@code ErrorResponse} 的仍按 500 处理。
+     *
+     * <p>状态码原样保留，错误码按 {@code 04} 第 7 章就近映射：{@code 404 → RESOURCE_NOT_FOUND}、
+     * {@code 403 → AUTH_FORBIDDEN}，其余 4xx 归 {@code VALIDATION_ERROR}（第 7 章未为 405/415
+     * 这类状态定义专门错误码，此处不擅自发明）。
+     */
+    @ExceptionHandler(ServletException.class)
+    public ResponseEntity<Result<Void>> handleServletException(ServletException ex) {
+        if (!(ex instanceof ErrorResponse errorResponse)) {
+            return handleUnexpectedException(ex);
+        }
+        HttpStatus status = HttpStatus.valueOf(errorResponse.getStatusCode().value());
+        ErrorCode errorCode = switch (status.value()) {
+            case 403 -> ErrorCode.AUTH_FORBIDDEN;
+            case 404 -> ErrorCode.RESOURCE_NOT_FOUND;
+            default -> status.is4xxClientError() ? ErrorCode.VALIDATION_ERROR : ErrorCode.INTERNAL_ERROR;
+        };
+        if (status.is5xxServerError()) {
+            log.error("Spring 异常映射到服务端错误码 status={} code={}", status.value(), errorCode.code(), ex);
+        } else {
+            log.warn("请求被拒绝 status={} code={} type={}", status.value(), errorCode.code(),
+                    ex.getClass().getSimpleName());
+        }
+        return ResponseEntity.status(status).body(Result.failure(errorCode));
     }
 
     /** 兜底：任何未预期异常统一返回 {@code 500 INTERNAL_ERROR}，只回脱敏文案 + trace_id。 */

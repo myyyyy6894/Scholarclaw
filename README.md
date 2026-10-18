@@ -35,7 +35,9 @@ ScholarClaw/
 ├── sc-java-backend/          # Java 业务与状态权威中心（已建立骨架）
 ├── sc-python-ai/             # Python 无状态 AI 计算引擎（已建立服务骨架）
 ├── sc-web-frontend/          # Vue 3 PC Web 工作台（已建立骨架）
-└── (待建) docker-compose.yml
+├── docker-compose.yml        # 单机部署编排（7 个容器 + 双网络 + 5 个持久化卷）
+├── .env.example              # 部署环境变量示例（真实值放 .env，已 gitignore）
+└── DEPLOYMENT.md             # 部署手册：端口边界、卷权限、注入边界、健康检查链
 ```
 
 **开发方式：文档驱动。** `docs/01`~`docs/06` 是唯一依据；如发现文档之间不一致，先说明原因与方案并等待确认，不得擅自修改文档。
@@ -94,8 +96,24 @@ ESLint 启用了**类型感知规则**，其中 `no-floating-promises` / `no-mis
 "忘了 await 的异步调用"——这类 bug `tsc` 查不出来，而本项目前端全是异步（接口请求、SSE 流式问答）。
 没有引入 Prettier（避免新增依赖与全量重排）。
 
-**尚未验证：** 与真实后端的联调（Java 侧尚无 Web 业务接口，P2 起落地）；生产态由 Nginx 托管（TASK-104）；
-浏览器端到端交互（无 E2E 框架）。
+**尚未验证：** 与真实后端的联调（Java 侧尚无 Web 业务接口，P2 起落地）；
+浏览器端到端交互（无 E2E 框架）。生产态已由 Nginx 托管（见 §3.4）。
+
+### 3.4 部署（Docker Compose，已实测）
+
+```bash
+cp .env.example .env && chmod 600 .env   # 填入真实值；SC_MASTER_KEY 必须是 32 字节 Base64
+mvn -f sc-java-backend/pom.xml -B -DskipTests package   # Java 镜像依赖宿主机预构建的 jar
+docker compose build
+docker compose up -d
+docker compose ps                        # 等到 7 个容器都 healthy
+```
+
+入口：`http://<宿主机>:80`。七个容器（MySQL / Redis / RabbitMQ / ChromaDB / Java / Python / Nginx）
+与端口边界、卷权限、环境变量注入边界、健康检查依赖链、已知限制**详见 `DEPLOYMENT.md`**。
+
+要点提醒：**只有 Nginx 暴露宿主机端口**；`/internal/**` 被 Nginx 阻断为 404；
+Java 与 Python 共享同一 uid（10001）但 Python 对共享卷是只读挂载。
 
 ---
 

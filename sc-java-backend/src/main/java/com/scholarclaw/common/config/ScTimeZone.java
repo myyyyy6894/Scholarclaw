@@ -2,6 +2,7 @@ package com.scholarclaw.common.config;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 
 /**
@@ -34,8 +35,14 @@ public final class ScTimeZone {
         zoneId = Objects.requireNonNull(value, "zoneId");
     }
 
-    /** 带应用时区偏移量的当前时间，用于 {@code Result.timestamp} 等对外时间戳。 */
+    /**
+     * 带应用时区偏移量的当前时间，用于 {@code Result.timestamp} 等对外时间戳。
+     *
+     * <p>截断到毫秒：{@code 04} §2.5.2 规定的对外格式是 {@code YYYY-MM-DDTHH:mm:ss+08:00}
+     * 或 {@code ...SSS+08:00}，而 {@link OffsetDateTime#now} 带纳秒会让 Jackson 输出 9 位小数
+     * （如 {@code 2026-10-18T14:30:24.577030208+08:00}），偏离契约——容器实测发现。
+     */
     public static OffsetDateTime now() {
-        return OffsetDateTime.now(zoneId);
+        return OffsetDateTime.now(zoneId).truncatedTo(ChronoUnit.MILLIS);
     }
 }

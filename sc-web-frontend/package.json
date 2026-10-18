@@ -1,0 +1,37 @@
+{
+  "name": "sc-web-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ScholarClaw PC Web 工作台（Vue 3 + TypeScript + Vite + Pinia + Element Plus）",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "type-check": "vue-tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "check": "npm run type-check && npm run lint && npm run test",
+    "build": "npm run type-check && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "element-plus": "^2.9.0",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vitejs/plugin-vue": "^5.2.0",
+    "eslint": "^10.13.0",
+    "eslint-plugin-vue": "^10.11.1",
+    "typescript": "~5.6.0",
+    "typescript-eslint": "^8.71.2",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0",
+    "vue-eslint-parser": "^10.4.1",
+    "vue-tsc": "^2.1.0"
+  }
+}

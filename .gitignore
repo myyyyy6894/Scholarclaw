@@ -21,6 +21,10 @@ target/
 .mvn/timing.properties
 
 # ===== Python =====
+# uv.lock：本机装有 uv 0.13.1（用户自行安装），但依赖管理按已确认决策 P0-02
+# 统一走 `pyproject.toml` + pip，uv.lock 只是本地副产物，不作为依赖事实来源。
+# 若将来决定改用 uv，请先更新 P0-02 决策与 README，再删掉这一行。
+uv.lock
 __pycache__/
 *.py[cod]
 *.egg-info/

@@ -34,7 +34,8 @@ ScholarClaw/
 ├── .agent-handoff/           # 交接状态文件（snapshot / risks / backlog / validation / decisions / workspace …）
 ├── sc-java-backend/          # Java 业务与状态权威中心（已建立骨架）
 ├── sc-python-ai/             # Python 无状态 AI 计算引擎（已建立服务骨架）
-└── (待建) Web 前端工程、docker-compose.yml
+├── sc-web-frontend/          # Vue 3 PC Web 工作台（已建立骨架）
+└── (待建) docker-compose.yml
 ```
 
 **开发方式：文档驱动。** `docs/01`~`docs/06` 是唯一依据；如发现文档之间不一致，先说明原因与方案并等待确认，不得擅自修改文档。
@@ -72,8 +73,29 @@ cd sc-python-ai
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
 ```
 
-**尚未验证：** Web 前端工程与 `docker-compose.yml` 不存在（TASK-103 / TASK-104）；`sc-python-ai` 的
+**尚未验证：** `docker-compose.yml` 不存在（TASK-104）；`sc-python-ai` 的
 ChromaDB 客户端（TASK-504）、RabbitMQ 消费者（TASK-502）与模型探测接口（TASK-302）均未落地。
+
+### 3.3 Web 前端（已实测）
+
+```bash
+cd sc-web-frontend
+npm install                   # 本机经代理访问 npmjs 极慢，可用 --registry=https://registry.npmmirror.com
+npm run dev                   # 开发服务器，仅绑定 127.0.0.1:5173
+npm run check                 # 完整门禁：类型检查 + ESLint + 单元测试
+npm run type-check            # vue-tsc --noEmit
+npm run lint                  # eslint . --max-warnings 0（含类型感知规则）
+npm run test                  # vitest run
+npm run build                 # 先类型检查，再 vite build 产出 dist/
+npm run preview               # 预览构建产物
+```
+
+ESLint 启用了**类型感知规则**，其中 `no-floating-promises` / `no-misused-promises` 专门拦截
+"忘了 await 的异步调用"——这类 bug `tsc` 查不出来，而本项目前端全是异步（接口请求、SSE 流式问答）。
+没有引入 Prettier（避免新增依赖与全量重排）。
+
+**尚未验证：** 与真实后端的联调（Java 侧尚无 Web 业务接口，P2 起落地）；生产态由 Nginx 托管（TASK-104）；
+浏览器端到端交互（无 E2E 框架）。
 
 ---
 
@@ -93,6 +115,17 @@ ChromaDB 客户端（TASK-504）、RabbitMQ 消费者（TASK-502）与模型探�
 其余环境变量（`SC_MASTER_KEY`、`SC_JWT_SECRET`、`SC_DB_PASSWORD` 等）随对应任务引入，注入边界见 `docs/02` §13.2。
 **`sc-python-ai` 只从上述白名单变量读取配置**，其 `app/core/config.py` 对白名单外的名字直接报错，
 并有源码级测试断言它不引用主密钥或数据库凭据。
+
+前端构建期变量（示例见 `sc-web-frontend/.env.example`）：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `VITE_API_BASE_URL` | `/api` | 浏览器请求业务接口的前缀；开发态由 Vite 代理，生产态由 Nginx 反向代理 |
+| `VITE_DEV_PROXY_TARGET` | `http://127.0.0.1:8080` | 开发态代理目标（Java 后端） |
+| `VITE_APP_TITLE` | `ScholarClaw 智学爪` | 页面标题 |
+
+⚠️ **Vite 只会把 `VITE_` 前缀的变量注入客户端包**，因此**任何密钥都不得以 `VITE_` 命名**——
+模型密钥由 Java 加密保存、只在内部请求内透传，前端只展示掩码。
 
 ---
 

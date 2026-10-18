@@ -1,0 +1,32 @@
+:root {
+  --sc-page-gap: 16px;
+  --sc-content-max-width: 1440px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    Arial, sans-serif;
+  background-color: #f5f7fa;
+  color: #303133;
+}
+
+.sc-page {
+  max-width: var(--sc-content-max-width);
+  margin: 0 auto;
+}
+
+.sc-card-gap {
+  margin-bottom: var(--sc-page-gap);
+}

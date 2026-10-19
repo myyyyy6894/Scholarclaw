@@ -4,7 +4,8 @@
   并在响应头原样返回，保证 Java ↔ Python 调用链可串联。
 * **身份信任边界**：`X-User-Id` 只有在 `X-Internal-Token` 校验通过后才可信任（`04` §6.1.2）。
   因此本模块只提供绑定入口，绑定动作由 :mod:`app.core.security` 在鉴权成功后执行——
-  中间件本身**不**从请求头读取 `X-User-Id`，避免出现"未鉴权却已信任身份"的窗口。
+  中间件本身**不**从请求头读取 `X-User-Id`，避免出现"未鉴权却已信任身份"的窗口；
+  请求结束时中间件清空身份（:func:`clear_user_id`），避免 worker 复用导致跨请求串用户。
 * 非 HTTP 起点（MQ 消费者、定时任务）按 `02` §11 使用 `tr_cron_*` 前缀生成追踪号。
 """
 
@@ -88,6 +89,16 @@ def reset_user_id(token: Token[str | None]) -> None:
     _user_id_var.reset(token)
 
 
+def clear_user_id() -> None:
+    """清空用户身份上下文（请求结束后由中间件调用）。
+
+    为什么用 `set(None)` 而不是 `reset(token)`：绑定发生在依赖（`app.core.security`）里，
+    其 `Token` 与中间件不在同一调用栈上；跨上下文 `reset` 会抛 `ValueError`，
+    而这里只需要"请求结束时身份一定为空"这一确定性结果。
+    """
+    _user_id_var.set(None)
+
+
 def clear() -> None:
     _trace_id_var.set(None)
     _user_id_var.set(None)
@@ -122,3 +133,6 @@ class TraceIdMiddleware:
             await self.app(scope, receive, send_with_trace_header)
         finally:
             reset(token)
+            # 用户身份同样必须在请求结束时清空：ASGI worker 复用任务/线程，
+            # 残留的 user_id 会让下一条无身份的请求带着上一个用户的 ID 打日志。
+            clear_user_id()

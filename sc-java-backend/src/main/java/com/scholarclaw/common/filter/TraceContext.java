@@ -10,6 +10,16 @@ import org.slf4j.MDC;
  * <p>{@code trace_id} 在 Java 入口（HTTP 或定时任务）生成，经 {@code X-Trace-Id} 头与
  * RabbitMQ 消息体透传给 Python，并原样带回；两侧日志统一输出
  * {@code [trace_id={}] [user_id={}]}。
+ *
+ * <p><b>{@code user_id} 的绑定时机（{@code 04} §6.1.2）：</b>
+ * <ol>
+ *   <li>入口（{@link TraceIdFilter}）只绑定 {@code trace_id}，并把 {@code user_id} 置为占位符
+ *       {@link #ABSENT_USER_ID}——此时身份尚未验证；</li>
+ *   <li><b>认证过滤器（TASK-202）验签成功后必须调用 {@link #bindUserId(Long)}</b> 覆盖占位符，
+ *       此后同一请求内的日志才带真实用户 ID；</li>
+ *   <li>入口<b>绝不</b>从请求头读取 {@code X-User-Id}：外部请求携带的该头会被入口剥离，
+ *       内部请求的该头也只在 {@code X-Internal-Token} 校验通过后才可信。</li>
+ * </ol>
  */
 public final class TraceContext {
 
@@ -20,11 +30,8 @@ public final class TraceContext {
     public static final String MDC_TRACE_ID = "trace_id";
     public static final String MDC_USER_ID = "user_id";
 
-    /**
-     * 请求属性名：由后续的认证过滤器（TASK-202）在验签成功后写入当前用户 ID，
-     * 追踪过滤器据此把 {@code user_id} 写入 MDC，避免追踪层反向依赖鉴权层。
-     */
-    public static final String REQUEST_ATTRIBUTE_USER_ID = "sc.userId";
+    /** 外部请求身份头名称：入口必须剥离，严禁信任（{@code 04} §6.1.2）。 */
+    public static final String USER_ID_HEADER = "X-User-Id";
 
     private static final String HTTP_PREFIX = "tr_";
     private static final String CRON_PREFIX = "tr_cron_";
@@ -68,14 +75,33 @@ public final class TraceContext {
         return current != null ? current : generateCronTraceId();
     }
 
-    /** 绑定追踪上下文；调用方必须在 {@code finally} 中调用 {@link #clear()}。 */
-    public static void bind(String traceId, Long userId) {
+    /**
+     * 无用户身份时的占位符，与 {@code sc-python-ai} 的日志过滤器保持一致。
+     *
+     * <p>两侧统一用 {@code -} 而不是让 Java 侧输出空串：日志格式相同、占位符也相同，
+     * 跨语言按 {@code [user_id=-]} 检索才不会有漏（TASK-105 实测发现的不一致）。
+     */
+    public static final String ABSENT_USER_ID = "-";
+
+    /**
+     * 入口绑定追踪上下文：写入 {@code trace_id}，并把 {@code user_id} 置为占位符。
+     *
+     * <p>调用方必须在 {@code finally} 中调用 {@link #clear()}。
+     * 此处<b>不接受</b>用户 ID 参数：入口阶段身份尚未验证，见类注释的绑定时机说明。</p>
+     */
+    public static void bind(String traceId) {
         MDC.put(MDC_TRACE_ID, traceId);
-        if (userId != null) {
-            MDC.put(MDC_USER_ID, String.valueOf(userId));
-        } else {
-            MDC.remove(MDC_USER_ID);
-        }
+        MDC.put(MDC_USER_ID, ABSENT_USER_ID);
+    }
+
+    /**
+     * 认证成功后绑定真实用户 ID，覆盖入口写入的占位符（{@code 04} §6.1.2）。
+     *
+     * <p>只允许在 JWT 验签通过（或 OneBot 白名单映射命中）之后调用。传入 {@code null}
+     * 表示当前请求确实无用户身份（如内部服务健康探针），写回占位符。</p>
+     */
+    public static void bindUserId(Long userId) {
+        MDC.put(MDC_USER_ID, userId != null ? String.valueOf(userId) : ABSENT_USER_ID);
     }
 
     /** 解绑，防止线程池复用导致追踪号串线。 */

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from tests.conftest import LOOPBACK_HOST, REMOTE_HOST, TEST_INTERNAL_TOKEN
@@ -89,3 +91,103 @@ def test_user_id_header_is_ignored_when_token_invalid(remote_client: TestClient)
 
     assert response.status_code == 403
     assert tracing.current_user_id() is None
+
+
+# ----------------------------------------------------------------------
+# 身份绑定时机与信任边界（04 §6.1.2、TASK-105 复核）
+#
+# 直接对鉴权依赖下断言：身份只在"令牌校验通过 + 取值合法"时才被绑定，
+# 且日志字段 user_id 由该绑定驱动（见 app.core.logging.TraceContextFilter）。
+# ----------------------------------------------------------------------
+
+
+def _internal_request(headers: dict[str, str]) -> Request:
+    """构造一个不经网络往返的内部请求，用于直接驱动鉴权依赖。"""
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": HEALTH_PATH,
+            "raw_path": HEALTH_PATH.encode(),
+            "query_string": b"",
+            "headers": [(name.lower().encode(), value.encode()) for name, value in headers.items()],
+            "client": (REMOTE_HOST, 51234),
+            "server": ("sc-python-ai", 8000),
+        }
+    )
+
+
+def test_authenticated_request_binds_real_user_id_for_logging() -> None:
+    """令牌校验通过后，真实 user_id 必须进入日志上下文（而不是一直显示 -）。"""
+    from app.core import tracing
+    from app.core.security import verify_internal_token
+
+    tracing.clear()
+    try:
+        verify_internal_token(
+            _internal_request(
+                {"X-Internal-Token": TEST_INTERNAL_TOKEN, "X-User-Id": "10001"}
+            )
+        )
+
+        assert tracing.current_user_id() == "10001"
+    finally:
+        tracing.clear()
+
+
+def test_forged_user_id_is_dropped_even_with_valid_token() -> None:
+    """令牌合法但 X-User-Id 非十进制字符串时一律丢弃，避免脏值污染日志。"""
+    from app.core import tracing
+    from app.core.security import verify_internal_token
+
+    for forged in ("10001 OR 1=1", "abc", "10001abc", "-10001", "1e5", "  "):
+        tracing.clear()
+        try:
+            verify_internal_token(
+                _internal_request(
+                    {"X-Internal-Token": TEST_INTERNAL_TOKEN, "X-User-Id": forged}
+                )
+            )
+
+            assert tracing.current_user_id() is None, f"取值 {forged!r} 不应被绑定"
+        finally:
+            tracing.clear()
+
+
+def test_user_id_is_not_bound_when_token_check_fails() -> None:
+    """令牌缺失/错误时不得绑定身份（顺序必须是先鉴权再信任）。"""
+    from app.core import tracing
+    from app.core.security import verify_internal_token
+    from app.core.exceptions import InternalTokenInvalidError
+
+    for headers in (
+        {"X-User-Id": "10001"},
+        {"X-Internal-Token": "wrong-token", "X-User-Id": "10001"},
+    ):
+        tracing.clear()
+        try:
+            with pytest.raises(InternalTokenInvalidError):
+                verify_internal_token(_internal_request(headers))
+
+            assert tracing.current_user_id() is None
+        finally:
+            tracing.clear()
+
+
+def test_loopback_health_probe_carries_no_identity() -> None:
+    """环回健康探针免令牌放行，但**不**因此获得任何用户身份。"""
+    from app.core import tracing
+    from app.core.security import verify_internal_token
+
+    tracing.clear()
+    try:
+        request = _internal_request({"X-User-Id": "10001"})
+        request.scope["client"] = (LOOPBACK_HOST, 51234)
+
+        verify_internal_token(request, allow_loopback=True)
+
+        assert tracing.current_user_id() is None
+    finally:
+        tracing.clear()

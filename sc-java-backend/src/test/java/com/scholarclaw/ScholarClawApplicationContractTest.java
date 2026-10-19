@@ -12,6 +12,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 /**
  * 完整 Spring 上下文下的对外契约测试。
@@ -22,12 +23,23 @@ import org.springframework.test.web.servlet.MvcResult;
  * {@code @ExceptionHandler(Exception.class)} 接住了，而 standalone 测试根本不产生这个异常。
  * 这类"只有真实装配才暴露"的缺陷必须由本类守住。
  */
-@SpringBootTest
+@SpringBootTest(properties = "sc.internal.token=test-internal-token-value")
 @AutoConfigureMockMvc
 class ScholarClawApplicationContractTest {
 
+    private static final String INTERNAL_HEALTH_PATH = "/internal/api/v1/health";
+    private static final String INTERNAL_TOKEN = "test-internal-token-value";
+    private static final String REMOTE_ADDR = "10.0.0.7";
+
     @Autowired
     private MockMvc mockMvc;
+
+    private static RequestPostProcessor remoteAddr(String addr) {
+        return request -> {
+            request.setRemoteAddr(addr);
+            return request;
+        };
+    }
 
     @Test
     @DisplayName("未知路径返回 404 + RESOURCE_NOT_FOUND 信封，而不是 500")
@@ -81,5 +93,41 @@ class ScholarClawApplicationContractTest {
 
         assertThat(body).contains("\"code\":").contains("\"message\":").contains("\"data\":")
                 .contains("\"trace_id\":").contains("\"timestamp\":");
+    }
+
+    @Test
+    @DisplayName("内部健康检查：环回探针免令牌，返回 service/status/dependencies（04 §4.9.8）")
+    void internalHealthFromLoopbackNeedsNoToken() throws Exception {
+        MvcResult result = mockMvc.perform(get(INTERNAL_HEALTH_PATH)).andReturn();
+        String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        assertThat(body).contains("\"code\":\"OK\"");
+        assertThat(body).contains("\"service\":\"sc-java-backend\"");
+        assertThat(body).contains("\"status\":\"UP\"");
+        assertThat(body).contains("\"dependencies\":");
+        assertThat(body).contains("\"message\":\"Healthy\"");
+    }
+
+    @Test
+    @DisplayName("内部健康检查：非环回来源缺令牌 → 403，带正确令牌 → 200")
+    void internalHealthFromRemoteRequiresToken() throws Exception {
+        int withoutToken = mockMvc.perform(get(INTERNAL_HEALTH_PATH).with(remoteAddr(REMOTE_ADDR)))
+                .andReturn().getResponse().getStatus();
+        int withToken = mockMvc.perform(get(INTERNAL_HEALTH_PATH)
+                        .with(remoteAddr(REMOTE_ADDR))
+                        .header("X-Internal-Token", INTERNAL_TOKEN))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(withoutToken).isEqualTo(403);
+        assertThat(withToken).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("环回豁免不覆盖其他内部接口：/internal/ai/** 即使来自环回也需令牌")
+    void loopbackExemptionDoesNotCoverOtherInternalPaths() throws Exception {
+        int status = mockMvc.perform(get("/internal/ai/v1/model/probe")).andReturn().getResponse().getStatus();
+
+        assertThat(status).isEqualTo(403);
     }
 }

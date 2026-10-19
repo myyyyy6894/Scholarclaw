@@ -2,12 +2,15 @@ package com.scholarclaw.common.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.exception.ErrorCode;
+import com.scholarclaw.common.health.InternalHealthController;
 import com.scholarclaw.common.response.Result;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import org.slf4j.Logger;
@@ -61,9 +64,20 @@ public class InternalTokenAuthFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+        String path = resolvePath(request);
+
+        // 健康检查环回例外（04 API-CONF-03 默认方案）：
+        // 仅限健康检查这一个路径，且仅当 TCP 对端确实是容器本机环回地址时才放行，
+        // 目的只是让 Docker Compose 的 healthcheck 无需转义环境变量令牌。
+        // 例外不覆盖任何业务内部接口，也不依据 X-Forwarded-For 之类的可伪造请求头。
+        if (InternalHealthController.HEALTH_PATH.equals(path) && isLoopbackRequest(request)) {
+            log.debug("健康探针来自容器本机环回地址，按 API-CONF-03 免内部令牌放行");
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         if (configuredToken.isBlank()) {
-            log.error("内部接口鉴权令牌未注入（SC_INTERNAL_SERVICE_TOKEN 为空），按失败关闭拒绝访问 path={}",
-                    resolvePath(request));
+            log.error("内部接口鉴权令牌未注入（SC_INTERNAL_SERVICE_TOKEN 为空），按失败关闭拒绝访问 path={}", path);
             reject(response);
             return;
         }
@@ -72,12 +86,31 @@ public class InternalTokenAuthFilter extends OncePerRequestFilter {
         if (provided == null || !MessageDigest.isEqual(
                 configuredToken.getBytes(StandardCharsets.UTF_8),
                 provided.getBytes(StandardCharsets.UTF_8))) {
-            log.warn("内部接口鉴权失败，已拒绝访问 path={} method={}", resolvePath(request), request.getMethod());
+            log.warn("内部接口鉴权失败，已拒绝访问 path={} method={}", path, request.getMethod());
             reject(response);
             return;
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * 请求是否来自容器本机环回地址。
+     *
+     * <p>只依据容器给出的 TCP 对端地址（{@code getRemoteAddr()}），**绝不**读取
+     * {@code X-Forwarded-For} / {@code X-Real-IP} 等客户端可伪造的请求头——否则任何人都能用
+     * 一个头把健康检查的免鉴权例外变成绕过入口。
+     */
+    static boolean isLoopbackRequest(HttpServletRequest request) {
+        String remoteAddr = request.getRemoteAddr();
+        if (remoteAddr == null || remoteAddr.isBlank()) {
+            return false;
+        }
+        try {
+            return InetAddress.getByName(remoteAddr).isLoopbackAddress();
+        } catch (UnknownHostException e) {
+            return false;
+        }
     }
 
     private void reject(HttpServletResponse response) throws IOException {

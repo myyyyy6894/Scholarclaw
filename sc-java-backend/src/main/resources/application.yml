@@ -21,3 +21,20 @@ sc:
     # 默认留空表示“未注入”：此时 InternalTokenAuthFilter 对所有 /internal/** 请求一律拒绝（fail-closed），
     # 真实令牌只通过环境变量注入，绝不写入仓库。
     token: ${SC_INTERNAL_SERVICE_TOKEN:}
+    # sc-python-ai 内部服务基址（TASK-105 起用于健康探针；默认留空即不注册该探针，
+    # 便于单机只跑 Java 时不误报 DOWN）。TASK-303 的 PythonAiEngineClient 会复用同一个基址。
+    python-ai-base-url: ${SC_PYTHON_AI_BASE_URL:}
+  dependencies:
+    # 依赖探针的超时（毫秒）。仅用于 TCP 可达性探测。
+    probe-timeout-millis: ${SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS:1500}
+    # 以下主机一旦注入即注册对应探针；未注入则不注册。
+    # 说明：当前只做 TCP 可达性验证，连接池级探测待 TASK-201 引入 JDBC/Redis/MQ 客户端后替换。
+    mysql:
+      host: ${SC_DB_HOST:}
+      port: ${SC_DB_PORT:3306}
+    redis:
+      host: ${SC_REDIS_HOST:}
+      port: ${SC_REDIS_PORT:6379}
+    rabbitmq:
+      host: ${SC_RABBITMQ_HOST:}
+      port: ${SC_RABBITMQ_PORT:5672}

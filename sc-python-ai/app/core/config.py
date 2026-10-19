@@ -30,6 +30,8 @@ ENV_STORAGE_RAW_PATH = "SC_STORAGE_RAW_PATH"
 ENV_LOG_LEVEL = "SC_LOG_LEVEL"
 ENV_MODEL_CONNECT_TIMEOUT_SECONDS = "SC_MODEL_CONNECT_TIMEOUT_SECONDS"
 ENV_MODEL_READ_TIMEOUT_SECONDS = "SC_MODEL_READ_TIMEOUT_SECONDS"
+#: ChromaDB 内部基址（TASK-105 起用于健康探针；未注入则不注册该探针，见 app/core/health.py）。
+ENV_CHROMADB_BASE_URL = "SC_CHROMADB_BASE_URL"
 
 #: 允许本服务读取的全部环境变量名。新增配置必须先在此登记并说明用途。
 ALLOWED_ENV_VARS = frozenset(
@@ -42,6 +44,7 @@ ALLOWED_ENV_VARS = frozenset(
         ENV_LOG_LEVEL,
         ENV_MODEL_CONNECT_TIMEOUT_SECONDS,
         ENV_MODEL_READ_TIMEOUT_SECONDS,
+        ENV_CHROMADB_BASE_URL,
     }
 )
 
@@ -60,6 +63,9 @@ FORBIDDEN_ENV_VARS = frozenset(
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_STORAGE_RAW_PATH = "/data/scholarclaw/storage/raw"
 DEFAULT_LOG_LEVEL = "INFO"
+#: ChromaDB 基址默认留空 = 不注册探针：单机只跑本服务时不误报 DOWN；
+#: 容器编排里由 docker-compose.yml 注入 http://sc-chromadb:8000。
+DEFAULT_CHROMADB_BASE_URL = ""
 DEFAULT_MODEL_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_MODEL_READ_TIMEOUT_SECONDS = 30.0
 
@@ -85,6 +91,7 @@ class Settings:
     log_level: str
     model_connect_timeout_seconds: float
     model_read_timeout_seconds: float
+    chromadb_base_url: str
 
     @property
     def internal_token_configured(self) -> bool:
@@ -117,6 +124,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         model_read_timeout_seconds=_parse_positive_float(
             env, ENV_MODEL_READ_TIMEOUT_SECONDS, DEFAULT_MODEL_READ_TIMEOUT_SECONDS
         ),
+        chromadb_base_url=_read(env, ENV_CHROMADB_BASE_URL, DEFAULT_CHROMADB_BASE_URL).rstrip("/"),
     )
 
     _pin_active_timezone(zone)

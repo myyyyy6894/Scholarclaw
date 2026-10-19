@@ -140,3 +140,53 @@ async def test_middleware_passes_through_non_http_scopes() -> None:
 
     assert called["lifespan"] is True
     assert tracing.current_trace_id() is None
+
+
+async def test_middleware_clears_user_identity_after_request() -> None:
+    """请求结束后必须清空用户身份（`04` §6.1.2）：ASGI worker 复用任务时不得串用户。"""
+
+    async def app(scope, receive, send):  # noqa: ANN001 - ASGI 协议
+        tracing.bind_user_id("10001")
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = TraceIdMiddleware(app)
+    await middleware(_http_scope(), _empty_receive, _collector([]))
+
+    assert tracing.current_user_id() is None
+
+
+async def test_middleware_clears_user_identity_even_when_app_raises() -> None:
+    async def app(scope, receive, send):  # noqa: ANN001 - ASGI 协议
+        tracing.bind_user_id("10001")
+        raise RuntimeError("boom")
+
+    middleware = TraceIdMiddleware(app)
+
+    with pytest.raises(RuntimeError):
+        await middleware(_http_scope(), _empty_receive, _collector([]))
+
+    assert tracing.current_user_id() is None
+
+
+async def test_user_identity_does_not_leak_into_next_request() -> None:
+    """连续两次请求：第一次带用户身份，第二次必须是"无身份"，不得沿用上一个用户。"""
+    seen: list[str | None] = []
+
+    def _app(user_id: str | None):
+        async def app(scope, receive, send):  # noqa: ANN001 - ASGI 协议
+            if user_id is not None:
+                tracing.bind_user_id(user_id)
+            seen.append(tracing.current_user_id())
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        return app
+
+    middleware_with_identity = TraceIdMiddleware(_app("10001"))
+    await middleware_with_identity(_http_scope(), _empty_receive, _collector([]))
+
+    middleware_without_identity = TraceIdMiddleware(_app(None))
+    await middleware_without_identity(_http_scope(), _empty_receive, _collector([]))
+
+    assert seen == ["10001", None]

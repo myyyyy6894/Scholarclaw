@@ -1,0 +1,36 @@
+# ============================================================================
+# sc-python-ai 依赖锁文件（完整传递闭包，版本全部固定）
+#
+# 为什么需要它：pyproject.toml 里写的是版本区间（如 fastapi>=0.115,<0.116），
+# 只按区间安装意味着"同一天构建两次可能装到不同补丁版"，镜像不可复现。
+# 本文件锁住**实际跑在 Python 3.11 容器里的那一套版本**，Dockerfile 按它安装。
+#
+# 生成方式（在 python:3.11 容器内取真实环境，而不是在宿主机上重新解析）：
+#   docker build -t scholarclaw/sc-python-ai:1.0.0 ./sc-python-ai
+#   docker run --rm --entrypoint pip scholarclaw/sc-python-ai:1.0.0 freeze
+#   → 删掉末行 `sc-python-ai @ file:///app`（本服务自身，由 Dockerfile
+#     `pip install --no-deps .` 单独安装，不属于第三方依赖闭包）。
+#
+# 升级依赖的流程：改 pyproject.toml → 重新构建镜像 → 用上面的命令重新生成本文件
+# → 提交本文件的 diff（评审时能看到具体升了哪些包）。
+#
+# 已知边界（不夸大）：本文件锁定**版本**，不含制品哈希（pip freeze 拿不到哈希），
+# 因此无法防住"同名同版本被重新上传"这类供应链攻击；如需哈希级锁定，
+# 应在后续任务改用 `uv export --format requirements-txt` 之类的工具并单独评审。
+# ============================================================================
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+click==8.5.0
+fastapi==0.115.14
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+packaging==26.3
+pydantic==2.14.1
+pydantic-core==2.50.1
+starlette==0.46.2
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+uvicorn==0.54.0

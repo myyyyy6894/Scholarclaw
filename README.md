@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0 已完成，P1（工程骨架与容器底座）进行中。** 仓库尚无任何 git 提交，也无完整可运行的服务。
+**当前进度：P0 与 P1（TASK-101~105：三端骨架 + 单机容器底座 + 内部通信与日志追踪）已全部完成，整栈可运行。** 下一步是 P2（认证与 BYOK 底座），开工前必须先完成 P0-07（通读 `docs/03`/`docs/04` 并补齐「待 03/04 核验」标记）。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 
@@ -37,7 +37,8 @@ ScholarClaw/
 ├── sc-web-frontend/          # Vue 3 PC Web 工作台（已建立骨架）
 ├── docker-compose.yml        # 单机部署编排（7 个容器 + 双网络 + 5 个持久化卷）
 ├── .env.example              # 部署环境变量示例（真实值放 .env，已 gitignore）
-└── DEPLOYMENT.md             # 部署手册：端口边界、卷权限、注入边界、健康检查链
+├── DEPLOYMENT.md             # 部署手册：端口边界、卷权限、注入边界、健康检查链、问题定位
+└── INTERNAL_API_VERIFICATION.md  # 内部通信与日志追踪的验证记录（TASK-105 交付物）
 ```
 
 **开发方式：文档驱动。** `docs/01`~`docs/06` 是唯一依据；如发现文档之间不一致，先说明原因与方案并等待确认，不得擅自修改文档。
@@ -58,7 +59,10 @@ mvn -f sc-java-backend/pom.xml -B test
 
 前置：JDK 21（本机 21.0.12.1）、Maven 3.8.7。依赖经 `~/.m2/settings.xml` 的阿里云镜像下载。
 
-**尚未验证：** 启动应用（`mvn spring-boot:run`）。当前无 MySQL/Redis 连接配置与环境变量注入，启动验证属 TASK-104 / TASK-105。
+**启动验证：** 已由容器承载实测（TASK-104/105）：`sc-java-backend` 容器 `healthy`，健康接口
+`GET /internal/api/v1/health` 实测返回自身依赖（MySQL/Redis/RabbitMQ）与跨服务观测 `data.peers`。
+本机直接 `mvn spring-boot:run` 仍不作为验证路径（缺少 DB/Redis 注入，探针会按未注入不注册处理）。
+接口与日志实测结论见 `INTERNAL_API_VERIFICATION.md`。
 
 ### 3.2 Python（已实测）
 
@@ -75,8 +79,9 @@ cd sc-python-ai
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
 ```
 
-**尚未验证：** `docker-compose.yml` 不存在（TASK-104）；`sc-python-ai` 的
-ChromaDB 客户端（TASK-504）、RabbitMQ 消费者（TASK-502）与模型探测接口（TASK-302）均未落地。
+**尚未验证：** `sc-python-ai` 的 ChromaDB 客户端（TASK-504）、RabbitMQ 消费者（TASK-502）与
+模型探测接口（TASK-302）均未落地。容器化与编排已由 TASK-104 完成（见 §3.4），
+容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
 
 ### 3.3 Web 前端（已实测）
 
@@ -115,6 +120,32 @@ docker compose ps                        # 等到 7 个容器都 healthy
 要点提醒：**只有 Nginx 暴露宿主机端口**；`/internal/**` 被 Nginx 阻断为 404；
 Java 与 Python 共享同一 uid（10001）但 Python 对共享卷是只读挂载。
 
+内部通信自检（两个方向都由容器 healthcheck 每 15s 自动验证，也可手动复现）：
+
+```bash
+# Java：自身依赖（判定 data.status）+ 跨服务观测 data.peers（不参与判定）
+docker exec sc-java-backend wget -q -O- http://127.0.0.1:8080/internal/api/v1/health
+# → {"code":"OK","data":{"service":"sc-java-backend","status":"UP",
+#      "dependencies":{"mysql":"UP","redis":"UP","rabbitmq":"UP"},
+#      "peers":{"python_ai":"UP"}},…}
+
+# Python：自身依赖（共享卷只读挂载 + ChromaDB）
+docker exec sc-python-ai python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/internal/ai/v1/health').read().decode())"
+
+# Python 容器 healthcheck 本体：解析 data.status，并携带令牌+追踪号真实调用 Java 健康接口
+docker exec sc-python-ai python3 /app/healthcheck.py
+# → HEALTHY: 自身依赖 UP，且与 sc-java-backend 内部健康接口双向调通
+```
+
+两条容易踩的边界（都已在 `DEPLOYMENT.md` 写明）：
+
+- 健康接口**恒返回 HTTP 200**，依赖状态只在 `data.status` 里；Compose 的 healthcheck 必须解析响应体，
+  只看 HTTP 状态等于只看进程存活。
+- `data.status` **只由服务自身依赖决定**，`data.peers` 只上报跨服务连通性。Java 的健康状态不得依赖
+  Python 是否在跑：`02` §13.3 要求 Python 等 Java 健康后才启动，若互相判定就会冷启动死锁（已实测复现）。
+
+验证细节与证据见 `INTERNAL_API_VERIFICATION.md`；排查手册见 `DEPLOYMENT.md` §9。
+
 ---
 
 ## 4. 配置与环境变量
@@ -129,6 +160,10 @@ Java 与 Python 共享同一 uid（10001）但 Python 对共享卷是只读挂�
 | `sc.log-level`（Python） | `SC_LOG_LEVEL` | `INFO` | 本服务日志级别 |
 | 模型出站超时（Python） | `SC_MODEL_CONNECT_TIMEOUT_SECONDS` / `SC_MODEL_READ_TIMEOUT_SECONDS` | `5` / `30` | 受控模型网关的出站超时 |
 | 本地模型白名单（Python） | `SC_ALLOW_LOCAL_MODEL_BASE_URL` / `SC_LOCAL_MODEL_ALLOWED_ORIGINS` | `false` / 空 | 默认关闭；显式开启后才允许校验本地 Ollama 白名单（消费方为 TASK-301 的 SSRF 校验） |
+| 对端基址（Java） | `SC_PYTHON_AI_BASE_URL` | 空（compose 注入 `http://sc-python-ai:8000`） | Java 的健康探针真实调用 Python 健康接口；结果进 `data.peers`，不参与 `data.status` |
+| 对端基址（Python） | `SC_JAVA_BACKEND_BASE_URL` | 空（compose 注入 `http://sc-java-backend:8080`） | 仅供容器 healthcheck（`sc-python-ai/healthcheck.py`）验证反向调通；TASK-503 的 `JavaInternalApiClient` 复用同一变量 |
+| 派生索引基址（Python） | `SC_CHROMADB_BASE_URL` | 空（compose 注入 `http://sc-chromadb:8000`） | ChromaDB 心跳探针基址；留空则不注册该探针，避免单机只跑本服务时误报 DOWN |
+| 依赖探针超时（Java） | `SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS` | `1500` | TCP 可达性探针超时（当前 MySQL/Redis/RabbitMQ 三项） |
 
 其余环境变量（`SC_MASTER_KEY`、`SC_JWT_SECRET`、`SC_DB_PASSWORD` 等）随对应任务引入，注入边界见 `docs/02` §13.2。
 **`sc-python-ai` 只从上述白名单变量读取配置**，其 `app/core/config.py` 对白名单外的名字直接报错，

@@ -13,10 +13,12 @@ const mode = import.meta.env.MODE
 
 const implemented = [
   'Vue 3 + TypeScript + Vite 工程与类型检查（vue-tsc）',
+  '质量门禁 npm run check：类型检查 + ESLint（类型感知规则）+ 18 项单元测试',
   '路由骨架与鉴权守卫（重定向目标待 TASK-205 提供登录页）',
   '统一 API client：信封解包、错误分类、401 清理会话',
   '登录态管理（Pinia）与浏览器存储封装',
   '全局错误提示出口（Element Plus ElMessage）',
+  '生产构建已由 sc-web-nginx 容器托管，并反代 /api 与 /webhooks（TASK-104）',
 ]
 
 const upcoming = [
@@ -24,7 +26,6 @@ const upcoming = [
   { task: 'TASK-404', title: '课程知识库管理视图（左侧栏 + 文档抽屉）' },
   { task: 'TASK-605', title: 'RAG 溯源问答主工作区（SSE 流式 + 引用高亮）' },
   { task: 'TASK-705', title: 'DDL 任务看板与待确认收件箱' },
-  { task: 'TASK-104', title: 'Docker Compose 与 Nginx 静态托管（生产构建产物）' },
 ]
 </script>
 

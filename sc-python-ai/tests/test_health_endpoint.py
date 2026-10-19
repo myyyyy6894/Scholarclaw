@@ -42,6 +42,7 @@ def test_health_payload_reports_service_and_dependencies(loopback_client: TestCl
     assert payload["data"]["service"] == "sc-python-ai"
     assert payload["data"]["status"] == "UP"
     assert payload["data"]["dependencies"] == {"shared_storage_ro": "UP"}
+    assert payload["data"]["peers"] == {}, "本轮 peers 恒为空，Python → Java 方向由容器 healthcheck 承担"
 
 
 def test_health_payload_has_full_envelope(loopback_client: TestClient) -> None:
@@ -50,6 +51,18 @@ def test_health_payload_has_full_envelope(loopback_client: TestClient) -> None:
     assert set(payload) == {"code", "message", "data", "trace_id", "timestamp"}
     assert payload["trace_id"].startswith("tr_")
     assert payload["timestamp"].endswith("+08:00")
+
+
+def test_chromadb_dependency_participates_in_status(client_factory) -> None:
+    """ChromaDB 不可达时 status 必须变 DOWN——Compose healthcheck 据此判定容器 unhealthy。
+
+    指向 127.0.0.1:1（不会有服务监听）即可复现"依赖故障"，无需真去停 ChromaDB 容器。
+    """
+    with client_factory(LOOPBACK_HOST, SC_CHROMADB_BASE_URL="http://127.0.0.1:1") as client:
+        payload = client.get(HEALTH_PATH).json()
+
+    assert payload["data"]["dependencies"]["chromadb"] == "DOWN"
+    assert payload["data"]["status"] == "DOWN"
 
 
 def test_storage_probe_reports_down_when_mount_missing(

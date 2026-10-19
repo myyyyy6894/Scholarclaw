@@ -191,6 +191,12 @@ services:
       SC_RABBITMQ_USER: ${SC_RABBITMQ_USER:-scholarclaw}
       SC_RABBITMQ_PASSWORD: ${SC_RABBITMQ_PASSWORD:?SC_RABBITMQ_PASSWORD 未设置，请先配置 .env}
       SC_INTERNAL_SERVICE_TOKEN: ${SC_INTERNAL_SERVICE_TOKEN:?SC_INTERNAL_SERVICE_TOKEN 未设置，请先配置 .env}
+      # 可选运行参数（默认值见 application.yml）：列在 .env.example 里，必须经这里显式注入才对容器生效，
+      # 否则在 .env 里改它们是空转（很容易踩的坑，见 TASK_TRACKER.md §6 TASK-202 记录）
+      SC_JWT_TTL_SECONDS: ${SC_JWT_TTL_SECONDS:-604800}
+      SC_DB_MIGRATION_ENABLED: ${SC_DB_MIGRATION_ENABLED:-true}
+      SC_DB_POOL_PROBE: ${SC_DB_POOL_PROBE:-true}
+      SC_REDIS_POOL_PROBE: ${SC_REDIS_POOL_PROBE:-true}
       # sc-python-ai 内部基址：健康检查会真实调用它（TASK-105）
       SC_PYTHON_AI_BASE_URL: ${SC_PYTHON_AI_BASE_URL:-http://sc-python-ai:8000}
       SC_ALLOW_LOCAL_MODEL_BASE_URL: ${SC_ALLOW_LOCAL_MODEL_BASE_URL:-false}

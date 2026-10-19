@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import javax.sql.DataSource;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -25,8 +28,12 @@ public class HealthProbesConfig {
             @Value("${sc.dependencies.probe-timeout-millis:1500}") int probeTimeoutMillis,
             @Value("${sc.dependencies.mysql.host:}") String mysqlHost,
             @Value("${sc.dependencies.mysql.port:3306}") int mysqlPort,
+            @Value("${sc.dependencies.mysql.pool-probe:true}") boolean mysqlPoolProbe,
+            ObjectProvider<DataSource> dataSourceProvider,
             @Value("${sc.dependencies.redis.host:}") String redisHost,
             @Value("${sc.dependencies.redis.port:6379}") int redisPort,
+            @Value("${sc.dependencies.redis.pool-probe:true}") boolean redisPoolProbe,
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider,
             @Value("${sc.dependencies.rabbitmq.host:}") String rabbitmqHost,
             @Value("${sc.dependencies.rabbitmq.port:5672}") int rabbitmqPort,
             @Value("${sc.internal.python-ai-base-url:}") String pythonAiBaseUrl,
@@ -34,8 +41,20 @@ public class HealthProbesConfig {
             ObjectMapper objectMapper) {
 
         List<HealthProbe> probes = new ArrayList<>();
-        addTcpProbe(probes, "mysql", mysqlHost, mysqlPort, probeTimeoutMillis);
-        addTcpProbe(probes, "redis", redisHost, redisPort, probeTimeoutMillis);
+        // mysql 优先连接池级探针（TASK-201 引入 JDBC 后）：能证明凭据正确、连接池可用，
+        // 而 TCP 探针只能证明"端口在监听"。没有 DataSource 时回退到 TCP 探针。
+        DataSource dataSource = mysqlPoolProbe ? dataSourceProvider.getIfAvailable() : null;
+        if (dataSource != null) {
+            probes.add(new JdbcHealthProbe(dataSource));
+        } else {
+            addTcpProbe(probes, "mysql", mysqlHost, mysqlPort, probeTimeoutMillis);
+        }
+        StringRedisTemplate redisTemplate = redisPoolProbe ? redisTemplateProvider.getIfAvailable() : null;
+        if (redisTemplate != null) {
+            probes.add(new RedisHealthProbe(redisTemplate));
+        } else {
+            addTcpProbe(probes, "redis", redisHost, redisPort, probeTimeoutMillis);
+        }
         addTcpProbe(probes, "rabbitmq", rabbitmqHost, rabbitmqPort, probeTimeoutMillis);
 
         if (!pythonAiBaseUrl.isBlank()) {

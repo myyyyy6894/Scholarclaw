@@ -10,8 +10,50 @@ server:
 spring:
   application:
     name: sc-java-backend
+  # 数据源（TASK-201 起）：`02` §5.1 规定只有 sc-java-backend 连接 MySQL，Python 零连接权限。
+  # 参数依据 `03` §9.1：字符集 utf8mb4、会话时区 Asia/Shanghai（不依赖 JVM 默认时区，见 ENV-01）。
+  # useSSL=false + allowPublicKeyRetrieval=true：容器内网通信 + MySQL 8 默认 caching_sha2_password
+  # 需要该组合；一旦对外暴露 MySQL 端口就必须改成 TLS（ENV-04 已禁止映射宿主机端口）。
+  # Redis（TASK-202）：仅承载 JWT 吊销黑名单与注销阻断键（03 §8.1），不做 MySQL 二级缓存。
+  data:
+    redis:
+      host: ${SC_REDIS_HOST:localhost}
+      port: ${SC_REDIS_PORT:6379}
+      password: ${SC_REDIS_PASSWORD:}
+      timeout: 2s
+      connect-timeout: 2s
+  datasource:
+    url: jdbc:mysql://${SC_DB_HOST:localhost}:${SC_DB_PORT:3306}/${SC_DB_NAME:scholarclaw}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${SC_DB_USER:scholarclaw}
+    password: ${SC_DB_PASSWORD:}
+    hikari:
+      pool-name: sc-hikari
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+
+# MyBatis-Plus（TASK-202 首个 Mapper）：03 §4.0.2 锁定 AUTO_INCREMENT + IdType.AUTO，
+# 且下划线转驼峰与表列一一对应。
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
 
 sc:
+  # JWT（TASK-202）：HS256 + SC_JWT_SECRET（仅 Java 容器持有）。密钥缺失或过短时启动失败（失败关闭）。
+  jwt:
+    secret: ${SC_JWT_SECRET:}
+    ttl-seconds: ${SC_JWT_TTL_SECONDS:604800}
+  # 数据库初始化与迁移基线（TASK-201、`03` §10）：有序 SQL + 版本记录表，不引入 Flyway（P0-03 决策）。
+  # enabled=false 用于两类场景：① 单元测试（没有真库）；② 生产环境由运维用特权账号先手工迁移，
+  # 之后应用启动时靠版本表判断"已是最新"，迁移器无需 DDL 权限。
+  db:
+    migration:
+      enabled: ${SC_DB_MIGRATION_ENABLED:true}
+      locations: classpath:db/migration
   # 用户时区默认值与产品基线一致（01 §FR-DDL-001）。
   # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
   # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。
@@ -32,9 +74,13 @@ sc:
     mysql:
       host: ${SC_DB_HOST:}
       port: ${SC_DB_PORT:3306}
+      # true（默认）= 用连接池级探针（能证明凭据正确）；false = 退回 TCP 可达性。
+      pool-probe: ${SC_DB_POOL_PROBE:true}
     redis:
       host: ${SC_REDIS_HOST:}
       port: ${SC_REDIS_PORT:6379}
+      # true（默认）= 用连接池级探针（PING，能证明凭据正确）；false = 退回 TCP 可达性。
+      pool-probe: ${SC_REDIS_POOL_PROBE:true}
     rabbitmq:
       host: ${SC_RABBITMQ_HOST:}
       port: ${SC_RABBITMQ_PORT:5672}

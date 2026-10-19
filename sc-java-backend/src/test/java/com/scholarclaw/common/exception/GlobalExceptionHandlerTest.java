@@ -144,4 +144,19 @@ class GlobalExceptionHandlerTest {
 
     record ProbeRequest(@NotBlank String username) {
     }
+
+    @Test
+    @DisplayName("未知路径（NoResourceFoundException）：404 信封，绝不能报成 500")
+    void unknownPathIsNotFoundNotServerError() throws Exception {
+        // TASK-104 曾在真实容器里暴露过"未知路径返回 500"：catch-all 的 Exception 处理器
+        // 吞掉了 Spring 的 NoResourceFoundException（它同时是 ServletException 与 ErrorResponse）。
+        // TASK-202 起未认证请求会先被安全链拦成 401，因此这条 MVC 语义单独在这里守住。
+        var response = mockMvc.perform(
+                        org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/does-not-exist"))
+                .andReturn().getResponse();
+
+        assertThat(response.getStatus()).isEqualTo(404);
+        assertThat(response.getContentAsString(java.nio.charset.StandardCharsets.UTF_8))
+                .contains("\"code\":\"RESOURCE_NOT_FOUND\"");
+    }
 }

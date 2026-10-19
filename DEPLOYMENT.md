@@ -126,7 +126,7 @@ sc-mysql / sc-redis / sc-rabbitmq  (healthy)
 | `sc-redis` | `redis-cli --no-auth-warning ping` |
 | `sc-rabbitmq` | `rabbitmq-diagnostics -q ping` |
 | `sc-chromadb` | `curl -f /api/v1/heartbeat` |
-| `sc-java-backend` | `wget -qO- …/internal/api/v1/health \| grep -q '"status":"UP"'`（**解析响应体的 `data.status`**） |
+| `sc-java-backend` | `wget -qO- …/internal/api/v1/health \| grep -q '"status":"UP"'`（**解析响应体的 `data.status`**；`dependencies.mysql` 自 TASK-201 起是**连接池级**探针，能证明凭据正确） |
 | `sc-python-ai` | `python3 /app/healthcheck.py`（该镜像内无 curl/wget；脚本行为见下） |
 | `sc-web-nginx` | `wget /` |
 
@@ -216,12 +216,13 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 |---|---|
 | HTTPS / 443 | **未启用**。文档提到 80/443 双端口，但项目未定义证书来源；当前只暴露 80。生产化需补 TLS 终止 |
 | 容器日志轮转 | **未配置** `logging` 上限。长期运行建议加 `logging.options.max-size`，否则可能持续占用磁盘 |
-| 数据库迁移 | **未执行**。业务表结构属 TASK-201；当前只有空库 `scholarclaw` 与用户 |
+| 数据库迁移 | ✅ **已执行（TASK-201）**：7 张 MVP 表 + 版本表 `sc_schema_migration` 已建，结构核对 473 项全一致（见 §13）。`v1.1` 扩展表按约束未建；`03` §10.3 的增量回滚脚本与 `03` §7.4 的只读最小权限账号仍未落地 |
 | Java 与数据层连接 | Java 容器已收到 DB/Redis/MQ 凭据，但**代码尚未引入相应客户端**（TASK-201 之后）。健康检查对这三者目前只做 **TCP 可达性**验证：证明网络通、进程在监听，**不证明**凭据正确或数据库可读写 |
 | OneBot / NapCat 容器 | **有意未纳入**编排（文档标注为可选）。镜像 tag 需在 TASK-803 落地时一并确认 |
 | 内部通信验证 | ✅ 已完成（TASK-105 + 2026-10-19 复核）：契约、环回例外范围、日志关联与脱敏、只读挂载、**双向 `/health` 常驻验证**、依赖故障判定均已实测，见 `INTERNAL_API_VERIFICATION.md`。**Python → Java 的「业务」内部调用（`API-INT-JAVA-001/002/003`）尚未实现**（属 TASK-503），当前 Python → Java 只覆盖健康检查 |
 | Python 依赖锁定范围 | `sc-python-ai/requirements.lock.txt` 锁的是**运行时**依赖（16 个包，全部固定版本）。两点边界：① 不含制品哈希（`pip freeze` 拿不到哈希，无法防"同名同版本被重传"）；② 开发/测试依赖（`pytest`、`pytest-asyncio`）仍是版本区间，未纳入锁文件——等引入 CI 时再评估 |
 | `data.peers` 的覆盖面 | 只有 `sc-java-backend` 会上报 `peers.python_ai`；`sc-python-ai` 的 `peers` 恒为空（Python → Java 方向由容器 healthcheck 承担，避免两个健康接口互调形成无限递归）。若日后希望 Python 也上报该观测，需先为健康接口定义"禁止递归"的显式契约 |
+| 数据库运行时参数（DB-01） | `03` §9.1 的 `READ-COMMITTED` 隔离级别与 `innodb_buffer_pool_size=768M` 属「建议方案」，**未应用**：compose 只固定了 `--default-time-zone=+08:00` 与字符集。需应用时改 `sc-mysql` 的 `command` 并重启数据库容器 |
 | 性能基线 | 未测。属 TASK-905 |
 
 ## 11. 本次实测结论（2026-10-18）
@@ -252,3 +253,30 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 | 双向健康守卫 | `docker exec sc-python-ai python3 /app/healthcheck.py` | ✅ `HEALTHY: 自身依赖 UP，且与 sc-java-backend 内部健康接口双向调通`；`docker inspect` 显示该行每 15s 输出一次 |
 | 可复现构建 | 用 `requirements.lock.txt` 重建 Python 镜像后 `pip freeze` 与新镜像内实际环境比对 | ✅ 完全一致（`diff` 无差异）；Python 3.11 容器内按锁文件装依赖后 `pytest` **113 项通过** |
 | 时间戳时区 | `date -Is`（宿主与容器）、`docker inspect` 健康日志时间戳 | 宿主与两容器均为 `+08:00`；**Docker daemon 自身的元数据时间戳为 `-07:00`**（daemon 时区），不影响应用——应用时区由 `TZ`/`SC_TIMEZONE` 显式注入，这正是 ENV-01 要求显式固定时区的原因 |
+
+## 13. 数据库初始化与迁移（TASK-201）
+
+依据 `03` §9~§10 与已定稿的 **P0-03**（有序 SQL + 版本表，**不引入 Flyway/Liquibase**；
+`03` §10.1 的默认推荐是 Flyway，此处有意偏离，见图纸 §12 的「✅ 采用方案」说明）。
+
+| 项 | 说明 |
+|---|---|
+| 脚本位置 | `sc-java-backend/src/main/resources/db/migration/V{主}.{次}.{修订}__{动词_简述}.sql`（随 jar 打包，无需挂载） |
+| 当前脚本 | `V1.0.0__init_mvp_schema.sql`：7 张 MVP 表（逐字取自 `03` §9.2 Part 1），含生成列 `default_course_uk` / `active_course_name_key` / `active_file_sha256`、6 个唯一索引、14 个 `CHECK` 约束 |
+| 执行时机 | Java 启动时（`sc.db.migration.enabled`，默认 `true`）按版本**数值升序**执行；`db-config` 为 `spring.datasource.*`（`serverTimezone=Asia/Shanghai`、utf8mb4） |
+| 幂等 | 版本表 `sc_schema_migration(version PK, script, checksum, success, execution_ms, applied_at)`：已成功的版本跳过；重复启动只打印「均已执行」 |
+| 防漂移 | 已执行脚本内容（SHA-256）变化 → **拒绝启动**；改历史脚本必须新增增量脚本 |
+| 失败处理 | MySQL DDL 无法回滚（`03` §10.3）：失败版本写 `success=0` + 错误摘要，并让应用启动失败；人工修复后 `DELETE FROM sc_schema_migration WHERE version='x.y.z'` 再启动 |
+| 手工执行（备选，**当前未使用**） | 用有 DDL 权限的账号执行同一脚本后，在 `.env` 设 `SC_DB_MIGRATION_ENABLED=false`；版本表会让应用判断「已是最新」。⚠️ **本项目当前没有运维角色**，实际执行路径是「Java 启动自动迁移」；此流程留给将来有运维/多环境时使用 |
+| 结构核对 | `python3 scripts/db/verify_mvp_schema.py`：把真实库与 `docs/03` 的表集合/字段/索引/约束逐项比对（只读，退出码 0=一致）。**2026-10-19 实测 473 项全部一致** |
+| v1.1 边界 | `t_ddl_subtask` / `t_exam_wrong_book` **不建**（`03` §1.4 / DB-04）；`MigrationScriptTest` 有断言防止提前建表 |
+| 已知缺口 | `DB-01` 运行时参数未应用；增量迁移的 `U*.sql` 回滚脚本与只读最小权限账号（`03` §7.4）待后续任务 |
+
+执行痕迹示例（实测）：
+
+```
+sc-java-backend | 数据库迁移：已执行 V1.0.0 init_mvp_schema（353 ms）
+sc-java-backend | 数据库迁移完成：本次执行 1 个脚本，当前版本 1.0.0
+# 重启后：
+sc-java-backend | 数据库迁移：1 个脚本均已执行（当前版本 1.0.0），无待执行项
+```

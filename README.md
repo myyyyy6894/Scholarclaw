@@ -146,6 +146,40 @@ docker exec sc-python-ai python3 /app/healthcheck.py
 
 验证细节与证据见 `INTERNAL_API_VERIFICATION.md`；排查手册见 `DEPLOYMENT.md` §9。
 
+### 3.5 数据库初始化与结构核对（已实测）
+
+```bash
+# 迁移脚本随 Java 启动自动执行（有序 SQL + 版本表 sc_schema_migration，不引入 Flyway）
+docker compose logs sc-java-backend | grep 数据库迁移
+docker compose exec -T sc-mysql sh -c 'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -D scholarclaw \
+  -e "SELECT version, script, success, execution_ms, applied_at FROM sc_schema_migration"'
+
+# 手工执行（生产建议：用特权账号先迁移，再在 .env 里设 SC_DB_MIGRATION_ENABLED=false）
+docker compose exec -T sc-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+  < sc-java-backend/src/main/resources/db/migration/V1.0.0__init_mvp_schema.sql
+
+# 结构核对：把真实库与 docs/03 的数据字典/索引表/约束名逐项比对（只读，退出码 0=一致）
+python3 scripts/db/verify_mvp_schema.py
+```
+
+V1.0.0 只建 **7 张 MVP 表**；`v1.1` 的 `t_ddl_subtask` / `t_exam_wrong_book` 按 `03` §1.4
+留待 `V1.1.0` 增量脚本（`MigrationScriptTest` 有断言守着，防止提前建表）。
+
+### 3.6 认证闭环冒烟（已实测）
+
+```bash
+B=http://127.0.0.1:80/api/v1        # 经 Nginx → Java
+curl -s -X POST $B/auth/register -H 'Content-Type: application/json' \
+     -d '{"username":"zhangsan_cs","password":"Passw0rd2026"}'          # 201 + access_token
+curl -s -X POST $B/auth/login    -H 'Content-Type: application/json' \
+     -d '{"username":"zhangsan_cs","password":"Passw0rd2026"}'          # 200 + access_token
+curl -s $B/user/config -H "Authorization: Bearer <token>"               # 200，只返回本人数据
+curl -s -X POST $B/auth/logout -H "Authorization: Bearer <token>"       # 200；之后同一 token → 401 AUTH_TOKEN_REVOKED
+```
+
+身份只来自 JWT（`04` §2.7.2）：伪造 `X-User-Id` 或请求体塞 `user_id` 都不会改变当前用户。
+密码为 BCrypt(10) 哈希；注册**不预建**默认课程（`03` §9.3）。完整 E2E 结果见 `TASK_TRACKER.md` §6 的 TASK-202 记录。
+
 ---
 
 ## 4. 配置与环境变量
@@ -163,7 +197,10 @@ docker exec sc-python-ai python3 /app/healthcheck.py
 | 对端基址（Java） | `SC_PYTHON_AI_BASE_URL` | 空（compose 注入 `http://sc-python-ai:8000`） | Java 的健康探针真实调用 Python 健康接口；结果进 `data.peers`，不参与 `data.status` |
 | 对端基址（Python） | `SC_JAVA_BACKEND_BASE_URL` | 空（compose 注入 `http://sc-java-backend:8080`） | 仅供容器 healthcheck（`sc-python-ai/healthcheck.py`）验证反向调通；TASK-503 的 `JavaInternalApiClient` 复用同一变量 |
 | 派生索引基址（Python） | `SC_CHROMADB_BASE_URL` | 空（compose 注入 `http://sc-chromadb:8000`） | ChromaDB 心跳探针基址；留空则不注册该探针，避免单机只跑本服务时误报 DOWN |
-| 依赖探针超时（Java） | `SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS` | `1500` | TCP 可达性探针超时（当前 MySQL/Redis/RabbitMQ 三项） |
+| 依赖探针超时（Java） | `SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS` | `1500` | TCP 可达性探针超时（Redis/RabbitMQ 两项；MySQL 已改为连接池级探针） |
+| JWT 有效期（Java） | `SC_JWT_TTL_SECONDS` | `604800` | 访问令牌有效期（秒），默认 7 天，与 `04` §2.7.2 一致 |
+| 数据库迁移开关（Java） | `SC_DB_MIGRATION_ENABLED` | `true` | 启动期自动执行 `db/migration/V*.sql`；生产改由运维先手工迁移时设为 `false` |
+| MySQL 探针方式（Java） | `SC_DB_POOL_PROBE` | `true` | `true`＝连接池级（能证明凭据正确）；`false`＝退回 TCP 可达性 |
 
 其余环境变量（`SC_MASTER_KEY`、`SC_JWT_SECRET`、`SC_DB_PASSWORD` 等）随对应任务引入，注入边界见 `docs/02` §13.2。
 **`sc-python-ai` 只从上述白名单变量读取配置**，其 `app/core/config.py` 对白名单外的名字直接报错，

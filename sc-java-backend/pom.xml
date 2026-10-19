@@ -18,6 +18,8 @@
     <description>ScholarClaw 业务与状态权威中心（Java 21 + Spring Boot 3.3.x 模块化单体，唯一连接 MySQL 与持有主密钥的服务）</description>
 
     <properties>
+        <mybatis-plus.version>3.5.9</mybatis-plus.version>
+        <jjwt.version>0.12.6</jjwt.version>
         <!-- 显式声明编译目标，不依赖 ~/.m2/settings.xml 中可能存在的历史 profile -->
         <java.version>21</java.version>
         <maven.compiler.release>21</maven.compiler.release>
@@ -38,11 +40,64 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- 说明：MyBatis-Plus、Redis、RabbitMQ、Spring Security 依赖按任务分阶段引入，
-             不在 TASK-101 骨架阶段添加。理由见 sc-java-backend/README 与交付报告：
-             - MyBatis-Plus 的 starter 需要 DataSource，MySQL 到 TASK-201/TASK-104 才具备；
-             - Spring Security 的鉴权策略到 TASK-202 才真正落地，此阶段不引入以避免出现
-               “全部放行”的临时安全配置。 -->
+        <!-- JDBC + MySQL 驱动（TASK-201 引入）：数据库初始化与迁移基线只需要 DataSource 与
+             Spring 自带的 ScriptUtils，**不引入 ORM 就不会有一堆空 Mapper 或未使用的自动配置**。
+             MyBatis-Plus 随第一个 Mapper（TASK-202 的 UserConfigMapper）一起引入——
+             迁移器只用 JDBC，多一个 ORM 依赖对本任务没有任何收益。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Spring Security（TASK-202 落地）：`02` §1.3 锁定 Spring Security 6；
+             `04` §2.7.1/§2.7.2 要求 JwtAuthenticationFilter + SecurityContextUtils.getCurrentUserId()。
+             只启用它的过滤器链与 BCrypt，不启用表单登录/Session。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- Redis（TASK-202）：`04` §2.7.1 的 JWT 吊销黑名单 `sc:u:{uid}:jwt_blacklist:{jti}`
+             与注销阻断键 `sc:u:{uid}:deactivated`（`03` §8.1）。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- MyBatis-Plus（TASK-202 首个 Mapper）：`03` §4.0.2 锁定 IdType.AUTO + BIGINT 自增。
+             迁移器仍在 TASK-201 的纯 JDBC 上，不依赖本 starter。 -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+            <version>${mybatis-plus.version}</version>
+        </dependency>
+
+        <!-- JWT（TASK-202）：HS256 签发与验签。用成熟库而不是自己拼 Base64URL + HMAC，
+             避免 alg 混淆、base64 填充、声明校验等自研风险。 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- 说明：RabbitMQ 依赖到 TASK-501（rag.ingest.queue）才需要，此阶段不引入。 -->
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

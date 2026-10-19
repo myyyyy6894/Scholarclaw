@@ -1,0 +1,164 @@
+"""模型探测（`04` §4.9.1 `API-INT-AI-001`）。
+
+用 stdlib 起一个假 OpenAI 兼容服务，验证"真的发出最小请求、真的取回向量长度"，
+以及 401/302/非 JSON/缺字段这些失败分支全部映射为文档规定的错误码。
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from app.core.config import load_settings
+from app.core.exceptions import (
+    AiErrorCode,
+    BaseUrlRejectedError,
+    NonRetryableAiError,
+    UpstreamModelAuthError,
+)
+from app.services.gateway.model_probe import ModelEndpointConfig, probe_models
+
+DIM = 8
+
+
+class _StubHandler(BaseHTTPRequestHandler):
+    status_code = 200
+    body: dict | None = None
+    received_headers: list[dict[str, str]] = []
+    received_paths: list[str] = []
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 接口
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        type(self).received_headers.append(dict(self.headers))
+        type(self).received_paths.append(self.path)
+        payload = self.body
+        if payload is None:
+            payload = ({"choices": [{"message": {"role": "assistant", "content": "p"}}]}
+                       if self.path.endswith("/chat/completions")
+                       else {"data": [{"embedding": [0.01] * DIM}]})
+        raw = json.dumps(payload).encode()
+        self.send_response(self.status_code)
+        if self.status_code in (301, 302):
+            self.send_header("Location", "https://evil.example.com/")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, *args) -> None:  # noqa: ANN002 - 静音
+        return
+
+
+@pytest.fixture
+def stub_model_server() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _StubHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _StubHandler.status_code = 200
+    _StubHandler.body = None
+    _StubHandler.received_headers = []
+    _StubHandler.received_paths = []
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _settings(base_url: str):
+    return load_settings({
+        "SC_ALLOW_LOCAL_MODEL_BASE_URL": "true",
+        "SC_LOCAL_MODEL_ALLOWED_ORIGINS": base_url.rsplit("/v1", 1)[0],
+        "SC_MODEL_CONNECT_TIMEOUT_SECONDS": "2",
+        "SC_MODEL_READ_TIMEOUT_SECONDS": "2",
+    })
+
+
+def _config(base_url: str, *, api_key: str | None = "sk-test-key") -> ModelEndpointConfig:
+    return ModelEndpointConfig(provider="OPENAI_COMPATIBLE", base_url=base_url,
+                               api_key=api_key, model_name="test-model")
+
+
+@pytest.mark.asyncio
+async def test_embedding_probe_returns_real_dimension(stub_model_server: str) -> None:
+    outcome = await probe_models(
+        _settings(stub_model_server), "EMBEDDING", None, _config(stub_model_server))
+
+    assert outcome.actual_dim == DIM
+    assert outcome.embedding_reachable is True
+    assert outcome.chat_reachable is False
+    assert _StubHandler.received_paths == ["/v1/embeddings"]
+    assert _StubHandler.received_headers[0]["Authorization"] == "Bearer sk-test-key"
+
+
+@pytest.mark.asyncio
+async def test_chat_probe_sends_minimal_request(stub_model_server: str) -> None:
+    outcome = await probe_models(
+        _settings(stub_model_server), "CHAT", _config(stub_model_server), None)
+
+    assert outcome.chat_reachable is True
+    assert outcome.actual_dim is None
+    assert _StubHandler.received_paths == ["/v1/chat/completions"]
+
+
+@pytest.mark.asyncio
+async def test_both_probe_runs_both_calls(stub_model_server: str) -> None:
+    outcome = await probe_models(
+        _settings(stub_model_server), "BOTH", _config(stub_model_server), _config(stub_model_server))
+
+    assert outcome.chat_reachable is True
+    assert outcome.embedding_reachable is True
+    assert outcome.actual_dim == DIM
+    assert _StubHandler.received_paths == ["/v1/chat/completions", "/v1/embeddings"]
+
+
+@pytest.mark.asyncio
+async def test_upstream_401_maps_to_auth_error(stub_model_server: str) -> None:
+    _StubHandler.status_code = 401
+
+    with pytest.raises(UpstreamModelAuthError):
+        await probe_models(_settings(stub_model_server), "CHAT", _config(stub_model_server), None)
+
+
+@pytest.mark.asyncio
+async def test_redirect_is_rejected_as_ssrf(stub_model_server: str) -> None:
+    _StubHandler.status_code = 302
+
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(_settings(stub_model_server), "CHAT", _config(stub_model_server), None)
+
+    assert excinfo.value.error_code == AiErrorCode.E_SYS_02
+
+
+@pytest.mark.asyncio
+async def test_non_json_and_bad_shape_map_to_upstream_error(stub_model_server: str) -> None:
+    _StubHandler.body = {"unexpected": "shape"}
+
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(_settings(stub_model_server), "EMBEDDING", None, _config(stub_model_server))
+
+    assert excinfo.value.error_code == AiErrorCode.UPSTREAM_MODEL_ERROR
+
+
+@pytest.mark.asyncio
+async def test_missing_config_is_validation_error(stub_model_server: str) -> None:
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(_settings(stub_model_server), "BOTH", _config(stub_model_server), None)
+
+    assert excinfo.value.error_code == AiErrorCode.VALIDATION_ERROR
+
+
+@pytest.mark.asyncio
+async def test_url_without_whitelist_is_rejected_before_any_call(stub_model_server: str) -> None:
+    settings = load_settings({"SC_ALLOW_LOCAL_MODEL_BASE_URL": "false"})
+
+    with pytest.raises(BaseUrlRejectedError):
+        await probe_models(settings, "CHAT", _config(stub_model_server), None)
+
+    assert _StubHandler.received_paths == []

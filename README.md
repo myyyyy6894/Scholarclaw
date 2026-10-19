@@ -180,6 +180,26 @@ curl -s -X POST $B/auth/logout -H "Authorization: Bearer <token>"       # 200；
 身份只来自 JWT（`04` §2.7.2）：伪造 `X-User-Id` 或请求体塞 `user_id` 都不会改变当前用户。
 密码为 BCrypt(10) 哈希；注册**不预建**默认课程（`03` §9.3）。完整 E2E 结果见 `TASK_TRACKER.md` §6 的 TASK-202 记录。
 
+### 3.7 BYOK 模型配置冒烟（已实测）
+
+```bash
+B=http://127.0.0.1:80/api/v1
+T="Authorization: Bearer <token>"
+
+# 探测（不写库）：公网地址必须是 https；本地 Ollama 需先加入白名单
+curl -s -X POST $B/user/model-config/probe -H "$T" -H 'Content-Type: application/json' \
+  -d '{"probe_type":"EMBEDDING","provider":"OPENAI_COMPATIBLE","base_url":"https://api.siliconflow.cn/v1","api_key":"<KEY>","model_name":"BAAI/bge-m3"}'
+
+# 保存：先探测成功再落库；Key 只以 AES-256-GCM 密文入库，响应只回掩码
+curl -s -X PUT $B/user/model-config -H "$T" -H 'Content-Type: application/json' \
+  -d '{"chat_provider":"DEEPSEEK","chat_base_url":"https://api.deepseek.com/v1","chat_api_key":"<KEY>","chat_model":"deepseek-chat","default_embedding_provider":"OPENAI_COMPATIBLE","embedding_base_url":"https://api.siliconflow.cn/v1","reuse_chat_api_key":true,"default_embedding_model":"BAAI/bge-m3"}'
+
+# 销毁已保存的 Key（幂等）：target = ALL / CHAT / EMBEDDING
+curl -s -X DELETE "$B/user/model-config/keys?target=ALL" -H "$T"
+```
+
+SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整 E2E 结果见 `TASK_TRACKER.md` §6 的 TASK-203 记录。
+
 ---
 
 ## 4. 配置与环境变量
@@ -193,7 +213,9 @@ curl -s -X POST $B/auth/logout -H "Authorization: Bearer <token>"       # 200；
 | `sc.storage`（Python） | `SC_STORAGE_RAW_PATH` | `/data/scholarclaw/storage/raw` | 共享卷只读挂载点；`sc-python-ai` 只读访问，绝不写入或删除源文件 |
 | `sc.log-level`（Python） | `SC_LOG_LEVEL` | `INFO` | 本服务日志级别 |
 | 模型出站超时（Python） | `SC_MODEL_CONNECT_TIMEOUT_SECONDS` / `SC_MODEL_READ_TIMEOUT_SECONDS` | `5` / `30` | 受控模型网关的出站超时 |
-| 本地模型白名单（Python） | `SC_ALLOW_LOCAL_MODEL_BASE_URL` / `SC_LOCAL_MODEL_ALLOWED_ORIGINS` | `false` / 空 | 默认关闭；显式开启后才允许校验本地 Ollama 白名单（消费方为 TASK-301 的 SSRF 校验） |
+| 模型探测超时（Java） | `SC_MODEL_CONNECT_TIMEOUT_MILLIS` / `SC_MODEL_READ_TIMEOUT_MILLIS` | `5000` / `10000` | Java → Python 模型探测客户端的连接/读取超时 |
+| 本地模型白名单（Java + Python） | `SC_ALLOW_LOCAL_MODEL_BASE_URL` / `SC_LOCAL_MODEL_ALLOWED_ORIGINS` | `false` / 空 | 默认关闭；显式开启后才允许校验本地 Ollama 白名单。Java `BaseUrlSecurityValidator` 做第一道，Python `ssrf_guard` 在出站前做 DNS 级第二道 |
+| BYOK 主密钥（Java） | `SC_MASTER_KEY` | 无（必须注入） | 32 字节 Base64；仅 `sc-java-backend` 持有。缺失或长度不对时**拒绝启动**；一旦用于加密不可更换 |
 | 对端基址（Java） | `SC_PYTHON_AI_BASE_URL` | 空（compose 注入 `http://sc-python-ai:8000`） | Java 的健康探针真实调用 Python 健康接口；结果进 `data.peers`，不参与 `data.status` |
 | 对端基址（Python） | `SC_JAVA_BACKEND_BASE_URL` | 空（compose 注入 `http://sc-java-backend:8080`） | 仅供容器 healthcheck（`sc-python-ai/healthcheck.py`）验证反向调通；TASK-503 的 `JavaInternalApiClient` 复用同一变量 |
 | 派生索引基址（Python） | `SC_CHROMADB_BASE_URL` | 空（compose 注入 `http://sc-chromadb:8000`） | ChromaDB 心跳探针基址；留空则不注册该探针，避免单机只跑本服务时误报 DOWN |
@@ -201,6 +223,7 @@ curl -s -X POST $B/auth/logout -H "Authorization: Bearer <token>"       # 200；
 | JWT 有效期（Java） | `SC_JWT_TTL_SECONDS` | `604800` | 访问令牌有效期（秒），默认 7 天，与 `04` §2.7.2 一致 |
 | 数据库迁移开关（Java） | `SC_DB_MIGRATION_ENABLED` | `true` | 启动期自动执行 `db/migration/V*.sql`；生产改由运维先手工迁移时设为 `false` |
 | MySQL 探针方式（Java） | `SC_DB_POOL_PROBE` | `true` | `true`＝连接池级（能证明凭据正确）；`false`＝退回 TCP 可达性 |
+| Redis 探针方式（Java） | `SC_REDIS_POOL_PROBE` | `true` | `true`＝连接池级 `PING`（能证明凭据正确）；`false`＝退回 TCP 可达性 |
 
 其余环境变量（`SC_MASTER_KEY`、`SC_JWT_SECRET`、`SC_DB_PASSWORD` 等）随对应任务引入，注入边界见 `docs/02` §13.2。
 **`sc-python-ai` 只从上述白名单变量读取配置**，其 `app/core/config.py` 对白名单外的名字直接报错，

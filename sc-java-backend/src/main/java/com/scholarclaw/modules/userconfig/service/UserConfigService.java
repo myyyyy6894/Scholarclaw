@@ -2,6 +2,8 @@ package com.scholarclaw.modules.userconfig.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.scholarclaw.common.config.ScTimeZone;
+import com.scholarclaw.common.exception.BusinessException;
+import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.mapper.UserConfigMapper;
 import java.util.Optional;
@@ -66,6 +68,89 @@ public class UserConfigService {
     /** 按主键查询（当前用户信息等只读场景）。 */
     public Optional<UserConfigEntity> findById(Long userId) {
         return Optional.ofNullable(userConfigMapper.selectById(userId));
+    }
+
+    /**
+     * 更新组 B 的模型配置（{@code 04} `API-USER-003`）。
+     *
+     * <p>**只 set 模型相关列**：`password_hash` / `account_status` / `username` 等组 A 字段
+     * 连出现在 SET 子句里的机会都没有（`03` §4.1 专项约束 1）。Key 密文传 `null` 表示"保持不变"，
+     * 这样用户不重新输入 Key 时不会被清空。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public UserConfigEntity updateByokModelConfig(Long userId, ByokModelUpdate update) {
+        var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .set(UserConfigEntity::getChatProvider, update.chatProvider())
+                .set(UserConfigEntity::getChatBaseUrl, update.chatBaseUrl())
+                .set(UserConfigEntity::getChatModel, update.chatModel())
+                .set(UserConfigEntity::getDefaultEmbeddingProvider, update.embeddingProvider())
+                .set(UserConfigEntity::getEmbeddingBaseUrl, update.embeddingBaseUrl())
+                .set(UserConfigEntity::getDefaultEmbeddingModel, update.embeddingModel())
+                .set(UserConfigEntity::getDefaultEmbeddingDim, update.embeddingDim())
+                .set(UserConfigEntity::getKeyVersion, "v1")
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
+                .set(update.chatApiKeyCipher() != null, UserConfigEntity::getChatApiKeyCipher, update.chatApiKeyCipher())
+                .set(update.embeddingApiKeyCipher() != null,
+                        UserConfigEntity::getEmbeddingApiKeyCipher, update.embeddingApiKeyCipher());
+        requireUpdated(userConfigMapper.update(null, wrapper));
+        return findById(userId).orElseThrow(() -> new BusinessException(
+                ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
+    }
+
+    /** 更新组 B 的偏好列（时区/免打扰/IM 绑定），同样不碰组 A。 */
+    @Transactional(rollbackFor = Exception.class)
+    public UserConfigEntity updatePreferences(Long userId, String timezone, java.time.LocalTime dndStart,
+                                              java.time.LocalTime dndEnd, String imPlatform, String imUid) {
+        var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .set(UserConfigEntity::getTimezone, timezone)
+                .set(UserConfigEntity::getDndStartTime, dndStart)
+                .set(UserConfigEntity::getDndEndTime, dndEnd)
+                .set(UserConfigEntity::getBoundImPlatform, imPlatform)
+                .set(UserConfigEntity::getBoundImUid, imUid)
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
+        try {
+            requireUpdated(userConfigMapper.update(null, wrapper));
+        } catch (DuplicateKeyException e) {
+            // uk_user_bound_im 拦截：该 IM 账号已被其他用户绑定（04 §4.2.4 业务规则 2）
+            throw new BusinessException(ErrorCode.IM_ACCOUNT_ALREADY_BOUND);
+        }
+        return findById(userId).orElseThrow(() -> new BusinessException(
+                ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
+    }
+
+    /** 销毁已保存的 API Key（{@code 04} `API-USER-005`）：按目标把密文列置 `NULL`，幂等。 */
+    @Transactional(rollbackFor = Exception.class)
+    public UserConfigEntity clearApiKeys(Long userId, boolean clearChat, boolean clearEmbedding) {
+        var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
+        if (clearChat) {
+            wrapper.set(UserConfigEntity::getChatApiKeyCipher, null);
+        }
+        if (clearEmbedding) {
+            wrapper.set(UserConfigEntity::getEmbeddingApiKeyCipher, null);
+        }
+        requireUpdated(userConfigMapper.update(null, wrapper));
+        return findById(userId).orElseThrow(() -> new BusinessException(
+                ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
+    }
+
+    private static void requireUpdated(int affectedRows) {
+        if (affectedRows != 1) {
+            // 账号不存在或已注销：不能静默成功，否则调用方会以为"改成功了"
+            throw new BusinessException(ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。");
+        }
+    }
+
+    /** 组 B 模型配置的更新载荷；密文为 `null` 表示保留原值。 */
+    public record ByokModelUpdate(String chatProvider, String chatBaseUrl, String chatModel,
+                                  String chatApiKeyCipher, String embeddingProvider, String embeddingBaseUrl,
+                                  String embeddingModel, Integer embeddingDim, String embeddingApiKeyCipher) {
     }
 
     /** 账号是否处于注销清理中（`03` §4.1 `account_status = DEACTIVATING`）。 */

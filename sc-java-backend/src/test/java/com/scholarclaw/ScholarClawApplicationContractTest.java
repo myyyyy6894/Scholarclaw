@@ -33,7 +33,9 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
         "sc.dependencies.mysql.pool-probe=false",
         "sc.dependencies.redis.pool-probe=false",
         // JwtService 失败关闭：密钥缺失会拒绝启动，测试给一个 >=32 字节的值
-        "sc.jwt.secret=unit-test-only-jwt-secret-0123456789abcdef"
+        "sc.jwt.secret=unit-test-only-jwt-secret-0123456789abcdef",
+        // AesGcmCryptoService 失败关闭：主密钥缺失会拒绝启动，测试给一个 32 字节 Base64
+        "sc.master-key=dW5pdC10ZXN0LW1hc3Rlci1rZXktMzItYnl0ZXMhISE="
 })
 @AutoConfigureMockMvc
 class ScholarClawApplicationContractTest {

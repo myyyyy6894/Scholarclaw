@@ -43,6 +43,16 @@ mybatis-plus:
       id-type: auto
 
 sc:
+  # BYOK 主密钥（TASK-203、`03` §7.3）：32 字节 Base64，仅 sc-java-backend 持有。
+  # 缺失或长度不对时 AesGcmCryptoService 构造即失败（拒绝启动，避免把库写坏）。
+  master-key: ${SC_MASTER_KEY:}
+  # 自定义模型 Base URL 的 SSRF 白名单（`04` §4.2.2）：默认关闭本地/内网地址。
+  model:
+    allow-local-base-url: ${SC_ALLOW_LOCAL_MODEL_BASE_URL:false}
+    allowed-origins: ${SC_LOCAL_MODEL_ALLOWED_ORIGINS:}
+    probe:
+      connect-timeout-millis: ${SC_MODEL_CONNECT_TIMEOUT_MILLIS:5000}
+      read-timeout-millis: ${SC_MODEL_READ_TIMEOUT_MILLIS:10000}
   # JWT（TASK-202）：HS256 + SC_JWT_SECRET（仅 Java 容器持有）。密钥缺失或过短时启动失败（失败关闭）。
   jwt:
     secret: ${SC_JWT_SECRET:}

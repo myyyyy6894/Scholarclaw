@@ -3,6 +3,7 @@ import type {
   EmbeddingProvider,
   ModelConfigUpdateRequest,
   ModelProbeRequest,
+  ModelProbeResult,
   UserConfig,
 } from '@/api/user-config'
 
@@ -149,6 +150,25 @@ export function keyStatusLabel(hasKey: boolean, masked: string | null): string {
     return '未配置'
   }
   return masked === null || masked === '' ? '已配置（掩码不可用）' : masked
+}
+
+/**
+ * 探测是否真正成功。
+ *
+ * HTTP 200 不等于模型可用：必须 `reachable === true`；Embedding 还要求实测维度 > 0。
+ * UI 绝不能只凭“请求没报错”就展示绿色“连接成功”。
+ */
+export function isProbeOutcomeSuccessful(
+  outcome: ModelProbeResult,
+  probeType: SingleProbeType,
+): boolean {
+  if (outcome.reachable !== true) {
+    return false
+  }
+  if (probeType === 'CHAT') {
+    return true
+  }
+  return outcome.actual_dim !== null && outcome.actual_dim > 0
 }
 
 function normalizeSecret(value: string): string | undefined {

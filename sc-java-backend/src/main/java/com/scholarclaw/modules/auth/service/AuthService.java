@@ -7,6 +7,7 @@ import com.scholarclaw.modules.auth.dto.LoginRequest;
 import com.scholarclaw.modules.auth.dto.RegisterRequest;
 import com.scholarclaw.modules.auth.jwt.JwtService;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -38,13 +39,16 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final TokenRevocationService tokenRevocationService;
+    private final ModelConfigRules modelConfigRules;
 
     public AuthService(UserConfigService userConfigService, PasswordEncoder passwordEncoder,
-                       JwtService jwtService, TokenRevocationService tokenRevocationService) {
+                       JwtService jwtService, TokenRevocationService tokenRevocationService,
+                       ModelConfigRules modelConfigRules) {
         this.userConfigService = userConfigService;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.tokenRevocationService = tokenRevocationService;
+        this.modelConfigRules = modelConfigRules;
     }
 
     /**
@@ -108,7 +112,7 @@ public class AuthService {
         return timezone;
     }
 
-    private static AuthTokenResponse toResponse(UserConfigEntity account, JwtService.IssuedToken token) {
+    private AuthTokenResponse toResponse(UserConfigEntity account, JwtService.IssuedToken token) {
         return new AuthTokenResponse(
                 account.getUserId(),
                 account.getUsername(),
@@ -116,8 +120,10 @@ public class AuthService {
                 token.token(),
                 "Bearer",
                 token.expiresInSeconds(),
-                // 是否已配置 BYOK：TASK-203 才有写入路径，注册时必然为 false（04 契约要求此处固定 false）
-                account.getChatModel() != null && account.getChatApiKeyCipher() != null,
+                // 语义（04 API-AUTH-001/002）：至少对话配置有效。
+                // 复用 ModelConfigRules，确保“白名单内免密 Ollama”不会被误判为未配置；
+                // Embedding 是否配置不影响该字段（完整闭环由 E-SYS-01 在业务入口判断）。
+                modelConfigRules.isChatConfigValid(account),
                 account.getCreatedAt() == null ? null
                         : account.getCreatedAt().atZone(java.time.ZoneId.of(account.getTimezone())).format(ISO_MILLIS));
     }

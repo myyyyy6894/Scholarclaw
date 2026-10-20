@@ -40,9 +40,24 @@ public class ModelConfigRules {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
+    /**
+     * 公共探测接口的 Provider 约束：EMBEDDING 不允许 DEEPSEEK，CHAT 允许全部四种。
+     * 与保存 DTO / `03` 的 Provider 集合保持一致。
+     */
+    public boolean isProviderAllowedForProbe(String probeType, String provider) {
+        String normalized = upper(provider);
+        if ("CHAT".equalsIgnoreCase(probeType)) {
+            return CHAT_PROVIDERS.contains(normalized);
+        }
+        if ("EMBEDDING".equalsIgnoreCase(probeType)) {
+            return EMBEDDING_PROVIDERS.contains(normalized);
+        }
+        // 内部 BOTH 由每个 config 分别校验；这里返回并集，避免误拦内部调用
+        return CHAT_PROVIDERS.contains(normalized) || EMBEDDING_PROVIDERS.contains(normalized);
+    }
+
     /** 对话模型配置是否完整有效。 */
-    public boolean isChatConfigValid(UserConfigEntity entity) {
-        return entity != null
+    public boolean isChatConfigValid(UserConfigEntity entity) {        return entity != null
                 && CHAT_PROVIDERS.contains(upper(entity.getChatProvider()))
                 && hasText(entity.getChatBaseUrl())
                 && hasText(entity.getChatModel())

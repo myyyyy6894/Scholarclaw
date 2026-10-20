@@ -97,10 +97,22 @@ def main() -> int:
             expect(FAKE_KEY not in page.evaluate("() => JSON.stringify(window.localStorage)"),
                    "刷新后掩码仍在，localStorage 无明文 Key")
 
+            # 使用已保存 Key 重新探测，再销毁 Key：旧探测结果必须消失；
+            # 无 Key 重新探测必须报错且不得显示“连接成功”。
+            page.get_by_role("button", name="测试对话模型").click()
+            page.get_by_text("延迟", exact=False).first.wait_for(timeout=20000)
+            expect(True, "使用已保存 Key 重新探测成功")
+
             page.get_by_role("button", name="销毁对话 Key").click()
             page.get_by_role("button", name="销毁", exact=True).click()
             page.get_by_text("已销毁对话模型 API Key", exact=False).first.wait_for(timeout=20000)
-            expect(True, "销毁对话 Key（二次确认）")
+            page.get_by_text("延迟", exact=False).first.wait_for(state="detached", timeout=5000)
+            expect(True, "销毁对话 Key 后旧探测结果消失")
+
+            page.get_by_role("button", name="测试对话模型").click()
+            page.wait_for_selector(".el-message--error", timeout=20000)
+            expect(page.get_by_text("延迟", exact=False).count() == 0,
+                   "无 Key 重新探测不显示成功")
 
         # 3. 偏好保存
         page.locator('input[placeholder="Asia/Shanghai"]').fill("Asia/Tokyo")
@@ -113,9 +125,16 @@ def main() -> int:
         page.wait_for_url("**/login", timeout=20000)
         expect(True, "登出回到登录页")
 
-        expect(not console_errors, f"控制台无 error（实际 {len(console_errors)} 条）")
-        if console_errors:
-            for error in console_errors:
+        # “无 Key 重新探测”这一步会故意触发一个 400，浏览器会把它记为资源加载失败；
+        # 这是预期错误，不应算作前端 JS 异常。
+        unexpected_errors = [
+            error for error in console_errors
+            if "Failed to load resource: the server responded with a status of 400" not in error
+        ]
+        expect(not unexpected_errors,
+               f"控制台无未预期 error（实际 {len(unexpected_errors)} 条；预期 400 已忽略）")
+        if unexpected_errors:
+            for error in unexpected_errors:
                 print(f"  console: {error}")
 
         browser.close()

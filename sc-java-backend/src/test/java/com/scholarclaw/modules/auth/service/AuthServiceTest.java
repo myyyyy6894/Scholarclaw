@@ -15,6 +15,7 @@ import com.scholarclaw.modules.auth.dto.LoginRequest;
 import com.scholarclaw.modules.auth.dto.RegisterRequest;
 import com.scholarclaw.modules.auth.jwt.JwtService;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -47,7 +48,8 @@ class AuthServiceTest {
 
     @BeforeEach
     void setUp() {
-        authService = new AuthService(userConfigService, passwordEncoder, jwtService, revocation);
+        authService = new AuthService(userConfigService, passwordEncoder, jwtService, revocation,
+                new ModelConfigRules(false, ""));
     }
 
     private static UserConfigEntity account(String passwordHash, String status) {
@@ -61,6 +63,15 @@ class AuthServiceTest {
         entity.setCreatedAt(LocalDateTime.now(ZoneId.of("Asia/Shanghai")));
         entity.setDndStartTime(LocalTime.of(23, 30));
         entity.setDndEndTime(LocalTime.of(7, 30));
+        return entity;
+    }
+
+    private static UserConfigEntity withChatConfig(UserConfigEntity entity, String provider,
+                                                   String baseUrl, String model, String cipher) {
+        entity.setChatProvider(provider);
+        entity.setChatBaseUrl(baseUrl);
+        entity.setChatModel(model);
+        entity.setChatApiKeyCipher(cipher);
         return entity;
     }
 
@@ -154,6 +165,49 @@ class AuthServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(AuthServiceTest::errorCodeOf)
                 .isEqualTo(ErrorCode.ACCOUNT_DEACTIVATED);
+    }
+
+    @Test
+    @DisplayName("has_byok_config：有效对话配置为 true，缺字段为 false，缺 Embedding 仍为 true")
+    void hasByokConfigMeansValidChatConfig() {
+        String hash = passwordEncoder.encode("Correct2026");
+        when(revocation.isDeactivated(10001L)).thenReturn(false);
+
+        UserConfigEntity withKey = withChatConfig(account(hash, "ACTIVE"),
+                "DEEPSEEK", "https://api.deepseek.com/v1", "deepseek-chat", "v1:iv:cipher");
+        assertThat(withKey.getDefaultEmbeddingProvider()).isNull();
+        when(userConfigService.findByUsername("with_key")).thenReturn(Optional.of(withKey));
+        assertThat(authService.login(new LoginRequest("with_key", "Correct2026")).hasByokConfig())
+                .as("至少对话配置有效即为 true；Embedding 缺失不影响该字段")
+                .isTrue();
+
+        UserConfigEntity missingModel = withChatConfig(account(hash, "ACTIVE"),
+                "DEEPSEEK", "https://api.deepseek.com/v1", null, "v1:iv:cipher");
+        when(userConfigService.findByUsername("no_model")).thenReturn(Optional.of(missingModel));
+        assertThat(authService.login(new LoginRequest("no_model", "Correct2026")).hasByokConfig())
+                .isFalse();
+
+        UserConfigEntity noKey = withChatConfig(account(hash, "ACTIVE"),
+                "DEEPSEEK", "https://api.deepseek.com/v1", "deepseek-chat", null);
+        when(userConfigService.findByUsername("no_key")).thenReturn(Optional.of(noKey));
+        assertThat(authService.login(new LoginRequest("no_key", "Correct2026")).hasByokConfig())
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("has_byok_config：白名单内免密 Ollama 视为已配置")
+    void hasByokConfigTreatsWhitelistedOllamaAsConfigured() {
+        String hash = passwordEncoder.encode("Correct2026");
+        AuthService localService = new AuthService(userConfigService, passwordEncoder, jwtService,
+                revocation, new ModelConfigRules(true, "http://127.0.0.1:11434"));
+        UserConfigEntity localOllama = withChatConfig(account(hash, "ACTIVE"),
+                "OLLAMA", "http://127.0.0.1:11434", "llama3", null);
+
+        when(userConfigService.findByUsername("local_ollama")).thenReturn(Optional.of(localOllama));
+        when(revocation.isDeactivated(10001L)).thenReturn(false);
+
+        assertThat(localService.login(new LoginRequest("local_ollama", "Correct2026")).hasByokConfig())
+                .isTrue();
     }
 
     @Test

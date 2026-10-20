@@ -19,6 +19,8 @@ public record ModelConfigUpdateRequest(
         @Size(min = 8, max = 512, message = "chat_base_url 长度必须为 8~512")
         String chatBaseUrl,
 
+        @Size(max = 512, message = "chat_api_key 长度不能超过 512")
+        @Pattern(regexp = "^[\\x21-\\x7E]+$", message = "chat_api_key 只能包含可见 ASCII 字符")
         String chatApiKey,
 
         @NotBlank(message = "chat_model 不能为空")
@@ -35,6 +37,8 @@ public record ModelConfigUpdateRequest(
 
         boolean reuseChatApiKey,
 
+        @Size(max = 512, message = "embedding_api_key 长度不能超过 512")
+        @Pattern(regexp = "^[\\x21-\\x7E]+$", message = "embedding_api_key 只能包含可见 ASCII 字符")
         String embeddingApiKey,
 
         @NotBlank(message = "default_embedding_model 不能为空")

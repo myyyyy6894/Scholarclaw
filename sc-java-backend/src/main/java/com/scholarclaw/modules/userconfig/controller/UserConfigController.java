@@ -16,6 +16,7 @@ import com.scholarclaw.modules.userconfig.dto.PreferencesRequest;
 import com.scholarclaw.modules.userconfig.dto.UserConfigVO;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import jakarta.validation.Valid;
 import java.time.DateTimeException;
@@ -69,17 +70,20 @@ public class UserConfigController {
     private final BaseUrlSecurityValidator baseUrlSecurityValidator;
     private final PythonAiEngineClient pythonAiEngineClient;
     private final ModelConfigRules modelConfigRules;
+    private final ModelKeyBindingRules modelKeyBindingRules;
 
     public UserConfigController(UserConfigService userConfigService,
                                 AesGcmCryptoService cryptoService,
                                 BaseUrlSecurityValidator baseUrlSecurityValidator,
                                 PythonAiEngineClient pythonAiEngineClient,
-                                ModelConfigRules modelConfigRules) {
+                                ModelConfigRules modelConfigRules,
+                                ModelKeyBindingRules modelKeyBindingRules) {
         this.userConfigService = userConfigService;
         this.cryptoService = cryptoService;
         this.baseUrlSecurityValidator = baseUrlSecurityValidator;
         this.pythonAiEngineClient = pythonAiEngineClient;
         this.modelConfigRules = modelConfigRules;
+        this.modelKeyBindingRules = modelKeyBindingRules;
     }
 
     /** `API-USER-001`：查询当前用户配置与脱敏密钥视图。 */
@@ -99,27 +103,42 @@ public class UserConfigController {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "公共探测接口只支持 CHAT 或 EMBEDDING。");
         }
+        if (!modelConfigRules.isProviderAllowedForProbe(probeType.name(), request.provider())) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    "当前探测类型不支持该供应商：EMBEDDING 仅允许 OPENAI_COMPATIBLE/ZHIPU/OLLAMA。");
+        }
 
         // Java 侧第一道 SSRF 校验（04 §4.2.2 规则 1）；Python 出站前还会做 DNS 解析后的二次校验
         baseUrlSecurityValidator.validate(request.baseUrl());
 
         String providedKey = normalizeSecret(request.apiKey());
         // 惰性解密：只有"未提供新 Key 且明确要求用已保存 Key"时才碰旧密文。
-        // 否则旧密文损坏/主密钥更换会让"用新 Key 恢复配置"也失败。
+        // 且必须先通过目标绑定校验：旧 Key 不能被发往用户本次改成的任意地址/供应商/模型。
         boolean useSavedKey = request.useSavedKey() && providedKey == null;
-        String savedChatKey = probeType.includesChat() && useSavedKey
-                ? decryptIfPresent(current.getChatApiKeyCipher()) : null;
-        String savedEmbeddingKey = probeType.includesEmbedding() && useSavedKey
-                ? decryptIfPresent(current.getEmbeddingApiKeyCipher()) : null;
+        String savedChatKey = null;
+        if (probeType.includesChat() && useSavedKey) {
+            savedChatKey = readSavedKey(current.getChatApiKeyCipher(),
+                    current.getChatProvider(), current.getChatBaseUrl(), current.getChatModel(),
+                    request.provider(), request.baseUrl(), request.modelName(), "对话模型");
+        }
+        String savedEmbeddingKey = null;
+        if (probeType.includesEmbedding() && useSavedKey) {
+            savedEmbeddingKey = readSavedKey(current.getEmbeddingApiKeyCipher(),
+                    current.getDefaultEmbeddingProvider(), current.getEmbeddingBaseUrl(),
+                    current.getDefaultEmbeddingModel(),
+                    request.provider(), request.baseUrl(), request.modelName(), "向量模型");
+        }
 
         ModelEndpoint chatEndpoint = null;
         if (probeType.includesChat()) {
-            String key = resolveProbeKey(providedKey, request.useSavedKey(), savedChatKey, request.provider());
+            String key = resolveProbeKey(providedKey, request.useSavedKey(), savedChatKey,
+                    request.provider(), request.baseUrl());
             chatEndpoint = new ModelEndpoint(request.provider(), request.baseUrl(), key, request.modelName());
         }
         ModelEndpoint embeddingEndpoint = null;
         if (probeType.includesEmbedding()) {
-            String key = resolveProbeKey(providedKey, request.useSavedKey(), savedEmbeddingKey, request.provider());
+            String key = resolveProbeKey(providedKey, request.useSavedKey(), savedEmbeddingKey,
+                    request.provider(), request.baseUrl());
             embeddingEndpoint = new ModelEndpoint(request.provider(), request.baseUrl(), key, request.modelName());
         }
 
@@ -151,23 +170,54 @@ public class UserConfigController {
         baseUrlSecurityValidator.validate(request.embeddingBaseUrl());
 
         String providedChatKey = normalizeSecret(request.chatApiKey());
-        String chatPlainKey = providedChatKey != null
-                ? providedChatKey
-                : decryptIfPresent(current.getChatApiKeyCipher());
+        boolean chatKeyFromSaved = providedChatKey == null && current.getChatApiKeyCipher() != null;
+        String chatPlainKey;
+        if (providedChatKey != null) {
+            chatPlainKey = providedChatKey;
+        } else if (chatKeyFromSaved) {
+            // 未输入新 Key：只有目标（provider/origin/model）完全一致时才允许复用旧 Key
+            modelKeyBindingRules.requireSameTarget(
+                    current.getChatProvider(), current.getChatBaseUrl(), current.getChatModel(),
+                    request.chatProvider(), request.chatBaseUrl(), request.chatModel());
+            chatPlainKey = cryptoService.decrypt(current.getChatApiKeyCipher());
+        } else {
+            chatPlainKey = null;
+        }
         requireKeyOrWhitelisted(chatPlainKey, request.chatProvider(), request.chatBaseUrl(), "对话模型");
 
         String providedEmbeddingKey = normalizeSecret(request.embeddingApiKey());
         String embeddingPlainKey;
         if (request.reuseChatApiKey()) {
-            // 复用对话 Key：若用户本次没重填，则先解密已保存的对话 Key 再独立加密写入向量列
+            if (providedChatKey == null && current.getChatApiKeyCipher() != null) {
+                // 复用“已保存的对话 Key”发往 Embedding：provider + origin 必须与对话 Key 的绑定一致；
+                // 模型名允许不同（这是产品明确允许的唯一复用例外）。
+                modelKeyBindingRules.requireSameProviderAndOrigin(
+                        current.getChatProvider(), current.getChatBaseUrl(),
+                        request.defaultEmbeddingProvider(), request.embeddingBaseUrl());
+            }
             embeddingPlainKey = chatPlainKey;
         } else if (providedEmbeddingKey != null) {
             embeddingPlainKey = providedEmbeddingKey;
+        } else if (current.getEmbeddingApiKeyCipher() != null) {
+            modelKeyBindingRules.requireSameTarget(
+                    current.getDefaultEmbeddingProvider(), current.getEmbeddingBaseUrl(),
+                    current.getDefaultEmbeddingModel(),
+                    request.defaultEmbeddingProvider(), request.embeddingBaseUrl(),
+                    request.defaultEmbeddingModel());
+            embeddingPlainKey = cryptoService.decrypt(current.getEmbeddingApiKeyCipher());
         } else {
-            embeddingPlainKey = decryptIfPresent(current.getEmbeddingApiKeyCipher());
+            embeddingPlainKey = null;
         }
         requireKeyOrWhitelisted(
                 embeddingPlainKey, request.defaultEmbeddingProvider(), request.embeddingBaseUrl(), "向量模型");
+
+        // 加密前的字节级列宽校验：必须在探测/写库之前，避免多字节 Key 先触发上游 500 或 DB 长度异常
+        if (providedChatKey != null) {
+            cryptoService.requireStorable(providedChatKey);
+        }
+        if (providedEmbeddingKey != null && !request.reuseChatApiKey()) {
+            cryptoService.requireStorable(providedEmbeddingKey);
+        }
 
         PythonAiEngineClient.ProbeResult outcome = pythonAiEngineClient.probeModel(
                 userId,
@@ -257,21 +307,38 @@ public class UserConfigController {
     }
 
     /**
-     * 探测阶段的 Key 解析（{@code 04} §4.2.2）：候选明文优先；否则按 `use_saved_key` 取已保存 Key；
-     * `OLLAMA` 允许不带 Key（真实连通性由上游判定）。
+     * 读取并解密已保存 Key；**先验证目标绑定**，绑定不一致时绝不碰密文。
      */
-    private static String resolveProbeKey(String providedKey, boolean useSavedKey, String savedKey, String provider) {
+    private String readSavedKey(String cipherText,
+                                String savedProvider, String savedBaseUrl, String savedModel,
+                                String submittedProvider, String submittedBaseUrl, String submittedModel,
+                                String label) {
+        if (cipherText == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    label + "没有已保存的 API Key，请重新输入。");
+        }
+        modelKeyBindingRules.requireSameTarget(savedProvider, savedBaseUrl, savedModel,
+                submittedProvider, submittedBaseUrl, submittedModel);
+        return cryptoService.decrypt(cipherText);
+    }
+
+    /**
+     * 探测阶段的 Key 解析：候选明文优先；否则按 `use_saved_key` 取已保存 Key；
+     * 免密只允许**管理员白名单内的本地 Ollama**（与保存路径同一规则）。
+     */
+    private String resolveProbeKey(String providedKey, boolean useSavedKey, String savedKey,
+                                   String provider, String baseUrl) {
         if (providedKey != null) {
             return providedKey;
         }
         if (useSavedKey && savedKey != null) {
             return savedKey;
         }
-        if ("OLLAMA".equalsIgnoreCase(provider)) {
+        if (modelConfigRules.isWhitelistedLocalOllama(provider, baseUrl)) {
             return null;
         }
         throw new BusinessException(ErrorCode.VALIDATION_ERROR,
-                "non-ollama 供应商必须提供 api_key，或将 use_saved_key 置为 true。");
+                "请提供 API Key；免密仅限管理员白名单内的本地 Ollama。");
     }
 
     /** 保存阶段的有效性规则（{@code 03} §4.2）：非免密供应商必须有 Key，白名单本地 Ollama 可无 Key。 */

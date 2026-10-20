@@ -22,6 +22,7 @@ import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import {
   createModelForm,
+  isProbeOutcomeSuccessful,
   keyStatusLabel,
   ModelFormValidationError,
   toProbeRequest,
@@ -172,6 +173,12 @@ async function runProbe(type: SingleProbeType): Promise<void> {
   try {
     validateProbeSection(modelForm.value, type)
     const outcome = await probeModel(toProbeRequest(modelForm.value, type))
+    if (!isProbeOutcomeSuccessful(outcome, type)) {
+      // HTTP 成功不等于模型可用；不得把 reachable=false / 维度缺失显示成“连接成功”
+      result.value = null
+      notifyWarning('探测未通过：请检查 Base URL、API Key 与模型名称。')
+      return
+    }
     result.value = outcome
     const dim = outcome.actual_dim === null ? '' : `，实测维度 ${outcome.actual_dim}`
     notifySuccess(`连接成功（${outcome.latency_ms} ms${dim}）`)
@@ -269,6 +276,14 @@ async function clearKeys(target: ClearKeysTarget): Promise<void> {
   try {
     const updated = await clearApiKeys(target)
     applyConfig(updated, { resetSecrets: false })
+    // 已保存 Key 被销毁后，旧探测结果不再可信，必须立即清空
+    if (target === 'CHAT' || target === 'ALL') {
+      chatProbe.value = null
+    }
+    if (target === 'EMBEDDING' || target === 'ALL') {
+      embeddingProbe.value = null
+    }
+    savedHint.value = ''
     notifySuccess(`已销毁${label}`)
   } catch (error) {
     notifyError(error)

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import type { UserConfig } from '@/api/user-config'
+import type { ModelProbeResult, UserConfig } from '@/api/user-config'
 import {
   createModelForm,
+  isProbeOutcomeSuccessful,
   keyStatusLabel,
   ModelFormValidationError,
   toProbeRequest,
@@ -146,6 +147,44 @@ describe('model config form', () => {
     expect(keyStatusLabel(true, 'sk-****8a9f')).toBe('sk-****8a9f')
     expect(keyStatusLabel(true, null)).toBe('已配置（掩码不可用）')
     expect(keyStatusLabel(false, null)).toBe('未配置')
+  })
+
+  it('探测成功判定：reachable=false 不算成功', () => {
+    const outcome: ModelProbeResult = {
+      reachable: false,
+      probe_type: 'CHAT',
+      model_name: 'x',
+      actual_dim: null,
+      latency_ms: 1,
+    }
+
+    expect(isProbeOutcomeSuccessful(outcome, 'CHAT')).toBe(false)
+  })
+
+  it('Embedding 只有 reachable=true 且 actual_dim > 0 才算成功', () => {
+    const base: ModelProbeResult = {
+      reachable: true,
+      probe_type: 'EMBEDDING',
+      model_name: 'x',
+      actual_dim: null,
+      latency_ms: 1,
+    }
+
+    expect(isProbeOutcomeSuccessful(base, 'EMBEDDING')).toBe(false)
+    expect(isProbeOutcomeSuccessful({ ...base, actual_dim: 0 }, 'EMBEDDING')).toBe(false)
+    expect(isProbeOutcomeSuccessful({ ...base, actual_dim: 8 }, 'EMBEDDING')).toBe(true)
+  })
+
+  it('CHAT 只要 reachable=true 即可（维度为 null 是正常的）', () => {
+    const outcome: ModelProbeResult = {
+      reachable: true,
+      probe_type: 'CHAT',
+      model_name: 'x',
+      actual_dim: null,
+      latency_ms: 1,
+    }
+
+    expect(isProbeOutcomeSuccessful(outcome, 'CHAT')).toBe(true)
   })
 })
 

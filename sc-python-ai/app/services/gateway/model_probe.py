@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 
@@ -61,10 +62,29 @@ async def probe_models(
     embedding_reachable = False
     actual_dim: int | None = None
 
+    if probe_type not in {"CHAT", "EMBEDDING", "BOTH"}:
+        raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "probe_type 取值非法。")
+
     async with SsrfSafeModelGateway(settings, read_timeout=probe_read_timeout) as gateway:
-        if probe_type in {"CHAT", "BOTH"}:
+        if probe_type == "BOTH":
+            # BOTH 并行执行：单次出站读超时 5s，串行最坏 10s + 开销会撞上 Java 的 10s 读取超时；
+            # 并行后总耗时约 max(5s) + 开销，留出足够网络余量（04 §6.2）。
+            chat_task = asyncio.create_task(
+                _probe_chat(gateway, _require(chat_config, "chat_config")))
+            embedding_task = asyncio.create_task(
+                _probe_embedding(gateway, _require(embedding_config, "embedding_config")))
+            try:
+                chat_reachable, actual_dim = await asyncio.gather(chat_task, embedding_task)
+            except BaseException:
+                # 任一探测失败立即取消另一个，避免它在后台继续占用连接/额度
+                chat_task.cancel()
+                embedding_task.cancel()
+                await asyncio.gather(chat_task, embedding_task, return_exceptions=True)
+                raise
+            embedding_reachable = actual_dim > 0
+        elif probe_type == "CHAT":
             chat_reachable = await _probe_chat(gateway, _require(chat_config, "chat_config"))
-        if probe_type in {"EMBEDDING", "BOTH"}:
+        else:
             actual_dim = await _probe_embedding(
                 gateway, _require(embedding_config, "embedding_config"))
             embedding_reachable = actual_dim > 0

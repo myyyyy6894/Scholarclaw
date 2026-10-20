@@ -90,7 +90,39 @@ class AesGcmCryptoServiceTest {
     }
 
     @Test
-    @DisplayName("主密钥缺失/非 Base64/非 32 字节时构造失败（拒绝启动）")
+    @DisplayName("密文必须能放进 VARCHAR(1024)：ASCII 上限通过，多字节 Key 在加密前被拒绝")
+    void rejectsPlaintextWhoseCiphertextWouldExceedColumnWidth() {
+        AesGcmCryptoService service = new AesGcmCryptoService(KEY_A);
+
+        // 737 个 ASCII 字符刚好落在 1024 字符密文上限内
+        String maxAscii = "k".repeat(737);
+        assertThat(service.encrypt(maxAscii)).hasSizeLessThanOrEqualTo(1024);
+
+        // 738 个 ASCII 字符会超出列宽
+        assertThatThrownBy(() -> service.encrypt("k".repeat(738)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.VALIDATION_ERROR))
+                .hasMessageContaining("过长");
+
+        // 300 个中文字符 = 900 字节，字符数远小于 512，但密文超列宽，必须在加密前拦截
+        assertThatThrownBy(() -> service.encrypt("密".repeat(300)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.VALIDATION_ERROR))
+                .hasMessageNotContaining("密密密");
+    }
+
+    @Test
+    @DisplayName("512 字符 ASCII Key 加密后仍在列宽内")
+    void acceptsFiveHundredTwelveAsciiChars() {
+        AesGcmCryptoService service = new AesGcmCryptoService(KEY_A);
+
+        String cipherText = service.encrypt("k".repeat(512));
+
+        assertThat(cipherText).startsWith("v1:").hasSizeLessThanOrEqualTo(1024);
+    }
+
     void failsClosedWhenMasterKeyIsMissingOrInvalid() {
         assertThatThrownBy(() -> new AesGcmCryptoService(""))
                 .isInstanceOf(IllegalStateException.class)

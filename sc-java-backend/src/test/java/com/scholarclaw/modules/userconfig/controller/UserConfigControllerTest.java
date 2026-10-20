@@ -26,6 +26,7 @@ import com.scholarclaw.common.security.BaseUrlSecurityValidator;
 import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -45,6 +46,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 
 /**
  * `API-USER-002~005` 的行为契约（{@code 04} §4.2）。
@@ -78,11 +80,13 @@ class UserConfigControllerTest {
                 CRYPTO,
                 new BaseUrlSecurityValidator(false, ""),
                 pythonAiEngineClient,
-                new ModelConfigRules(false, ""));
+                new ModelConfigRules(false, ""),
+                new ModelKeyBindingRules());
 
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
+                .setValidator(new LocalValidatorFactoryBean())
                 .build();
 
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
@@ -137,6 +141,207 @@ class UserConfigControllerTest {
         verify(pythonAiEngineClient).probeModel(eq(USER_ID), eq(ModelProbeType.CHAT),
                 captor.capture(), isNull());
         assertThat(captor.getValue().apiKey()).isEqualTo("sk-saved-12345678");
+    }
+
+    @Test
+    @DisplayName("use_saved_key=true 但 Base URL/Provider/模型变化：400 且绝不调用探测")
+    void probeRejectsChangedTargetBeforeDecrypting() throws Exception {
+        UserConfigEntity entity = entity();
+        entity.setChatApiKeyCipher(CRYPTO.encrypt("sk-saved-12345678"));
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity));
+
+        for (String body : new String[]{
+                probeBody("CHAT", "DEEPSEEK", "https://evil.example.com/v1", null,
+                        true, "deepseek-chat"),
+                probeBody("CHAT", "OPENAI_COMPATIBLE", "https://api.deepseek.com/v1", null,
+                        true, "deepseek-chat"),
+                probeBody("CHAT", "DEEPSEEK", "https://api.deepseek.com/v1", null,
+                        true, "deepseek-reasoner"),
+        }) {
+            String response = mockMvc.perform(post("/api/v1/user/model-config/probe")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            assertThat(response).contains("\"code\":\"VALIDATION_ERROR\"");
+        }
+        verify(pythonAiEngineClient, never()).probeModel(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("保存时改了对话目标但未输入新 Key：400，绝不落库")
+    void saveRejectsChangedChatTargetWithoutNewKey() throws Exception {
+        UserConfigEntity entity = entity();
+        entity.setChatProvider("OPENAI_COMPATIBLE");
+        entity.setChatBaseUrl("https://api.deepseek.com/v1");
+        entity.setChatApiKeyCipher(CRYPTO.encrypt("sk-saved-12345678"));
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity));
+
+        int status = mockMvc.perform(put("/api/v1/user/model-config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody("https://evil.example.com/v1", "deepseek-chat", false, null,
+                                "https://api.siliconflow.cn/v1", "sk-embed-new", "BAAI/bge-m3")))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(status).isEqualTo(400);
+        verify(userConfigService, never()).updateByokModelConfig(anyLong(), any());
+        verify(pythonAiEngineClient, never()).probeModel(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("目标完全一致时复用已保存 Key：探测使用旧 Key，落库保留原密文")
+    void saveReusesSavedKeysOnlyWhenTargetUnchanged() throws Exception {
+        UserConfigEntity entity = entity();
+        entity.setChatProvider("OPENAI_COMPATIBLE");
+        entity.setChatApiKeyCipher(CRYPTO.encrypt("sk-saved-chat"));
+        entity.setEmbeddingApiKeyCipher(CRYPTO.encrypt("sk-saved-embed"));
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity));
+        when(pythonAiEngineClient.probeModel(anyLong(), eq(ModelProbeType.BOTH), any(), any()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(true, true, 1024, 20));
+        when(userConfigService.updateByokModelConfig(anyLong(), any())).thenReturn(entity);
+
+        int status = mockMvc.perform(put("/api/v1/user/model-config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody("https://api.deepseek.com/v1", "deepseek-chat", false, null,
+                                "https://api.siliconflow.cn/v1", null, "BAAI/bge-m3")))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(status).isEqualTo(200);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ModelEndpoint> chatProbe = ArgumentCaptor.forClass(ModelEndpoint.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ModelEndpoint> embedProbe = ArgumentCaptor.forClass(ModelEndpoint.class);
+        verify(pythonAiEngineClient).probeModel(eq(USER_ID), eq(ModelProbeType.BOTH),
+                chatProbe.capture(), embedProbe.capture());
+        assertThat(chatProbe.getValue().apiKey()).isEqualTo("sk-saved-chat");
+        assertThat(embedProbe.getValue().apiKey()).isEqualTo("sk-saved-embed");
+
+        ArgumentCaptor<UserConfigService.ByokModelUpdate> update =
+                ArgumentCaptor.forClass(UserConfigService.ByokModelUpdate.class);
+        verify(userConfigService).updateByokModelConfig(eq(USER_ID), update.capture());
+        assertThat(update.getValue().chatApiKeyCipher()).isNull();
+        assertThat(update.getValue().embeddingApiKeyCipher()).isNull();
+    }
+
+    @Test
+    @DisplayName("复用对话 Key 时，Embedding origin/provider 变化：400；仅模型不同：允许")
+    void reuseChatKeyRespectsBindingTarget() throws Exception {
+        UserConfigEntity entity = entity();
+        entity.setChatProvider("OPENAI_COMPATIBLE");
+        entity.setChatBaseUrl("https://api.siliconflow.cn/v1");
+        entity.setChatModel("chat-model");
+        entity.setChatApiKeyCipher(CRYPTO.encrypt("sk-saved-reuse"));
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity));
+
+        int rejected = mockMvc.perform(put("/api/v1/user/model-config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody("https://api.siliconflow.cn/v1", "chat-model", true, null,
+                                "https://evil.example.com/v1", null, "BAAI/bge-m3")))
+                .andReturn().getResponse().getStatus();
+        assertThat(rejected).isEqualTo(400);
+
+        when(pythonAiEngineClient.probeModel(anyLong(), eq(ModelProbeType.BOTH), any(), any()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(true, true, 1024, 20));
+        when(userConfigService.updateByokModelConfig(anyLong(), any())).thenReturn(entity);
+        int allowed = mockMvc.perform(put("/api/v1/user/model-config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody("https://api.siliconflow.cn/v1", "chat-model", true, null,
+                                "https://api.siliconflow.cn/v1", null, "new-embed-model")))
+                .andReturn().getResponse().getStatus();
+        assertThat(allowed).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("探测与保存的 Provider 集合一致：EMBEDDING 拒绝 DEEPSEEK，CHAT 允许")
+    void probeProviderSetMatchesSaveRules() throws Exception {
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity()));
+
+        String rejected = mockMvc.perform(post("/api/v1/user/model-config/probe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(probeBody("EMBEDDING", "DEEPSEEK", "https://api.deepseek.com/v1",
+                                "sk-x", false, "deepseek-chat")))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(rejected).contains("\"code\":\"VALIDATION_ERROR\"");
+
+        when(pythonAiEngineClient.probeModel(anyLong(), eq(ModelProbeType.CHAT), any(), any()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(true, false, null, 10));
+        int chatStatus = mockMvc.perform(post("/api/v1/user/model-config/probe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(probeBody("CHAT", "DEEPSEEK", "https://api.deepseek.com/v1",
+                                "sk-x", false, "deepseek-chat")))
+                .andReturn().getResponse().getStatus();
+        assertThat(chatStatus).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("API Key 超过 512 字符：400，不进入探测/加密/写库")
+    void overlongApiKeyIsRejectedByValidation() throws Exception {
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity()));
+        String longKey = "k".repeat(513);
+
+        String probeResponse = mockMvc.perform(post("/api/v1/user/model-config/probe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(probeBody("CHAT", "DEEPSEEK", "https://api.deepseek.com/v1",
+                                longKey, false, "deepseek-chat")))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(probeResponse).contains("\"code\":\"VALIDATION_ERROR\"");
+
+        int saveStatus = mockMvc.perform(put("/api/v1/user/model-config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody("https://api.deepseek.com/v1", "deepseek-chat", false,
+                                longKey, "https://api.siliconflow.cn/v1", "sk-embed", "BAAI/bge-m3")))
+                .andReturn().getResponse().getStatus();
+        assertThat(saveStatus).isEqualTo(400);
+        verify(pythonAiEngineClient, never()).probeModel(anyLong(), any(), any(), any());
+        verify(userConfigService, never()).updateByokModelConfig(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("非 ASCII Key：400，不进入探测（避免 HTTP 头编码异常）")
+    void nonAsciiApiKeyIsRejectedByValidation() throws Exception {
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity()));
+
+        String response = mockMvc.perform(post("/api/v1/user/model-config/probe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(probeBody("CHAT", "DEEPSEEK", "https://api.deepseek.com/v1",
+                                "密".repeat(10), false, "deepseek-chat")))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(response).contains("\"code\":\"VALIDATION_ERROR\"");
+        verify(pythonAiEngineClient, never()).probeModel(anyLong(), any(), any(), any());
+    }
+
+    private static String probeBody(String probeType, String provider, String baseUrl,
+                                    String apiKey, boolean useSavedKey, String model) throws Exception {
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("probe_type", probeType);
+        body.put("provider", provider);
+        body.put("base_url", baseUrl);
+        body.put("use_saved_key", useSavedKey);
+        body.put("model_name", model);
+        if (apiKey != null) {
+            body.put("api_key", apiKey);
+        }
+        return MAPPER.writeValueAsString(body);
+    }
+
+    private static String saveBody(String chatBaseUrl, String chatModel, boolean reuse,
+                                   String chatKey, String embeddingBaseUrl,
+                                   String embeddingKey, String embeddingModel) throws Exception {
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("chat_provider", "OPENAI_COMPATIBLE");
+        body.put("chat_base_url", chatBaseUrl);
+        body.put("chat_model", chatModel);
+        body.put("default_embedding_provider", "OPENAI_COMPATIBLE");
+        body.put("embedding_base_url", embeddingBaseUrl);
+        body.put("reuse_chat_api_key", reuse);
+        body.put("default_embedding_model", embeddingModel);
+        if (chatKey != null) {
+            body.put("chat_api_key", chatKey);
+        }
+        if (embeddingKey != null) {
+            body.put("embedding_api_key", embeddingKey);
+        }
+        return MAPPER.writeValueAsString(body);
     }
 
     @Test

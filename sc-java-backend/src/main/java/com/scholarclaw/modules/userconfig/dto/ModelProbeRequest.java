@@ -26,8 +26,9 @@ public record ModelProbeRequest(
         @Size(min = 8, max = 512, message = "base_url 长度必须为 8~512")
         String baseUrl,
 
+        @Size(max = 512, message = "api_key 长度不能超过 512")
+        @Pattern(regexp = "^[\\x21-\\x7E]+$", message = "api_key 只能包含可见 ASCII 字符")
         String apiKey,
-
         boolean useSavedKey,
 
         @NotBlank(message = "model_name 不能为空")

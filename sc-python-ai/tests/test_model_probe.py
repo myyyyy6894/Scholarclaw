@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -32,6 +33,7 @@ class _StubHandler(BaseHTTPRequestHandler):
     raw_body: bytes | None = None
     content_length_override: int | None = None
     omit_content_length = False
+    delay_seconds = 0.0
     received_headers: list[dict[str, str]] = []
     received_paths: list[str] = []
 
@@ -40,6 +42,8 @@ class _StubHandler(BaseHTTPRequestHandler):
         self.rfile.read(length)
         type(self).received_headers.append(dict(self.headers))
         type(self).received_paths.append(self.path)
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
         payload = self.body
         if payload is None:
             payload = ({"choices": [{"message": {"role": "assistant", "content": "p"}}]}
@@ -70,6 +74,7 @@ def stub_model_server() -> Iterator[str]:
     _StubHandler.raw_body = None
     _StubHandler.content_length_override = None
     _StubHandler.omit_content_length = False
+    _StubHandler.delay_seconds = 0.0
     _StubHandler.received_headers = []
     _StubHandler.received_paths = []
     try:
@@ -124,7 +129,8 @@ async def test_both_probe_runs_both_calls(stub_model_server: str) -> None:
     assert outcome.chat_reachable is True
     assert outcome.embedding_reachable is True
     assert outcome.actual_dim == DIM
-    assert _StubHandler.received_paths == ["/v1/chat/completions", "/v1/embeddings"]
+    assert sorted(_StubHandler.received_paths) == sorted(
+        ["/v1/chat/completions", "/v1/embeddings"]), "BOTH 并行执行，请求顺序不固定"
 
 
 @pytest.mark.asyncio
@@ -146,6 +152,22 @@ async def test_redirect_is_rejected_as_ssrf(stub_model_server: str, status: int)
 
     assert excinfo.value.error_code == AiErrorCode.E_SYS_02
     assert _StubHandler.received_paths == ["/v1/chat/completions"]
+
+
+@pytest.mark.asyncio
+async def test_both_probes_run_in_parallel(stub_model_server: str) -> None:
+    """BOTH 必须并行：串行最坏 2×5s 会撞上 Java 10s 读取超时（04 §6.2）。"""
+    _StubHandler.delay_seconds = 0.3
+
+    started = time.monotonic()
+    outcome = await probe_models(
+        _settings(stub_model_server), "BOTH",
+        _config(stub_model_server), _config(stub_model_server))
+    elapsed = time.monotonic() - started
+
+    assert outcome.chat_reachable is True
+    assert outcome.embedding_reachable is True
+    assert elapsed < 0.55, f"BOTH 疑似串行执行（耗时 {elapsed:.2f}s）"
 
 
 @pytest.mark.asyncio

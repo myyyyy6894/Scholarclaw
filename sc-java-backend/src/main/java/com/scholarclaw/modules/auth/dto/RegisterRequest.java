@@ -23,5 +23,6 @@ public record RegisterRequest(
                 message = "密码必须同时包含字母与数字")
         String password,
 
+        @Size(max = 64, message = "timezone 长度不能超过 64")
         String timezone) {
 }

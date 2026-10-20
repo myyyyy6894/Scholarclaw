@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from starlette.testclient import TestClient
 
 from app.api.internal_v1 import endpoints_probe
@@ -21,6 +22,7 @@ from app.core.exceptions import (
     UpstreamModelRateLimitedError,
     UpstreamTimeoutError,
 )
+from app.schemas.probe import ModelProbeRequest
 from app.services.gateway.model_probe import ProbeOutcome
 
 PROBE_PATH = "/internal/ai/v1/model/probe"
@@ -118,3 +120,66 @@ def test_missing_internal_token_is_rejected_even_for_valid_body(
     assert response.status_code == 403
     assert response.json()["code"] == "AUTH_FORBIDDEN"
     assert "sk-endpoint-test-secret" not in response.text
+
+
+# ----------------------------------------------------------------------
+# 内部 Schema：Provider 集合与 API Key 长度（与 Java 保存 DTO / 03 对齐）
+# ----------------------------------------------------------------------
+
+
+def _config(provider: str) -> dict[str, str]:
+    return {
+        "provider": provider,
+        "base_url": "https://api.example.com/v1",
+        "api_key": "sk-test",
+        "model_name": "m",
+    }
+
+
+def test_schema_rejects_deepseek_for_embedding_probe() -> None:
+    with pytest.raises(ValidationError):
+        ModelProbeRequest(
+            user_id="10001", probe_type="EMBEDDING",
+            embedding_config=_config("DEEPSEEK"),
+        )
+
+
+def test_schema_rejects_deepseek_for_both_embedding_config() -> None:
+    with pytest.raises(ValidationError):
+        ModelProbeRequest(
+            user_id="10001", probe_type="BOTH",
+            chat_config=_config("DEEPSEEK"),
+            embedding_config=_config("DEEPSEEK"),
+        )
+
+
+def test_schema_allows_deepseek_for_chat_probe() -> None:
+    request = ModelProbeRequest(
+        user_id="10001", probe_type="CHAT",
+        chat_config=_config("DEEPSEEK"),
+    )
+
+    assert request.chat_config is not None
+
+
+def test_schema_rejects_non_ascii_api_key() -> None:
+    with pytest.raises(ValidationError):
+        ModelProbeRequest(
+            user_id="10001", probe_type="CHAT",
+            chat_config={**_config("DEEPSEEK"), "api_key": "密" * 10},
+        )
+
+
+def test_schema_enforces_api_key_max_length() -> None:
+    with pytest.raises(ValidationError):
+        ModelProbeRequest(
+            user_id="10001", probe_type="CHAT",
+            chat_config={**_config("DEEPSEEK"), "api_key": "k" * 513},
+        )
+
+    # 512 字符应当通过 Schema 校验（加密后的列宽校验由 Java 负责）
+    request = ModelProbeRequest(
+        user_id="10001", probe_type="CHAT",
+        chat_config={**_config("DEEPSEEK"), "api_key": "k" * 512},
+    )
+    assert request.chat_config is not None

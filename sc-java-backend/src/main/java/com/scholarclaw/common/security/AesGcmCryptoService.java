@@ -35,6 +35,8 @@ public class AesGcmCryptoService {
 
     /** 密文版本前缀（`03` §7.3）；将来轮换主密钥时递增并保留旧版本解密分支。 */
     public static final String VERSION_PREFIX = "v1:";
+    /** `t_user_config.*_api_key_cipher` 的列宽（`VARCHAR(1024)`）；密文文本不得超过它。 */
+    public static final int MAX_CIPHER_TEXT_LENGTH = 1024;
     private static final int KEY_BYTES = 32;
     private static final int IV_BYTES = 12;
     private static final int TAG_BITS = 128;
@@ -48,9 +50,29 @@ public class AesGcmCryptoService {
         this.key = new SecretKeySpec(keyBytes, "AES");
     }
 
+    /**
+     * 加密前按**字节数**预估密文长度，确保不超过数据库列宽。
+     *
+     * <p>只校验字符数不够：一个 300 字符的中文 Key 可能超过 900 字节，加密后的 base64 密文
+     * 会超过 `VARCHAR(1024)`。这里在真正加密/写库前拦截，统一返回 `400 VALIDATION_ERROR`，
+     * 避免把数据库长度异常暴露成 500。
+     */
+    public void requireStorable(String plaintext) {
+        requireText(plaintext, "待加密内容");
+        int plaintextBytes = plaintext.getBytes(StandardCharsets.UTF_8).length;
+        int ciphertextBytes = plaintextBytes + TAG_BITS / 8;
+        int ciphertextBase64Length = 4 * ((ciphertextBytes + 2) / 3);
+        int ivBase64Length = 4 * ((IV_BYTES + 2) / 3);
+        int totalLength = VERSION_PREFIX.length() + ivBase64Length + 1 + ciphertextBase64Length;
+        if (totalLength > MAX_CIPHER_TEXT_LENGTH) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    "API Key 过长，加密后超出存储上限，请缩短后重试。");
+        }
+    }
+
     /** 加密明文；返回值即落库的密文（不含任何明文片段）。 */
     public String encrypt(String plaintext) {
-        requireText(plaintext, "待加密内容");
+        requireStorable(plaintext);
         byte[] iv = new byte[IV_BYTES];
         secureRandom.nextBytes(iv);
         try {
@@ -58,7 +80,13 @@ public class AesGcmCryptoService {
             cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
             byte[] ciphertext = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
             Base64.Encoder encoder = Base64.getEncoder();
-            return VERSION_PREFIX + encoder.encodeToString(iv) + ":" + encoder.encodeToString(ciphertext);
+            String result = VERSION_PREFIX + encoder.encodeToString(iv) + ":" + encoder.encodeToString(ciphertext);
+            if (result.length() > MAX_CIPHER_TEXT_LENGTH) {
+                // 防御性兜底：requireStorable 已按同一公式预估，正常不会走到这里
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                        "API Key 过长，加密后超出存储上限，请缩短后重试。");
+            }
+            return result;
         } catch (Exception e) {
             // 不把明文或异常细节带进日志/响应
             log.error("API Key 加密失败 error={}", e.getClass().getSimpleName());

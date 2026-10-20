@@ -51,9 +51,11 @@ def build_async_client(
     read_timeout: float,
     write_timeout: float | None = None,
     pool_timeout: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.AsyncClient:
     """构造符合安全约束的出站客户端。
 
+    :param transport: 仅用于测试注入（如 `httpx.MockTransport`）；生产环境保持 `None`。
     调用方负责在使用完毕后 `aclose()`。
     """
     timeout = httpx.Timeout(
@@ -62,7 +64,12 @@ def build_async_client(
         write=read_timeout if write_timeout is None else write_timeout,
         pool=read_timeout if pool_timeout is None else pool_timeout,
     )
-    return httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False)
+    return httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=False,
+        trust_env=False,
+        transport=transport,
+    )
 
 
 def classify_upstream_failure(status_code: int) -> AiEngineError:

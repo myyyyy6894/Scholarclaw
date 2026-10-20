@@ -76,6 +76,13 @@ def main() -> int:
             page.get_by_text("延迟", exact=False).first.wait_for(timeout=20000)
             expect(True, "对话模型探测成功")
 
+            # 改动任一相关字段后，旧的“连接成功/延迟”结果必须消失，
+            # 不能把修改后的无效配置伪装成已验证。
+            page.locator('input[placeholder="deepseek-chat"]').fill("deepseek-chat-changed")
+            page.get_by_text("延迟", exact=False).first.wait_for(state="detached", timeout=5000)
+            expect(True, "表单变更后旧的探测结果已失效")
+            page.locator('input[placeholder="deepseek-chat"]').fill("deepseek-chat")
+
             page.get_by_role("button", name="测试 Embedding 模型").click()
             page.get_by_text("维度 8", exact=False).first.wait_for(timeout=20000)
             expect(True, "Embedding 探测成功（维度 8）")

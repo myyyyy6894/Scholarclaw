@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -95,6 +95,35 @@ const embeddingKeyPlaceholder = computed(() =>
 
 const hasAnyConfig = computed(
   () => config.value?.chat_provider !== null && config.value?.chat_provider !== undefined,
+)
+
+// 探测结果只对“产生它时的表单值”有效：任何相关字段变更都必须清空，
+// 否则用户改完地址/模型/Key 后仍会看到旧的“连接成功”，把无效配置伪装成已验证。
+watch(
+  [
+    () => modelForm.value.chatProvider,
+    () => modelForm.value.chatBaseUrl,
+    () => modelForm.value.chatModel,
+    () => modelForm.value.chatApiKey,
+  ],
+  () => {
+    chatProbe.value = null
+  },
+)
+
+watch(
+  [
+    () => modelForm.value.embeddingProvider,
+    () => modelForm.value.embeddingBaseUrl,
+    () => modelForm.value.embeddingModel,
+    () => modelForm.value.embeddingApiKey,
+    () => modelForm.value.reuseChatApiKey,
+    // 复用模式下 Embedding 的 Key 来源是对话 Key，改它同样要让 Embedding 探测结果失效
+    () => modelForm.value.chatApiKey,
+  ],
+  () => {
+    embeddingProbe.value = null
+  },
 )
 
 onMounted(() => {
@@ -407,7 +436,12 @@ function goToLogin(): void {
           </div>
 
           <div class="sc-settings__row sc-settings__row--end">
-            <span class="sc-settings__hint">{{ savedHint }}</span>
+            <div class="sc-settings__hint-group">
+              <span class="sc-settings__hint">
+                保存时后端会重新探测并以实测维度回填（前端不提交维度）。
+              </span>
+              <span class="sc-settings__hint">{{ savedHint }}</span>
+            </div>
             <el-button type="primary" :loading="savingModel" @click="onSaveModel">
               保存模型配置
             </el-button>
@@ -555,6 +589,12 @@ function goToLogin(): void {
 .sc-settings__hint--block {
   display: block;
   margin: -8px 0 16px;
+}
+
+.sc-settings__hint-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sc-settings__checkbox {

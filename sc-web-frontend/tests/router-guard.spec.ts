@@ -20,7 +20,8 @@ const StubComponent = defineComponent({ template: '<div />' })
 function buildRouter(): Router {
   const routes: RouteRecordRaw[] = [
     { path: '/', name: 'home', component: StubComponent },
-    { path: '/login', name: LOGIN_ROUTE_NAME, component: StubComponent },
+    { path: '/login', name: LOGIN_ROUTE_NAME, component: StubComponent, meta: { guestOnly: true } },
+    { path: '/settings', name: 'settings', component: StubComponent, meta: { requiresAuth: true } },
     { path: '/workspace', name: 'workspace', component: StubComponent, meta: { requiresAuth: true } },
   ]
   const router = createRouter({ history: createMemoryHistory(), routes })
@@ -68,5 +69,22 @@ describe('installAuthGuard', () => {
     await router.push('/workspace')
 
     expect(router.currentRoute.value.fullPath).toBe('/workspace')
+  })
+
+  it('已登录访问登录页会回到设置页，避免重复登录', async () => {
+    useAuthStore().setSession({ token: 'jwt-token-value', user: null })
+    const router = buildRouter()
+
+    await router.push('/login')
+
+    expect(router.currentRoute.value.name).toBe('settings')
+  })
+
+  it('未登录访问登录页正常放行', async () => {
+    const router = buildRouter()
+
+    await router.push('/login')
+
+    expect(router.currentRoute.value.name).toBe(LOGIN_ROUTE_NAME)
   })
 })

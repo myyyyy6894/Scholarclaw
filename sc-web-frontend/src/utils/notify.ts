@@ -23,3 +23,7 @@ export function notifyError(error: unknown, fallback = '操作失败，请稍后
 export function notifyWarning(message: string): void {
   ElMessage.warning(message)
 }
+
+export function notifySuccess(message: string): void {
+  ElMessage.success(message)
+}

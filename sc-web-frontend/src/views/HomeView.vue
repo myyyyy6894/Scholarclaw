@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 import { resolveApiBaseUrl } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 
 /**
  * 工程骨架的落地页。
@@ -10,19 +13,27 @@ import { resolveApiBaseUrl } from '@/api/client'
 
 const apiBaseUrl = resolveApiBaseUrl()
 const mode = import.meta.env.MODE
+const auth = useAuthStore()
+
+const primaryAction = computed(() =>
+  auth.isAuthenticated
+    ? { label: '前往模型配置', to: { name: 'settings' } }
+    : { label: '登录 / 注册', to: { name: 'login' } },
+)
 
 const implemented = [
   'Vue 3 + TypeScript + Vite 工程与类型检查（vue-tsc）',
-  '质量门禁 npm run check：类型检查 + ESLint（类型感知规则）+ 18 项单元测试',
-  '路由骨架与鉴权守卫（重定向目标待 TASK-205 提供登录页）',
+  '质量门禁 npm run check：类型检查 + ESLint（类型感知规则）+ 单元测试',
+  '登录 / 注册页（API-AUTH-001/002）与个人设置页（API-USER-001~005）',
+  '路由守卫与全局 401 处理（会话失效自动回到登录页）',
+  'BYOK 模型配置表单：连通性探测、保存状态、密钥掩码展示',
   '统一 API client：信封解包、错误分类、401 清理会话',
-  '登录态管理（Pinia）与浏览器存储封装',
+  '登录态管理（Pinia）与浏览器存储封装（只存令牌，不存密钥）',
   '全局错误提示出口（Element Plus ElMessage）',
   '生产构建已由 sc-web-nginx 容器托管，并反代 /api 与 /webhooks（TASK-104）',
 ]
 
 const upcoming = [
-  { task: 'TASK-205', title: '登录、注册与个人设置（BYOK 模型配置）' },
   { task: 'TASK-404', title: '课程知识库管理视图（左侧栏 + 文档抽屉）' },
   { task: 'TASK-605', title: 'RAG 溯源问答主工作区（SSE 流式 + 引用高亮）' },
   { task: 'TASK-705', title: 'DDL 任务看板与待确认收件箱' },
@@ -31,6 +42,20 @@ const upcoming = [
 
 <template>
   <div>
+    <el-card class="sc-card-gap" shadow="never">
+      <div class="sc-home__cta">
+        <div>
+          <div class="sc-home__cta-title">欢迎使用 ScholarClaw 智学爪</div>
+          <div class="sc-home__cta-subtitle">
+            {{ auth.isAuthenticated ? `当前登录：${auth.displayName}` : '登录后即可配置 BYOK 模型。' }}
+          </div>
+        </div>
+        <router-link :to="primaryAction.to">
+          <el-button type="primary">{{ primaryAction.label }}</el-button>
+        </router-link>
+      </div>
+    </el-card>
+
     <el-card class="sc-card-gap" shadow="never">
       <template #header>构建与环境信息</template>
       <el-descriptions :column="1" border>
@@ -64,7 +89,7 @@ const upcoming = [
       :closable="false"
       show-icon
       title="关于接口调用"
-      description="本页不调用后端接口：Java 侧尚未落地任何 Web 业务接口（P2 起）。开发态请通过 Vite 代理把 /api 指向 Java 服务，生产态由 sc-web-nginx 反向代理。"
+      description="登录、注册与 BYOK 配置已接入真实后端接口；开发态通过 Vite 代理把 /api 指向 Java 服务，生产态由 sc-web-nginx 反向代理。"
     />
   </div>
 </template>
@@ -74,5 +99,24 @@ const upcoming = [
   margin: 0;
   padding-left: 20px;
   line-height: 1.9;
+}
+
+.sc-home__cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.sc-home__cta-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sc-home__cta-subtitle {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 14px;
 }
 </style>

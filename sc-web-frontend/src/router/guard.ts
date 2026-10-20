@@ -12,11 +12,15 @@ import { useAuthStore } from '@/stores/auth'
  * 所有资源归属与授权判定仍由 Java 后端按其 `SecurityContext` 执行。
  */
 
-/** 登录路由名。登录页由 TASK-205 落地，此处先固定重定向目标，避免字符串散落各处。 */
+/** 登录路由名。 */
 export const LOGIN_ROUTE_NAME = 'login'
 
 export function installAuthGuard(target: Router): void {
   target.beforeEach((to) => {
+    // 已登录用户不再需要登录/注册页；直接回到设置页
+    if (to.meta.guestOnly === true && useAuthStore().isAuthenticated) {
+      return { name: 'settings' }
+    }
     if (to.meta.requiresAuth !== true) {
       return true
     }

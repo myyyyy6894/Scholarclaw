@@ -36,7 +36,10 @@ configureApiClient({
     }
     auth.clearSession()
     notifyWarning('登录状态已失效，请重新登录。')
-    // 登录页由 TASK-205 落地，届时在此处补充跳转
+    const current = router.currentRoute.value
+    if (current.name !== 'login') {
+      void router.push({ name: 'login', query: { redirect: current.fullPath } })
+    }
   },
 })
 

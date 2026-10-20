@@ -108,8 +108,8 @@ class InternalTokenInvalidError(NonRetryableAiError):
 class BaseUrlRejectedError(NonRetryableAiError):
     """自定义 Base URL 未通过安全校验，或上游返回了重定向（`NFR-SEC-05`）。
 
-    注意：URL/IP 层面的 7 步 SSRF 校验属 TASK-301；本类型在 TASK-102 只用于
-    「传输层拒绝把 3xx 当作成功」这一确定性保护。
+    URL/IP 层面的校验由 :mod:`app.services.gateway.ssrf_guard` 在每次出站前执行
+    （TASK-203/204）；传输层另外拒绝把 3xx 当作成功，避免重定向绕过校验。
     """
 
     def __init__(self, message: str = "该自定义 Base URL 未通过安全校验，或上游返回了重定向。") -> None:

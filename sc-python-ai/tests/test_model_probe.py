@@ -43,7 +43,7 @@ class _StubHandler(BaseHTTPRequestHandler):
                        else {"data": [{"embedding": [0.01] * DIM}]})
         raw = json.dumps(payload).encode()
         self.send_response(self.status_code)
-        if self.status_code in (301, 302):
+        if 300 <= self.status_code < 400:
             self.send_header("Location", "https://evil.example.com/")
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
@@ -127,13 +127,16 @@ async def test_upstream_401_maps_to_auth_error(stub_model_server: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_redirect_is_rejected_as_ssrf(stub_model_server: str) -> None:
-    _StubHandler.status_code = 302
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+async def test_redirect_is_rejected_as_ssrf(stub_model_server: str, status: int) -> None:
+    """所有重定向状态码都必须按 `E-SYS-02` 拒绝，不能跟随到未校验地址。"""
+    _StubHandler.status_code = status
 
     with pytest.raises(NonRetryableAiError) as excinfo:
         await probe_models(_settings(stub_model_server), "CHAT", _config(stub_model_server), None)
 
     assert excinfo.value.error_code == AiErrorCode.E_SYS_02
+    assert _StubHandler.received_paths == ["/v1/chat/completions"]
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,11 @@ _DNS_TABLE = {
     "internal.example.com": "10.0.0.5",
     "metadata.example.com": "169.254.169.254",
     "localhost": "127.0.0.1",
+    # 非点分十进制的回环写法：libc 会解析成 127.0.0.1，校验必须基于解析结果而不是字符串
+    "2130706433": "127.0.0.1",
+    "0x7f000001": "127.0.0.1",
+    "0177.0.0.1": "127.0.0.1",
+    "127.1": "127.0.0.1",
 }
 
 
@@ -56,10 +61,25 @@ def test_public_https_custom_8443_is_allowed() -> None:
     "https://metadata.example.com/latest/meta-data",  # 解析到云元数据地址
     "https://internal.example.com/v1",           # 解析到私网
     "https://localhost/v1",                      # 解析到回环
+    "https://2130706433/v1",                     # 十进制回环
+    "https://0x7f000001/v1",                     # 十六进制回环
+    "https://0177.0.0.1/v1",                     # 八进制回环
+    "https://127.1/v1",                          # 省略段回环
 ])
 def test_unsafe_urls_are_rejected(url: str) -> None:
     with pytest.raises(BaseUrlRejectedError):
         validate_outbound_url(url, allow_local=False, allowed_origins=ALLOWED)
+
+
+def test_rejection_message_never_echoes_the_target() -> None:
+    """错误响应不得暴露内部网络信息（`04` §4.2.2 规则 3 / TASK-204 验收条件）。"""
+    url = "https://169.254.169.254/latest/meta-data"
+
+    with pytest.raises(BaseUrlRejectedError) as excinfo:
+        validate_outbound_url(url, allow_local=False, allowed_origins=())
+
+    assert url not in str(excinfo.value)
+    assert "169.254" not in str(excinfo.value)
 
 
 def test_local_origin_requires_switch_and_exact_whitelist() -> None:

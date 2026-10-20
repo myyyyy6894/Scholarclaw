@@ -236,7 +236,10 @@ async def test_logs_never_contain_api_key(caplog: pytest.LogCaptureFixture) -> N
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": True})
 
-    with caplog.at_level(logging.INFO):
+    # 其他测试可能已把 `sc.*` 设为 WARNING；这里显式把网关 logger 提到 INFO 再断言
+    with caplog.at_level(
+        logging.INFO, logger="sc.app.services.gateway.ssrf_safe_model_gateway"
+    ):
         async with _gateway(handler) as gateway:
             await gateway.post_json(ENDPOINT, "/chat/completions", {"secret": "sk-body-secret"})
 

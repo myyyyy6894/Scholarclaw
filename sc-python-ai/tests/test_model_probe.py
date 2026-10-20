@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -20,7 +21,9 @@ from app.core.exceptions import (
     BaseUrlRejectedError,
     NonRetryableAiError,
     UpstreamModelAuthError,
+    UpstreamTimeoutError,
 )
+from app.services.gateway import model_probe as model_probe_module
 from app.services.gateway import ssrf_guard
 from app.services.gateway.model_probe import ModelEndpointConfig, probe_models
 
@@ -34,6 +37,7 @@ class _StubHandler(BaseHTTPRequestHandler):
     content_length_override: int | None = None
     omit_content_length = False
     delay_seconds = 0.0
+    chunk_delay_seconds = 0.0
     received_headers: list[dict[str, str]] = []
     received_paths: list[str] = []
 
@@ -58,6 +62,15 @@ class _StubHandler(BaseHTTPRequestHandler):
             declared = self.content_length_override
             self.send_header("Content-Length", str(declared if declared is not None else len(raw)))
         self.end_headers()
+        if self.chunk_delay_seconds:
+            # 先发一半并 flush，再停住：httpx 读取剩余字节时触发读超时。
+            half = max(1, len(raw) // 2)
+            self.wfile.write(raw[:half])
+            self.wfile.flush()
+            time.sleep(self.chunk_delay_seconds)
+            self.wfile.write(raw[half:])
+            self.wfile.flush()
+            return
         self.wfile.write(raw)
 
     def log_message(self, *args) -> None:  # noqa: ANN002 - 静音
@@ -75,6 +88,7 @@ def stub_model_server() -> Iterator[str]:
     _StubHandler.content_length_override = None
     _StubHandler.omit_content_length = False
     _StubHandler.delay_seconds = 0.0
+    _StubHandler.chunk_delay_seconds = 0.0
     _StubHandler.received_headers = []
     _StubHandler.received_paths = []
     try:
@@ -85,12 +99,12 @@ def stub_model_server() -> Iterator[str]:
         thread.join(timeout=5)
 
 
-def _settings(base_url: str):
+def _settings(base_url: str, *, read_timeout: str = "2"):
     return load_settings({
         "SC_ALLOW_LOCAL_MODEL_BASE_URL": "true",
         "SC_LOCAL_MODEL_ALLOWED_ORIGINS": base_url.rsplit("/v1", 1)[0],
         "SC_MODEL_CONNECT_TIMEOUT_SECONDS": "2",
-        "SC_MODEL_READ_TIMEOUT_SECONDS": "2",
+        "SC_MODEL_READ_TIMEOUT_SECONDS": read_timeout,
     })
 
 
@@ -168,6 +182,66 @@ async def test_both_probes_run_in_parallel(stub_model_server: str) -> None:
     assert outcome.chat_reachable is True
     assert outcome.embedding_reachable is True
     assert elapsed < 0.55, f"BOTH 疑似串行执行（耗时 {elapsed:.2f}s）"
+
+
+@pytest.mark.asyncio
+async def test_both_total_budget_times_out_and_cancels_subtasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DNS/连接/读取任一环节变慢时，总预算必须中止整个 BOTH 探测并取消两个子任务。"""
+    started: list[str] = []
+    cancelled: list[str] = []
+
+    async def slow_probe(_gateway, _config):  # noqa: ANN001, ANN202
+        started.append("started")
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled.append("cancelled")
+            raise
+        return True if len(started) == 1 else 8
+
+    monkeypatch.setattr(model_probe_module, "_probe_chat", slow_probe)
+    monkeypatch.setattr(model_probe_module, "_probe_embedding", slow_probe)
+    monkeypatch.setattr(model_probe_module, "BOTH_TOTAL_TIMEOUT_SECONDS", 0.05)
+
+    base = "https://api.example.com/v1"
+    with pytest.raises(UpstreamTimeoutError) as excinfo:
+        await probe_models(_settings(base), "BOTH", _config(base), _config(base))
+
+    assert excinfo.value.error_code == AiErrorCode.UPSTREAM_TIMEOUT
+    assert len(started) == 2
+    assert len(cancelled) == 2, "总预算触发后两个子任务都必须被取消"
+
+
+@pytest.mark.asyncio
+async def test_slow_dns_is_covered_by_both_total_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同步 getaddrinfo 不再阻塞事件循环；慢 DNS 由总预算统一中止为 504。"""
+
+    async def slow_resolve(_host: str):  # noqa: ANN202
+        await asyncio.sleep(5)
+        return ()
+
+    monkeypatch.setattr(ssrf_guard, "_resolve_async", slow_resolve)
+    monkeypatch.setattr(model_probe_module, "BOTH_TOTAL_TIMEOUT_SECONDS", 0.05)
+
+    base = "https://api.example.com/v1"
+    with pytest.raises(UpstreamTimeoutError):
+        await probe_models(_settings(base), "BOTH", _config(base), _config(base))
+
+
+@pytest.mark.asyncio
+async def test_slow_chunked_response_hits_read_timeout(stub_model_server: str) -> None:
+    """上游先返回一半响应再停住：读超时必须映射为 504，而不是无限等待。"""
+    _StubHandler.chunk_delay_seconds = 0.5
+
+    with pytest.raises(UpstreamTimeoutError) as excinfo:
+        await probe_models(
+            _settings(stub_model_server, read_timeout="0.2"),
+            "CHAT",
+            _config(stub_model_server),
+            None,
+        )
+
+    assert excinfo.value.error_code == AiErrorCode.UPSTREAM_TIMEOUT
 
 
 @pytest.mark.asyncio

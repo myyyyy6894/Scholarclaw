@@ -147,6 +147,71 @@ async def test_server_error_exhausts_retries_and_is_redacted() -> None:
     assert "upstream exploded" not in str(exc_info.value)
 
 
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+async def test_documented_transient_statuses_retry_at_most_twice(status: int) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, text=f"upstream {status}")
+
+    sleep = _SleepRecorder()
+    async with _gateway(handler) as gateway:
+        expected = (
+            UpstreamModelRateLimitedError if status == 429 else UpstreamModelError
+        )
+        with pytest.raises(expected) as exc_info:
+            await gateway.post_json(
+                ENDPOINT, "/chat/completions", {}, retry=RetryPolicy.standard(), sleep=sleep)
+
+    assert calls == 3, f"{status} 应为首试 + 最多 2 次重试"
+    assert sleep.delays == [1.0, 3.0]
+    assert exc_info.value.error_code in {
+        AiErrorCode.UPSTREAM_MODEL_RATE_LIMITED,
+        AiErrorCode.UPSTREAM_MODEL_ERROR,
+    }
+
+
+@pytest.mark.parametrize("status", [500, 501, 505, 507, 599])
+async def test_other_5xx_are_requested_only_once(status: int) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, text="upstream exploded with sk-secret")
+
+    sleep = _SleepRecorder()
+    async with _gateway(handler) as gateway:
+        with pytest.raises(UpstreamModelError) as exc_info:
+            await gateway.post_json(
+                ENDPOINT, "/chat/completions", {}, retry=RetryPolicy.standard(), sleep=sleep)
+
+    assert calls == 1, f"{status} 不在 NFR-REL-01 的可重试集合内"
+    assert sleep.delays == []
+    assert exc_info.value.error_code is AiErrorCode.UPSTREAM_MODEL_ERROR
+    assert exc_info.value.retryable is False
+    assert "upstream exploded" not in str(exc_info.value)
+
+
+async def test_connect_timeout_maps_to_upstream_timeout_without_retry() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectTimeout("connect timed out", request=request)
+
+    async with _gateway(handler) as gateway:
+        with pytest.raises(UpstreamTimeoutError) as exc_info:
+            await gateway.post_json(
+                ENDPOINT, "/chat/completions", {}, retry=RetryPolicy.standard())
+
+    assert calls == 1
+    assert exc_info.value.error_code is AiErrorCode.UPSTREAM_TIMEOUT
+
+
 async def test_probe_default_is_no_retry() -> None:
     calls = 0
 

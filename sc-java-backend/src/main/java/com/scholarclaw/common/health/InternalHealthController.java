@@ -1,7 +1,9 @@
 package com.scholarclaw.common.health;
 
+import com.scholarclaw.common.filter.TraceContext;
 import com.scholarclaw.common.health.HealthProbeRegistry.HealthReport;
 import com.scholarclaw.common.response.Result;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,7 +51,7 @@ public class InternalHealthController {
     }
 
     @GetMapping("/health")
-    public Result<HealthData> health() {
+    public Result<HealthData> health(HttpServletRequest request) {
         HealthReport report = probeRegistry.run();
         String status = report.status();
         if (HealthProbeRegistry.STATUS_DOWN.equals(status)) {
@@ -57,6 +59,11 @@ public class InternalHealthController {
         } else if (report.peers().containsValue(HealthProbeRegistry.STATUS_DOWN)) {
             // 跨服务不可达不影响容器健康（见 HealthProbe.Kind.PEER），但必须留痕便于排障
             log.warn("健康检查跨服务观测到不可达 peers={}", report.peers());
+        }
+        if (request.getHeader(TraceContext.HEADER_NAME) != null) {
+            // 仅当调用方显式携带追踪号时记录：容器 healthcheck 不携带，避免每 15s 刷日志；
+            // 跨容器/脚本排查时则能在 Java 侧留下与 Python 相同的 trace。
+            log.info("内部健康检查完成 status={} peers={}", status, report.peers().keySet());
         }
         return Result.ok("Healthy", new HealthData(serviceName, status, report.dependencies(), report.peers()));
     }

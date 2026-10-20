@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.config.JacksonConfig;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import com.scholarclaw.common.filter.TraceContext;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -102,6 +103,23 @@ class PythonAiEngineClientTest {
         assertThat(capturedHeaders.get().getFirst("X-Internal-Token")).isEqualTo(TOKEN);
         assertThat(capturedHeaders.get().getFirst("X-Trace-Id")).startsWith("tr_");
         assertThat(capturedHeaders.get().getFirst("X-User-Id")).isEqualTo("10001");
+    }
+
+    @Test
+    @DisplayName("无请求上下文时使用 tr_cron_* 追踪号，Python 侧必须原样接受并回显")
+    void sendsCronTraceIdWhenNoRequestContext() {
+        responseBody.set("{\"code\":\"OK\",\"data\":{\"ok\":true}}");
+        TraceContext.clear();
+
+        try {
+            client(baseUrl).postJson("/internal/ai/v1/agent/route-and-extract",
+                    Map.of("raw_text", "hello"), null);
+        } finally {
+            TraceContext.clear();
+        }
+
+        assertThat(capturedHeaders.get().getFirst("X-Trace-Id"))
+                .matches("tr_cron_[0-9a-f]{12}");
     }
 
     @Test

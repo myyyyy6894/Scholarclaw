@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 
 from app.core.config import Settings
-from app.core.exceptions import AiErrorCode, NonRetryableAiError
+from app.core.exceptions import AiErrorCode, NonRetryableAiError, UpstreamTimeoutError
 from app.services.gateway import ssrf_guard
 from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.gateway.ssrf_safe_model_gateway import SsrfSafeModelGateway
@@ -30,6 +30,10 @@ PROBE_CHAT_PATH = "/chat/completions"
 PROBE_EMBEDDING_PATH = "/embeddings"
 CHAT_PING_MESSAGE = "ping"
 EMBEDDING_PING_INPUT = "ping"
+
+#: `BOTH` 探测的总预算（秒）。单个出站读超时 5s，但 DNS 3s + 连接 5s + 读取 5s
+#: 的最坏组合仍可能超过 Java 10s 读取超时；总预算必须显著小于 10s（`04` §4.9.1）。
+BOTH_TOTAL_TIMEOUT_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -51,7 +55,7 @@ async def probe_models(
     :raises BaseUrlRejectedError: 出站地址未通过 SSRF 校验，或上游返回 3xx（`E-SYS-02`）
     :raises UpstreamModelAuthError: 上游 401/403/404
     :raises UpstreamModelError: 上游 5xx / 连接失败 / 响应结构不可解析
-    :raises UpstreamTimeoutError: 连接或读取超时
+    :raises UpstreamTimeoutError: 连接或读取超时，或 `BOTH` 超过总预算
     """
     probe_read_timeout = min(
         settings.model_read_timeout_seconds,
@@ -67,18 +71,24 @@ async def probe_models(
 
     async with SsrfSafeModelGateway(settings, read_timeout=probe_read_timeout) as gateway:
         if probe_type == "BOTH":
-            # BOTH 并行执行：单次出站读超时 5s，串行最坏 10s + 开销会撞上 Java 的 10s 读取超时；
-            # 并行后总耗时约 max(5s) + 开销，留出足够网络余量（04 §6.2）。
+            # BOTH 并行执行，并用总预算覆盖整个探测：DNS、连接、读取任一环节变慢时，
+            # 由 wait_for 统一中止并返回 504 UPSTREAM_TIMEOUT，避免撞上 Java 的 10s 读取超时。
             chat_task = asyncio.create_task(
                 _probe_chat(gateway, _require(chat_config, "chat_config")))
             embedding_task = asyncio.create_task(
                 _probe_embedding(gateway, _require(embedding_config, "embedding_config")))
             try:
-                chat_reachable, actual_dim = await asyncio.gather(chat_task, embedding_task)
+                chat_reachable, actual_dim = await asyncio.wait_for(
+                    asyncio.gather(chat_task, embedding_task),
+                    timeout=BOTH_TOTAL_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                _cancel_tasks(chat_task, embedding_task)
+                await asyncio.gather(chat_task, embedding_task, return_exceptions=True)
+                raise UpstreamTimeoutError() from None
             except BaseException:
                 # 任一探测失败立即取消另一个，避免它在后台继续占用连接/额度
-                chat_task.cancel()
-                embedding_task.cancel()
+                _cancel_tasks(chat_task, embedding_task)
                 await asyncio.gather(chat_task, embedding_task, return_exceptions=True)
                 raise
             embedding_reachable = actual_dim > 0
@@ -102,6 +112,11 @@ __all__ = [
     "ProbeOutcome",
     "probe_models",
 ]
+
+
+def _cancel_tasks(*tasks: asyncio.Task) -> None:
+    for task in tasks:
+        task.cancel()
 
 
 def _require(config: ModelEndpointConfig | None, field_name: str) -> ModelEndpointConfig:

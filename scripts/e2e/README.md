@@ -74,7 +74,23 @@ docker compose exec -T sc-mysql sh -lc \
    -e "DELETE FROM t_user_config WHERE username LIKE \"e2e_browser_%\";"'
 ```
 
-## 3. 安全约束
+## 3. P3 追踪与 mock 安全验证
+
+无需浏览器，使用已启动的整栈与容器内 Python：
+
+```bash
+# Java → Python 的 tr_cron_* 透传：响应头、响应体、两侧日志
+python3 scripts/e2e/trace_passthrough_smoke.py
+
+# 真实网关/探测代码的 mock 验证（在容器内运行）：
+# 500/501/505 不重试；429/502/503/504 最多 3 次；BOTH 8s 总预算；
+# SSRF 控制字符/编码穿越；日志与异常不含 Key
+docker compose exec -T sc-python-ai python3 - < scripts/e2e/p3_mock_smoke.py
+```
+
+`trace_passthrough_smoke.py` 只使用容器内已有的 `SC_INTERNAL_SERVICE_TOKEN`，不读取、不打印 `.env`；`p3_mock_smoke.py` 只绑定容器内回环地址的临时 mock，不访问真实供应商。
+
+## 4. 安全约束
 
 * 脚本中的 API Key 固定为 `sk-*-not-a-real-key`，只进入被 SSRF 前置拦截的请求体，不会出站；
 * 不读取、不打印 `.env` 中的任何真实密钥；

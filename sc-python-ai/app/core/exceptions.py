@@ -72,12 +72,17 @@ class AiEngineError(Exception):
         message: str,
         *,
         http_status: int | None = None,
+        retryable: bool | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
         #: 脱敏后的用户可读消息；调用方必须保证不含密钥/连接串/内部地址。
         self.message = message
         self.http_status = ERROR_CODE_HTTP_STATUS[error_code] if http_status is None else http_status
+        if retryable is not None:
+            # 同一错误码在不同上游状态下的可重试性可能不同（如 500/501/505 不重试），
+            # 用实例属性覆盖类默认值，避免另造错误码。
+            self.retryable = retryable
 
     def as_response(self, *, trace_id: str | None = None) -> InternalResponse[None]:
         return InternalResponse.failure(self.error_code.value, self.message, trace_id=trace_id)
@@ -152,10 +157,16 @@ class UpstreamModelRateLimitedError(RetryableAiError):
 
 
 class UpstreamModelError(RetryableAiError):
-    """上游模型服务异常（5xx 或响应不兼容）。"""
+    """上游模型服务异常（5xx 或响应不兼容）。
 
-    def __init__(self, message: str = "上游模型服务暂时异常，请稍后重试。") -> None:
-        super().__init__(AiErrorCode.UPSTREAM_MODEL_ERROR, message)
+    `500/501/505` 等不在 `NFR-REL-01` 允许重试的状态集合内，构造时传
+    ``retryable=False``，错误码与脱敏文案保持不变。
+    """
+
+    def __init__(
+        self, message: str = "上游模型服务暂时异常，请稍后重试。", *, retryable: bool = True
+    ) -> None:
+        super().__init__(AiErrorCode.UPSTREAM_MODEL_ERROR, message, retryable=retryable)
 
 
 class UpstreamTimeoutError(NonRetryableAiError):

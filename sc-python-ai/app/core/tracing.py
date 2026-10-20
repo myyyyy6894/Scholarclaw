@@ -29,7 +29,7 @@ TRACE_ID_STATE_KEY = "sc_trace_id"
 HTTP_TRACE_PREFIX = "tr_"
 CRON_TRACE_PREFIX = "tr_cron_"
 
-_ACCEPTABLE_INBOUND_TRACE_ID = re.compile(r"^tr_[0-9a-f]{12}$")
+_ACCEPTABLE_INBOUND_TRACE_ID = re.compile(r"^tr_(?:cron_)?[0-9a-f]{12}$")
 
 _trace_id_var: ContextVar[str | None] = ContextVar("sc_trace_id", default=None)
 _user_id_var: ContextVar[str | None] = ContextVar("sc_user_id", default=None)
@@ -46,7 +46,11 @@ def generate_cron_trace_id() -> str:
 
 
 def is_acceptable_inbound_trace_id(value: str | None) -> bool:
-    """只接受 `04` §2.7.1 规定的格式，避免脏值污染日志与调用链。"""
+    """只接受 `04` §2.7.1 规定的格式，避免脏值污染日志与调用链。
+
+    Java 在无请求上下文（定时任务/后台调用）时会发送 `tr_cron_[12位hex]`；
+    内部调用必须原样接受并回显，不能重新生成，否则两侧日志无法串联。
+    """
     return bool(value) and bool(_ACCEPTABLE_INBOUND_TRACE_ID.match(value))
 
 

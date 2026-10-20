@@ -124,8 +124,9 @@ class SsrfSafeModelGateway:
         policy = retry if retry is not None else RetryPolicy.no_retry()
         base_url = endpoint.base_url.rstrip("/")
         url = f"{base_url}/{path.lstrip('/')}"
-        # 每次调用前都校验：调用方可能在不同请求间切换 Base URL；重试复用同一 URL，不重复解析
-        ssrf_guard.validate_outbound_url(
+        # 每次调用前都校验：调用方可能在不同请求间切换 Base URL；重试复用同一 URL，不重复解析。
+        # 使用异步 DNS 解析，避免同步 getaddrinfo 阻塞事件循环（也保证 BOTH 总预算可被 wait_for 取消）。
+        await ssrf_guard.validate_outbound_url_async(
             base_url,
             allow_local=self._settings.allow_local_model_base_url,
             allowed_origins=self._settings.local_model_allowed_origins,
@@ -155,7 +156,11 @@ class SsrfSafeModelGateway:
                         raise BaseUrlRejectedError()
                     if status >= 400:
                         failure = transport_module.classify_upstream_failure(status)
-                        if failure.retryable and attempt <= len(policy.delays):
+                        # 只有 429/502/503/504 可重试；500/501/505 等其余 5xx 只请求一次。
+                        if (
+                            status in transport_module.RETRYABLE_UPSTREAM_STATUS
+                            and attempt <= len(policy.delays)
+                        ):
                             await sleep(policy.delays[attempt - 1])
                             continue
                         raise failure

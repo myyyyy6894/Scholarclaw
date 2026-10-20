@@ -5,7 +5,9 @@ import com.scholarclaw.common.exception.ErrorCode;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URLDecoder;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
@@ -54,6 +56,9 @@ public class BaseUrlSecurityValidator {
             "metadata.google.internal", "metadata.tencentyun.com");
     private static final Pattern IPV4 = Pattern.compile("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$");
 
+    /** 百分比编码的最大解码轮数：覆盖 `%2e%2e`、`%252e%252e` 等多层编码。 */
+    private static final int ENCODED_TRAVERSAL_DECODE_ROUNDS = 3;
+
     private final boolean allowLocalModelBaseUrl;
     private final Set<String> allowedOrigins;
 
@@ -74,9 +79,7 @@ public class BaseUrlSecurityValidator {
         if (candidate.isEmpty() || candidate.length() > 512) {
             throw reject("地址为空或过长");
         }
-        if (candidate.contains("\\") || candidate.contains("..")) {
-            throw reject("含反斜杠或路径穿越片段");
-        }
+        rejectUnsafeCharacters(candidate);
 
         URI uri;
         try {
@@ -195,6 +198,53 @@ public class BaseUrlSecurityValidator {
                 || (a == 172 && b >= 16 && b <= 31)
                 || (a == 192 && b == 168)
                 || (a == 100 && b >= 64 && b <= 127);
+    }
+
+    /**
+     * 拒绝控制字符与编码后的路径穿越（`%2e%2e`、`%5c`、多层编码等）。
+     *
+     * <p>百分号编码可能绕过简单的字符串检查：`https://host/%2e%2e/admin` 在 URL 解析后
+     * 等价于 `../admin`。这里先检查原文的 C0/C1/DEL 控制字符，再逐层解码并检查 `..` 与反斜杠。
+     * 合法点号（如 `api.example.com`、`v1.0`）不会被误拦，因为只拒绝连续两个点。
+     */
+    static void rejectUnsafeCharacters(String candidate) {
+        if (hasControlCharacter(candidate)) {
+            throw reject("含控制字符");
+        }
+        String decoded = candidate;
+        for (int round = 0; round < ENCODED_TRAVERSAL_DECODE_ROUNDS; round++) {
+            if (containsTraversal(decoded)) {
+                throw reject("含反斜杠、路径穿越或控制字符");
+            }
+            String next;
+            try {
+                next = URLDecoder.decode(decoded, StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException e) {
+                throw reject("含非法百分号编码");
+            }
+            if (next.equals(decoded)) {
+                return;
+            }
+            decoded = next;
+        }
+        if (containsTraversal(decoded)) {
+            throw reject("含反斜杠、路径穿越或控制字符");
+        }
+    }
+
+    private static boolean containsTraversal(String value) {
+        return value.indexOf('\\') >= 0 || value.contains("..") || hasControlCharacter(value);
+    }
+
+    /** C0（`0x00-0x1F`）、DEL（`0x7F`）与 C1（`0x80-0x9F`）控制字符。 */
+    private static boolean hasControlCharacter(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (ch < 0x20 || (ch >= 0x7F && ch <= 0x9F)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static BusinessException reject(String reason) {

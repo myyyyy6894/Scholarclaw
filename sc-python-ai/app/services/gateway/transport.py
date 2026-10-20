@@ -73,13 +73,17 @@ def build_async_client(
 
 
 def classify_upstream_failure(status_code: int) -> AiEngineError:
-    """把上游 HTTP 失败映射为确定性异常类型（`04` 第 7 章错误码）。"""
+    """把上游 HTTP 失败映射为确定性异常类型（`04` 第 7 章错误码）。
+
+    **只有** :data:`RETRYABLE_UPSTREAM_STATUS` 中的状态标记为可重试；
+    `500/501/505` 等其余 5xx 仍返回 `UPSTREAM_MODEL_ERROR`，但 ``retryable=False``。
+    """
     if status_code in (401, 403, 404):
         return UpstreamModelAuthError()
     if status_code == 429:
         return UpstreamModelRateLimitedError()
     if 500 <= status_code <= 599:
-        return UpstreamModelError()
+        return UpstreamModelError(retryable=status_code in RETRYABLE_UPSTREAM_STATUS)
     return NonRetryableAiError(AiErrorCode.UPSTREAM_MODEL_ERROR, UNEXPECTED_UPSTREAM_MESSAGE)
 
 
@@ -118,7 +122,9 @@ async def request_with_retry(
             return response
 
         failure = classify_upstream_failure(response.status_code)
-        if failure.retryable and attempt < len(BACKOFF_SECONDS):
+        # 重试判定统一使用 RETRYABLE_UPSTREAM_STATUS（429/502/503/504），
+        # 不依赖异常类型自带的 retryable 标记，避免 500/501/505 被误重试。
+        if response.status_code in RETRYABLE_UPSTREAM_STATUS and attempt < len(BACKOFF_SECONDS):
             await sleep(BACKOFF_SECONDS[attempt])
             attempt += 1
             continue

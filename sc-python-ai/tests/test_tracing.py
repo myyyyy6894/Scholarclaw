@@ -23,9 +23,10 @@ def test_generate_cron_trace_id_uses_cron_prefix() -> None:
 
 def test_inbound_trace_id_acceptance() -> None:
     assert tracing.is_acceptable_inbound_trace_id("tr_0123456789ab") is True
+    assert tracing.is_acceptable_inbound_trace_id("tr_cron_0123456789ab") is True
     assert tracing.is_acceptable_inbound_trace_id("tr_ZZZZZZZZZZZZ") is False
     assert tracing.is_acceptable_inbound_trace_id("tr_0123456789") is False
-    assert tracing.is_acceptable_inbound_trace_id("tr_cron_0123456789ab") is False
+    assert tracing.is_acceptable_inbound_trace_id("tr_cron_0123456789") is False
     assert tracing.is_acceptable_inbound_trace_id(None) is False
     assert tracing.is_acceptable_inbound_trace_id("") is False
 
@@ -99,6 +100,24 @@ async def test_middleware_propagates_well_formed_inbound_trace_id() -> None:
     await middleware(scope, _empty_receive, _collector([]))
 
     assert seen["trace_id"] == "tr_0123456789ab"
+
+
+async def test_middleware_preserves_cron_trace_id_from_java() -> None:
+    """Java 无请求上下文时发送 `tr_cron_*`；Python 必须原样接受并回显，不能重新生成。"""
+    seen: dict[str, str | None] = {}
+
+    async def app(scope, receive, send):  # noqa: ANN001 - ASGI 协议
+        seen["trace_id"] = tracing.current_trace_id()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    messages: list[dict] = []
+    middleware = TraceIdMiddleware(app)
+    scope = _http_scope([(b"x-trace-id", b"tr_cron_0123456789ab")])
+    await middleware(scope, _empty_receive, _collector(messages))
+
+    assert seen["trace_id"] == "tr_cron_0123456789ab"
+    assert dict(messages[0]["headers"])[b"x-trace-id"].decode() == "tr_cron_0123456789ab"
 
 
 async def test_middleware_regenerates_malformed_inbound_trace_id() -> None:

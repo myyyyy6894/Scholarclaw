@@ -89,6 +89,77 @@ async def test_server_error_exhausts_retries_and_raises_upstream_error() -> None
     assert "upstream exploded" not in str(exc_info.value), "不得把上游响应体原文当异常消息"
 
 
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+async def test_documented_transient_statuses_are_retried_at_most_twice(status: int) -> None:
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(status, text="upstream transient")
+
+    sleep = _SleepRecorder()
+    async with _client(handler) as client:
+        expected = (
+            UpstreamModelRateLimitedError if status == 429 else UpstreamModelError
+        )
+        with pytest.raises(expected):
+            await transport.request_with_retry(
+                client, "POST", "https://api.example.com/v1/chat", sleep=sleep
+            )
+
+    assert len(attempts) == 3, f"{status} 应为首试 + 最多 2 次重试"
+    assert sleep.delays == [1.0, 3.0]
+
+
+@pytest.mark.parametrize("status", [500, 501, 505, 507, 599])
+async def test_other_5xx_are_requested_only_once(status: int) -> None:
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(status, text="upstream exploded")
+
+    sleep = _SleepRecorder()
+    async with _client(handler) as client:
+        with pytest.raises(UpstreamModelError) as exc_info:
+            await transport.request_with_retry(
+                client, "POST", "https://api.example.com/v1/chat", sleep=sleep
+            )
+
+    assert attempts == [1], f"{status} 不在 NFR-REL-01 的可重试集合内"
+    assert sleep.delays == []
+    assert exc_info.value.error_code is AiErrorCode.UPSTREAM_MODEL_ERROR
+    assert exc_info.value.retryable is False
+    assert "upstream exploded" not in str(exc_info.value)
+
+
+def test_retryable_flag_matches_retryable_status_set() -> None:
+    assert transport.classify_upstream_failure(502).retryable is True
+    assert transport.classify_upstream_failure(503).retryable is True
+    assert transport.classify_upstream_failure(504).retryable is True
+    assert transport.classify_upstream_failure(429).retryable is True
+    assert transport.classify_upstream_failure(500).retryable is False
+    assert transport.classify_upstream_failure(501).retryable is False
+    assert transport.classify_upstream_failure(505).retryable is False
+
+
+async def test_connect_timeout_maps_to_upstream_timeout_without_retry() -> None:
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        raise httpx.ConnectTimeout("connect timed out", request=request)
+
+    async with _client(handler) as client:
+        with pytest.raises(UpstreamTimeoutError) as exc_info:
+            await transport.request_with_retry(
+                client, "POST", "https://api.example.com/v1/chat", sleep=_SleepRecorder()
+            )
+
+    assert attempts == [1]
+    assert exc_info.value.error_code is AiErrorCode.UPSTREAM_TIMEOUT
+
+
 async def test_rate_limited_after_retries_keeps_specific_error_code() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, json={})

@@ -70,6 +70,25 @@ def test_success_shape_matches_internal_contract(
     assert response.headers["X-Trace-Id"] == payload["trace_id"]
 
 
+def test_cron_trace_id_is_echoed_in_header_and_body(
+    authorized_remote_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Java 无请求上下文时发送 `tr_cron_*`，Python 必须原样回显到响应头与响应体。"""
+    async def fake_probe(*_args, **_kwargs) -> ProbeOutcome:
+        return ProbeOutcome(chat_reachable=True, embedding_reachable=True,
+                            actual_dim=1024, latency_ms=410)
+
+    monkeypatch.setattr(endpoints_probe, "probe_models", fake_probe)
+    trace_id = "tr_cron_0123456789ab"
+
+    response = authorized_remote_client.post(
+        PROBE_PATH, json=_body(), headers={"X-Trace-Id": trace_id})
+
+    assert response.status_code == 200
+    assert response.headers["X-Trace-Id"] == trace_id
+    assert response.json()["trace_id"] == trace_id
+
+
 @pytest.mark.parametrize("body", [
     {"user_id": "10001", "probe_type": "INVALID"},
     {"user_id": "not-a-number", "probe_type": "CHAT", "chat_config": _endpoint_config("x")},
@@ -151,6 +170,29 @@ def test_schema_rejects_deepseek_for_both_embedding_config() -> None:
             chat_config=_config("DEEPSEEK"),
             embedding_config=_config("DEEPSEEK"),
         )
+
+
+def test_schema_rejects_single_invalid_side_in_both() -> None:
+    """BOTH 的两侧分别校验：对话侧合法不代表 Embedding 侧可以带 DEEPSEEK。"""
+    with pytest.raises(ValidationError):
+        ModelProbeRequest(
+            user_id="10001", probe_type="BOTH",
+            chat_config=_config("OPENAI_COMPATIBLE"),
+            embedding_config=_config("DEEPSEEK"),
+        )
+
+
+def test_endpoint_rejects_both_with_single_invalid_side(
+    authorized_remote_client: TestClient,
+) -> None:
+    body = _body()
+    body["chat_config"] = _config("OPENAI_COMPATIBLE")
+    body["embedding_config"] = _config("DEEPSEEK")
+
+    response = authorized_remote_client.post(PROBE_PATH, json=body)
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
 
 
 def test_schema_allows_deepseek_for_chat_probe() -> None:

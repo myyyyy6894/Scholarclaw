@@ -49,6 +49,16 @@ class BaseUrlSecurityValidatorTest {
             "https://user:pass@api.deepseek.com/v1",
             "https://api.deepseek.com/v1/..%2f..%2fadmin",
             "https://api.deepseek.com\\@169.254.169.254/",
+            // 控制字符（C0 / DEL / C1）与编码后的路径穿越
+            "https://api.deepseek.com/v1/\u0000admin",
+            "https://api.deepseek.com/v1/\u001fadmin",
+            "https://api.deepseek.com/v1/\u007fadmin",
+            "https://api.deepseek.com/v1/\u0085admin",
+            "https://api.deepseek.com/v1/%2e%2e/admin",
+            "https://api.deepseek.com/v1/%2E%2E/admin",
+            "https://api.deepseek.com/v1/%252e%252e/admin",
+            "https://api.deepseek.com/v1/%5cadmin",
+            "https://api.deepseek.com/v1/%00admin",
             // 内网端口
             "https://example.com:3306/",
             "https://example.com:6379/",
@@ -124,6 +134,15 @@ class BaseUrlSecurityValidatorTest {
                 .doesNotThrowAnyException();
         assertThatCode(() -> POISONED_WHITELIST.validate("http://[::1]:11434"))
                 .as("回环 IPv6 不是元数据硬拒绝项，白名单可显式放行")
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("合法点号不被路径穿越规则误拦")
+    void acceptsLegalDots() {
+        assertThatCode(() -> STRICT.validate("https://api.deepseek.com/v1.0/models"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> STRICT.validate("https://api.deepseek.com/a.b/c"))
                 .doesNotThrowAnyException();
     }
 

@@ -157,6 +157,58 @@ def test_rejection_message_never_echoes_the_target() -> None:
     assert "169.254" not in str(excinfo.value)
 
 
+@pytest.mark.parametrize("url", [
+    "https://api.example.com/v1/\x00admin",
+    "https://api.example.com/v1/\x1fadmin",
+    "https://api.example.com/v1/\x7fadmin",
+    "https://api.example.com/v1/\x85admin",       # C1 控制字符
+    "https://api.example.com/v1/%2e%2e/admin",
+    "https://api.example.com/v1/%2E%2E/admin",
+    "https://api.example.com/v1/%252e%252e/admin",  # 双层编码
+    "https://api.example.com/v1/%5cadmin",
+    "https://api.example.com/v1/%00admin",
+])
+def test_control_characters_and_encoded_traversal_are_rejected(url: str) -> None:
+    """C0/C1/DEL 控制字符与编码后的路径穿越必须统一返回字典错误。"""
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(url, allow_local=False, allowed_origins=())
+
+
+def test_legal_dots_are_not_rejected() -> None:
+    """合法点号（单点）不能被路径穿越规则误拦。"""
+    validate_outbound_url("https://api.example.com/v1.0/models", allow_local=False, allowed_origins=())
+    validate_outbound_url("https://api.example.com/a.b/c", allow_local=False, allowed_origins=())
+
+
+@pytest.mark.asyncio
+async def test_async_validation_applies_the_same_rules() -> None:
+    await ssrf_guard.validate_outbound_url_async(
+        "https://api.example.com/v1", allow_local=False, allowed_origins=())
+    await ssrf_guard.validate_outbound_url_async(
+        "https://api.example.com/v1.0/models", allow_local=False, allowed_origins=())
+
+    with pytest.raises(BaseUrlRejectedError):
+        await ssrf_guard.validate_outbound_url_async(
+            "https://internal.example.com/v1", allow_local=False, allowed_origins=())
+    with pytest.raises(BaseUrlRejectedError):
+        await ssrf_guard.validate_outbound_url_async(
+            "https://api.example.com/v1/%2e%2e/admin", allow_local=False, allowed_origins=())
+
+
+@pytest.mark.asyncio
+async def test_async_dns_timeout_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    def slow_getaddrinfo(*_args, **_kwargs):  # noqa: ANN001, ANN202
+        time.sleep(0.3)
+        raise socket.gaierror("slow")
+
+    monkeypatch.setattr(ssrf_guard, "DNS_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(socket, "getaddrinfo", slow_getaddrinfo)
+
+    with pytest.raises(BaseUrlRejectedError):
+        await ssrf_guard.validate_outbound_url_async(
+            "https://api.example.com/v1", allow_local=False, allowed_origins=())
+
+
 def test_local_origin_requires_switch_and_exact_whitelist() -> None:
     # 开关关闭：即使命中白名单也不放行
     with pytest.raises(BaseUrlRejectedError):

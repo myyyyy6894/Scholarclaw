@@ -22,11 +22,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from app.core.exceptions import BaseUrlRejectedError
 
@@ -58,6 +59,10 @@ DEFAULT_PROBE_READ_TIMEOUT_SECONDS = 5.0
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
+#: 百分比编码的最大解码轮数：覆盖 `%2e%2e`、`%252e%252e` 等多层编码。
+ENCODED_TRAVERSAL_DECODE_ROUNDS = 3
+
+
 def origin_of(url: str) -> str:
     """返回 `scheme://host[:port]`；任何解析异常都返回空串，绝不向上抛。"""
     try:
@@ -82,12 +87,40 @@ def validate_outbound_url(
     allow_local: bool,
     allowed_origins: tuple[str, ...],
 ) -> None:
-    """校验出站地址；不通过即抛 :class:`BaseUrlRejectedError`（绝不抛裸 ValueError）。"""
+    """同步校验出站地址；不通过即抛 :class:`BaseUrlRejectedError`（绝不抛裸 ValueError）。"""
+    host, whitelisted = _validate_structure(
+        base_url, allow_local=allow_local, allowed_origins=allowed_origins
+    )
+    _check_resolved(_resolve(host), whitelisted)
+
+
+async def validate_outbound_url_async(
+    base_url: str,
+    *,
+    allow_local: bool,
+    allowed_origins: tuple[str, ...],
+) -> None:
+    """异步校验出站地址：DNS 解析走事件循环，不阻塞协程（网关的出站入口使用本函数）。"""
+    host, whitelisted = _validate_structure(
+        base_url, allow_local=allow_local, allowed_origins=allowed_origins
+    )
+    _check_resolved(await _resolve_async(host), whitelisted)
+
+
+def _validate_structure(
+    base_url: str,
+    *,
+    allow_local: bool,
+    allowed_origins: tuple[str, ...],
+) -> tuple[str, bool]:
+    """完成协议/主机/端口/硬拒绝/白名单的字面量校验，返回 `(host, whitelisted)`。
+
+    DNS 解析与 IP 判定由调用方在同步或异步路径中完成，避免同一套规则写两遍。
+    """
     candidate = (base_url or "").strip()
     if not candidate:
         raise BaseUrlRejectedError()
-    if "\\" in candidate or ".." in candidate:
-        raise BaseUrlRejectedError()
+    _reject_unsafe_characters(candidate)
 
     try:
         parts = urlsplit(candidate)
@@ -120,11 +153,37 @@ def validate_outbound_url(
         if port not in (None, *PUBLIC_ALLOWED_PORTS):
             raise BaseUrlRejectedError()
 
-    for address in _resolve(host):
-        if _is_hard_denied_ip(address):
+    return host, whitelisted
+
+
+def _reject_unsafe_characters(candidate: str) -> None:
+    """拒绝控制字符与编码后的路径穿越（`%2e%2e`、`%5c`、多层编码等）。
+
+    百分号编码可能绕过简单的字符串检查：`https://host/%2e%2e/admin` 在 URL 解析后
+    等价于 `../admin`。这里先检查原文的控制字符，再逐层解码并检查 `..` 与反斜杠。
+    合法点号（如 `api.example.com`、`v1.0`）不会被误拦，因为只拒绝连续两个点。
+    """
+    if _has_control_character(candidate):
+        raise BaseUrlRejectedError()
+
+    decoded = candidate
+    for _ in range(ENCODED_TRAVERSAL_DECODE_ROUNDS):
+        if "\\" in decoded or ".." in decoded or _has_control_character(decoded):
             raise BaseUrlRejectedError()
-        if not whitelisted and _is_internal(address):
-            raise BaseUrlRejectedError()
+        try:
+            next_value = unquote(decoded, errors="strict")
+        except (UnicodeError, ValueError):
+            raise BaseUrlRejectedError() from None
+        if next_value == decoded:
+            return
+        decoded = next_value
+    if "\\" in decoded or ".." in decoded or _has_control_character(decoded):
+        raise BaseUrlRejectedError()
+
+
+def _has_control_character(value: str) -> bool:
+    """C0（`0x00-0x1F`）、DEL（`0x7F`）与 C1（`0x80-0x9F`）控制字符。"""
+    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value)
 
 
 def _is_metadata_literal(host: str) -> bool:
@@ -143,8 +202,19 @@ def _is_hard_denied_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -
     return str(address) in METADATA_IPS or address.is_link_local
 
 
+def _check_resolved(
+    addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...],
+    whitelisted: bool,
+) -> None:
+    for address in addresses:
+        if _is_hard_denied_ip(address):
+            raise BaseUrlRejectedError()
+        if not whitelisted and _is_internal(address):
+            raise BaseUrlRejectedError()
+
+
 def _resolve(host: str) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
-    """解析主机名到全部 IP（带超时）。
+    """同步解析主机名到全部 IP（带超时；受控线程，供非异步调用方使用）。
 
     解析失败或超时按拒绝处理（不把"解析不了"当成"安全"）。
     **注意：** 这里解析出的 IP 仅用于校验；httpx 连接时会再次解析，DNS rebinding
@@ -161,7 +231,27 @@ def _resolve(host: str) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, 
         raise BaseUrlRejectedError() from None
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
+    return _addresses_from(infos)
 
+
+async def _resolve_async(
+    host: str,
+) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
+    """异步解析主机名（`loop.getaddrinfo`），DNS 等待不阻塞事件循环。
+
+    超时、解析失败与非法地址一律按拒绝处理（`E-SYS-02`）。
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await asyncio.wait_for(loop.getaddrinfo(host, None), timeout=DNS_TIMEOUT_SECONDS)
+    except (asyncio.TimeoutError, socket.gaierror, UnicodeError, ValueError):
+        raise BaseUrlRejectedError() from None
+    return _addresses_from(infos)
+
+
+def _addresses_from(
+    infos: list[tuple],
+) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
     addresses = []
     for info in infos:
         try:

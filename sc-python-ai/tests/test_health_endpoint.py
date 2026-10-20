@@ -99,7 +99,7 @@ def test_inbound_trace_id_is_propagated_only_when_well_formed(
     response = loopback_client.get(HEALTH_PATH, headers={"X-Trace-Id": inbound})
     trace_id = response.json()["trace_id"]
 
-    if inbound == "tr_0123456789ab":
+    if inbound in {"tr_0123456789ab", "tr_cron_0123456789ab"}:
         assert trace_id == inbound
     else:
         assert trace_id != inbound

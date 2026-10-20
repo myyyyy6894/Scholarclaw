@@ -67,9 +67,24 @@ class TraceIdFilterTest {
     }
 
     @Test
+    @DisplayName("无请求上下文的 tr_cron_* 入站追踪号同样原样透传，不重新生成")
+    void propagatesCronTraceId() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", EXTERNAL_PATH);
+        request.addHeader(TraceContext.HEADER_NAME, "tr_cron_0123456789ab");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<String> traceIdInChain = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(traceIdInChain));
+
+        assertThat(response.getHeader(TraceContext.HEADER_NAME)).isEqualTo("tr_cron_0123456789ab");
+        assertThat(traceIdInChain.get()).isEqualTo("tr_cron_0123456789ab");
+    }
+
+    @Test
     @DisplayName("非法入站追踪号被丢弃并重新生成，避免脏值污染日志与调用链")
     void regeneratesWhenInboundTraceIdIsMalformed() throws Exception {
-        for (String malformed : new String[] {"abc", "tr_ZZZZZZZZZZZZ", "tr_0123456789", ""}) {
+        for (String malformed : new String[] {
+                "abc", "tr_ZZZZZZZZZZZZ", "tr_0123456789", "tr_cron_0123456789", ""}) {
             MockHttpServletRequest request = new MockHttpServletRequest("GET", EXTERNAL_PATH);
             request.addHeader(TraceContext.HEADER_NAME, malformed);
             MockHttpServletResponse response = new MockHttpServletResponse();

@@ -112,6 +112,11 @@ class Smoke:
             "https://[fd00:ec2::254]/",
             "https://sc-mysql:3306/v1",
             "https://127.0.0.1:3306/v1",
+            "https://api.deepseek.com/v1/%2e%2e/admin",
+            "https://api.deepseek.com/v1/%252e%252e/admin",
+            "https://api.deepseek.com/v1/%5cadmin",
+            "https://api.deepseek.com/v1/\u0000admin",
+            "https://api.deepseek.com/v1/\u007fadmin",
         ):
             self.check(f"SSRF 拦截 {target}", self.request(
                 "POST", "/user/model-config/probe", token=token, body={

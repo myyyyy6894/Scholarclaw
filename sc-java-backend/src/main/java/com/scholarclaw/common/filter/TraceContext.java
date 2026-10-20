@@ -36,8 +36,9 @@ public final class TraceContext {
     private static final String HTTP_PREFIX = "tr_";
     private static final String CRON_PREFIX = "tr_cron_";
 
-    /** {@code 04} §2.7.1 规定的入站追踪号格式。 */
-    private static final Pattern ACCEPTABLE_INBOUND_TRACE_ID = Pattern.compile("^tr_[0-9a-f]{12}$");
+    /** {@code 04} §2.7.1 规定的入站追踪号格式（含无请求上下文的 {@code tr_cron_*}）。 */
+    private static final Pattern ACCEPTABLE_INBOUND_TRACE_ID =
+            Pattern.compile("^tr_(?:cron_)?[0-9a-f]{12}$");
 
     private static final char[] HEX = "0123456789abcdef".toCharArray();
     private static final int RANDOM_BYTE_LENGTH = 6;
@@ -55,7 +56,12 @@ public final class TraceContext {
         return CRON_PREFIX + randomHex12();
     }
 
-    /** 客户端传入的追踪号是否可接受：只接受文档规定的格式，避免脏值污染日志与调用链。 */
+    /**
+     * 客户端传入的追踪号是否可接受：只接受文档规定的格式，避免脏值污染日志与调用链。
+     *
+     * <p>同时接受 {@code tr_[12hex]} 与 {@code tr_cron_[12hex]}：后者用于无 HTTP 请求上下文的
+     * 后台/定时调用；内部调用方必须原样回显，不得重新生成。</p>
+     */
     public static boolean isAcceptableInboundTraceId(String value) {
         return value != null && ACCEPTABLE_INBOUND_TRACE_ID.matcher(value).matches();
     }

@@ -80,8 +80,9 @@ function assertFilled(value: string, label: string): void {
  * - 未输入但服务端已有 Key → `use_saved_key=true`（后端解密，前端不接触明文）；
  * - 两者都没有 → 不带 Key，交给后端按"非免密供应商必须有 Key"返回可读错误。
  *
- * 勾选"复用对话 Key"时，Embedding 探测使用**本次输入的对话 Key**——
- * `API-USER-002` 的 `use_saved_key` 只查 Embedding 列，查不到对话列。
+ * 勾选"复用对话 Key"时，Embedding 探测必须使用**本次输入的对话 Key**：
+ * `API-USER-002` 的 `use_saved_key` 只查 Embedding 列，查不到对话列；
+ * 静默回退到旧的 Embedding Key 会用错 Key，因此这里直接拒绝并提示用户。
  */
 export function toProbeRequest(form: ModelConfigFormState, probeType: SingleProbeType): ModelProbeRequest {
   const isChat = probeType === 'CHAT'
@@ -92,10 +93,14 @@ export function toProbeRequest(form: ModelConfigFormState, probeType: SingleProb
 
   if (!isChat && form.reuseChatApiKey) {
     const typedChatKey = normalizeSecret(form.chatApiKey)
-    if (typedChatKey !== undefined) {
-      apiKey = typedChatKey
-      useSavedKey = false
+    if (typedChatKey === undefined) {
+      throw new ModelFormValidationError(
+        '勾选“复用对话模型的 API Key”时，请先在上方输入一次对话 Key 再单独测试 Embedding；'
+          + '也可以直接保存，保存时会用已保存的对话 Key 一并探测。',
+      )
     }
+    apiKey = typedChatKey
+    useSavedKey = false
   }
 
   const request: ModelProbeRequest = {

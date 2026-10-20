@@ -83,6 +83,18 @@ class UserConfigVOTest {
     }
 
     @Test
+    @DisplayName("旧密文无法解密时返回占位掩码，配置页仍可打开并重新保存")
+    void corruptSavedCipherDegradesToPlaceholderMask() {
+        UserConfigEntity entity = entity();
+        entity.setChatApiKeyCipher("v1:corrupted:corrupted");
+
+        UserConfigVO vo = UserConfigController.toVO(entity, CRYPTO);
+
+        assertThat(vo.hasChatApiKey()).isTrue();
+        assertThat(vo.chatApiKeyMasked()).isEqualTo("****");
+    }
+
+    @Test
     @DisplayName("existing_course_count 只在保存响应中出现，GET 视图整字段省略")
     void existingCourseCountIsOnlyPresentOnSaveResponse() throws Exception {
         String getJson = mapper().writeValueAsString(UserConfigController.toVO(entity(), CRYPTO));

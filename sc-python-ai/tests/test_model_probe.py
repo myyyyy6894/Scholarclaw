@@ -20,6 +20,7 @@ from app.core.exceptions import (
     NonRetryableAiError,
     UpstreamModelAuthError,
 )
+from app.services.gateway import ssrf_guard
 from app.services.gateway.model_probe import ModelEndpointConfig, probe_models
 
 DIM = 8
@@ -28,6 +29,9 @@ DIM = 8
 class _StubHandler(BaseHTTPRequestHandler):
     status_code = 200
     body: dict | None = None
+    raw_body: bytes | None = None
+    content_length_override: int | None = None
+    omit_content_length = False
     received_headers: list[dict[str, str]] = []
     received_paths: list[str] = []
 
@@ -41,12 +45,14 @@ class _StubHandler(BaseHTTPRequestHandler):
             payload = ({"choices": [{"message": {"role": "assistant", "content": "p"}}]}
                        if self.path.endswith("/chat/completions")
                        else {"data": [{"embedding": [0.01] * DIM}]})
-        raw = json.dumps(payload).encode()
+        raw = self.raw_body if self.raw_body is not None else json.dumps(payload).encode()
         self.send_response(self.status_code)
         if 300 <= self.status_code < 400:
             self.send_header("Location", "https://evil.example.com/")
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(raw)))
+        if not self.omit_content_length:
+            declared = self.content_length_override
+            self.send_header("Content-Length", str(declared if declared is not None else len(raw)))
         self.end_headers()
         self.wfile.write(raw)
 
@@ -61,6 +67,9 @@ def stub_model_server() -> Iterator[str]:
     thread.start()
     _StubHandler.status_code = 200
     _StubHandler.body = None
+    _StubHandler.raw_body = None
+    _StubHandler.content_length_override = None
+    _StubHandler.omit_content_length = False
     _StubHandler.received_headers = []
     _StubHandler.received_paths = []
     try:
@@ -137,6 +146,30 @@ async def test_redirect_is_rejected_as_ssrf(stub_model_server: str, status: int)
 
     assert excinfo.value.error_code == AiErrorCode.E_SYS_02
     assert _StubHandler.received_paths == ["/v1/chat/completions"]
+
+
+@pytest.mark.asyncio
+async def test_oversized_content_length_is_rejected_before_reading(stub_model_server: str) -> None:
+    """声明长度超过 2MB 时立即中止，不把不受信任的响应读进内存。"""
+    _StubHandler.content_length_override = ssrf_guard.MAX_RESPONSE_BYTES + 1
+    _StubHandler.raw_body = b"{}"
+
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(_settings(stub_model_server), "CHAT", _config(stub_model_server), None)
+
+    assert excinfo.value.error_code == AiErrorCode.UPSTREAM_MODEL_ERROR
+
+
+@pytest.mark.asyncio
+async def test_oversized_stream_without_content_length_is_rejected(stub_model_server: str) -> None:
+    """没有 Content-Length 的超大流也必须按累计字节数中止。"""
+    _StubHandler.omit_content_length = True
+    _StubHandler.raw_body = b"{" + b"x" * (ssrf_guard.MAX_RESPONSE_BYTES + 1) + b"}"
+
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(_settings(stub_model_server), "CHAT", _config(stub_model_server), None)
+
+    assert excinfo.value.error_code == AiErrorCode.UPSTREAM_MODEL_ERROR
 
 
 @pytest.mark.asyncio

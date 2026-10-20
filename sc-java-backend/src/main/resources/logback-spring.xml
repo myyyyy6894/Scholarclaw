@@ -16,7 +16,8 @@
         </encoder>
     </appender>
 
-    <root level="INFO">
+    <!-- SC_LOG_LEVEL 由 docker-compose 注入；缺省 INFO。配置了就必须真正生效，避免“改了日志级别没反应”。 -->
+    <root level="${SC_LOG_LEVEL:-INFO}">
         <appender-ref ref="CONSOLE"/>
     </root>
 </configuration>

@@ -108,9 +108,11 @@ Java 与 Python 容器使用**同一 uid/gid（10001）**，保证跨容器的�
 | `SC_IM_PUSH_ENABLED` / `SC_ONEBOT_ACCESS_TOKEN` | 仅 `sc-java-backend` | Python |
 
 实现方式：`docker-compose.yml` 里逐项 `environment:` 显式声明，**任何容器都不用 `env_file`**。
-实测结果：`sc-python-ai` 容器内 `env` 只有 11 个应用变量（`SC_LOG_LEVEL`、`SC_INTERNAL_SERVICE_TOKEN`、
-`SC_RABBITMQ_*`、`SC_TIMEZONE`、`SC_STORAGE_RAW_PATH`、本地模型白名单两项、`TZ`），
-不含任何主密钥或数据库凭据。
+实测结果：`sc-python-ai` 容器内 `env` 只有 **15 个应用变量**（`TZ`、`SC_TIMEZONE`、`SC_LOG_LEVEL`、
+`SC_INTERNAL_SERVICE_TOKEN`、`SC_RABBITMQ_HOST`/`PORT`/`USER`/`PASSWORD`、本地模型白名单两项、
+`SC_MODEL_CONNECT_TIMEOUT_SECONDS`、`SC_MODEL_READ_TIMEOUT_SECONDS`、`SC_STORAGE_RAW_PATH`、
+`SC_CHROMADB_BASE_URL`、`SC_JAVA_BACKEND_BASE_URL`），
+不含任何主密钥或数据库凭据。启动后可用 `python3 scripts/verify_container_env.py` 核对。
 
 ## 7. 健康检查与启动依赖链
 

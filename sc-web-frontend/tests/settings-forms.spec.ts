@@ -116,14 +116,11 @@ describe('model config form', () => {
     expect(request.use_saved_key).toBe(false)
   })
 
-  it('复用对话 Key 但未输入时，退回已保存的 Embedding Key', () => {
+  it('复用对话 Key 但未输入时，拒绝单独测试 Embedding，不回退到旧 Embedding Key', () => {
     const form = createModelForm(CONFIG)
     form.reuseChatApiKey = true
 
-    const request = toProbeRequest(form, 'EMBEDDING')
-
-    expect(request.use_saved_key).toBe(true)
-    expect('api_key' in request).toBe(false)
+    expect(() => toProbeRequest(form, 'EMBEDDING')).toThrow(ModelFormValidationError)
   })
 
   it('保存时空 Key 整个省略，避免被后端当成"改成空字符串"', () => {

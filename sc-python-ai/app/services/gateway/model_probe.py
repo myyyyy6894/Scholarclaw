@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 
@@ -109,8 +110,8 @@ async def _probe_chat(settings: Settings, client: httpx.AsyncClient, config: Mod
         "max_tokens": 1,
         "stream": False,
     }
-    response = await _post(settings, client, config, PROBE_CHAT_PATH, body)
-    payload = _json(response)
+    raw = await _post(settings, client, config, PROBE_CHAT_PATH, body)
+    payload = _json(raw)
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         raise NonRetryableAiError(
@@ -121,8 +122,8 @@ async def _probe_chat(settings: Settings, client: httpx.AsyncClient, config: Mod
 async def _probe_embedding(settings: Settings, client: httpx.AsyncClient,
                            config: ModelEndpointConfig) -> int:
     body = {"model": config.model_name, "input": EMBEDDING_PING_INPUT}
-    response = await _post(settings, client, config, PROBE_EMBEDDING_PATH, body)
-    payload = _json(response)
+    raw = await _post(settings, client, config, PROBE_EMBEDDING_PATH, body)
+    payload = _json(raw)
     vectors = payload.get("data")
     if not isinstance(vectors, list) or not vectors:
         raise NonRetryableAiError(
@@ -135,7 +136,7 @@ async def _probe_embedding(settings: Settings, client: httpx.AsyncClient,
 
 
 async def _post(settings: Settings, client: httpx.AsyncClient, config: ModelEndpointConfig,
-                path: str, body: dict) -> httpx.Response:
+                path: str, body: dict) -> bytes:
     ssrf_guard.validate_outbound_url(
         config.base_url,
         allow_local=settings.allow_local_model_base_url,
@@ -148,18 +149,41 @@ async def _post(settings: Settings, client: httpx.AsyncClient, config: ModelEndp
     logger.info("模型探测出站 url=%s provider=%s model=%s",
                 safe_url_for_log(url), config.provider, config.model_name)
     try:
-        response = await client.post(url, json=body, headers=headers)
+        # 流式读取 + 累计上限：不能把不受信任的上游响应整块读进内存（NFR-SEC-05）
+        async with client.stream("POST", url, json=body, headers=headers) as response:
+            status = response.status_code
+            if 300 <= status < 400:
+                # 重定向视为拒绝：既防 SSRF 绕行，也避免把 302 当成功
+                raise NonRetryableAiError(AiErrorCode.E_SYS_02, "上游返回重定向，已按安全策略拒绝。")
+            if status >= 400:
+                raise classify_upstream_failure(status)
+            declared = response.headers.get("content-length")
+            if declared is not None:
+                try:
+                    declared_bytes = int(declared)
+                except ValueError:
+                    raise NonRetryableAiError(
+                        AiErrorCode.UPSTREAM_MODEL_ERROR, "上游返回了非法的 Content-Length。") from None
+                if declared_bytes > ssrf_guard.MAX_RESPONSE_BYTES:
+                    raise _response_too_large()
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in response.aiter_bytes():
+                total += len(chunk)
+                if total > ssrf_guard.MAX_RESPONSE_BYTES:
+                    raise _response_too_large()
+                chunks.append(chunk)
+            return b"".join(chunks)
     except httpx.TimeoutException as exc:
         raise _timeout() from exc
     except httpx.HTTPError as exc:
         raise NonRetryableAiError(
             AiErrorCode.UPSTREAM_MODEL_ERROR, "无法连接上游模型服务，请检查 Base URL 与网络。") from exc
-    if 300 <= response.status_code < 400:
-        # 重定向视为拒绝：既防 SSRF 绕行，也避免把 302 当成功
-        raise NonRetryableAiError(AiErrorCode.E_SYS_02, "上游返回重定向，已按安全策略拒绝。")
-    if response.status_code >= 400:
-        raise classify_upstream_failure(response.status_code)
-    return response
+
+
+def _response_too_large() -> NonRetryableAiError:
+    return NonRetryableAiError(
+        AiErrorCode.UPSTREAM_MODEL_ERROR, "上游响应超过 2MB 限制，已中止读取。")
 
 
 def _timeout() -> AiEngineError:
@@ -167,9 +191,9 @@ def _timeout() -> AiEngineError:
     return UpstreamTimeoutError()
 
 
-def _json(response: httpx.Response) -> dict:
+def _json(raw: bytes) -> dict:
     try:
-        payload = response.json()
+        payload = json.loads(raw)
     except ValueError as exc:
         raise NonRetryableAiError(
             AiErrorCode.UPSTREAM_MODEL_ERROR, "上游返回的不是合法 JSON。") from exc

@@ -11,7 +11,11 @@ import type { BigIntId } from '@/api/types'
 export type ChatProvider = 'OPENAI_COMPATIBLE' | 'DEEPSEEK' | 'ZHIPU' | 'OLLAMA'
 export type EmbeddingProvider = 'OPENAI_COMPATIBLE' | 'ZHIPU' | 'OLLAMA'
 export type ModelProvider = ChatProvider | EmbeddingProvider
-export type ProbeType = 'CHAT' | 'EMBEDDING' | 'BOTH'
+/**
+ * 公共探测接口只接受单类型：`BOTH` 需要两套不同的模型配置，
+ * `API-USER-002` 的请求体表达不了；`BOTH` 仅保留在 Java → Python 内部接口中。
+ */
+export type ProbeType = 'CHAT' | 'EMBEDDING'
 export type ImPlatform = 'QQ_ONEBOT' | 'WECOM'
 export type ClearKeysTarget = 'ALL' | 'CHAT' | 'EMBEDDING'
 

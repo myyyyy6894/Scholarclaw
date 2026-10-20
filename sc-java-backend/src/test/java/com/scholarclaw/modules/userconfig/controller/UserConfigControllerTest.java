@@ -222,6 +222,51 @@ class UserConfigControllerTest {
     }
 
     @Test
+    @DisplayName("公共探测接口拒绝 BOTH：请求体只有一套模型配置，无法表达两套")
+    void bothProbeTypeIsRejectedByPublicApi() throws Exception {
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity()));
+
+        String body = mockMvc.perform(post("/api/v1/user/model-config/probe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"probe_type":"BOTH","provider":"DEEPSEEK",
+                                 "base_url":"https://api.deepseek.com/v1",
+                                 "api_key":"sk-x","model_name":"deepseek-chat"}
+                                """))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(body).contains("\"code\":\"VALIDATION_ERROR\"");
+        verify(pythonAiEngineClient, never()).probeModel(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("提供了新 Key 时不得解密旧密文：旧密文损坏也能用新配置恢复")
+    void probeWithNewKeyDoesNotTouchCorruptSavedCipher() throws Exception {
+        UserConfigEntity entity = entity();
+        entity.setChatApiKeyCipher("v1:corrupted:corrupted");
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity));
+        when(pythonAiEngineClient.probeModel(anyLong(), eq(ModelProbeType.CHAT), any(), any()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(true, false, null, 9));
+
+        String body = mockMvc.perform(post("/api/v1/user/model-config/probe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"probe_type":"CHAT","provider":"DEEPSEEK",
+                                 "base_url":"https://api.deepseek.com/v1",
+                                 "api_key":"sk-new-recovery-key","use_saved_key":false,
+                                 "model_name":"deepseek-chat"}
+                                """))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(body).contains("\"code\":\"OK\"");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ModelEndpoint> captor = ArgumentCaptor.forClass(ModelEndpoint.class);
+        verify(pythonAiEngineClient).probeModel(eq(USER_ID), eq(ModelProbeType.CHAT),
+                captor.capture(), isNull());
+        assertThat(captor.getValue().apiKey()).isEqualTo("sk-new-recovery-key");
+    }
+
+    @Test
     @DisplayName("IM 绑定必须成对：只传平台不传账号返回 400")
     void preferencesRequirePairedImBinding() throws Exception {
         String body = mockMvc.perform(put("/api/v1/user/preferences")

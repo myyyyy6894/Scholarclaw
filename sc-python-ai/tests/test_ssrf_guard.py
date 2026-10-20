@@ -6,13 +6,26 @@ DNS 用 monkeypatch 固定为真实公网 IP（8.8.8.8），测试不依赖外�
 from __future__ import annotations
 
 import socket
+import time
 
 import pytest
 
 from app.core.exceptions import BaseUrlRejectedError
+from app.services.gateway import ssrf_guard
 from app.services.gateway.ssrf_guard import origin_of, validate_outbound_url
 
 ALLOWED = ("http://127.0.0.1:11434", "http://192.168.1.50:8000")
+
+#: 被管理员误配的“毒化白名单”：内部服务名/端口与元数据地址必须仍然硬拒绝。
+POISONED = (
+    "http://sc-mysql:3306",
+    "http://127.0.0.1:3306",
+    "http://100.100.100.200",
+    "http://[fd00:ec2::254]",
+    "http://[fe80::1]",
+    "http://127.0.0.1:11434",
+    "http://[::1]:11434",
+)
 
 #: 测试内固定解析结果：公网域名 → 真实公网 IP；内网/元数据域名 → 对应危险地址。
 _DNS_TABLE = {
@@ -21,6 +34,7 @@ _DNS_TABLE = {
     "internal.example.com": "10.0.0.5",
     "metadata.example.com": "169.254.169.254",
     "localhost": "127.0.0.1",
+    "::1": "::1",
     # 非点分十进制的回环写法：libc 会解析成 127.0.0.1，校验必须基于解析结果而不是字符串
     "2130706433": "127.0.0.1",
     "0x7f000001": "127.0.0.1",
@@ -61,6 +75,9 @@ def test_public_https_custom_8443_is_allowed() -> None:
     "https://metadata.example.com/latest/meta-data",  # 解析到云元数据地址
     "https://internal.example.com/v1",           # 解析到私网
     "https://localhost/v1",                      # 解析到回环
+    "https://100.100.100.200/latest/meta-data",  # 阿里云元数据地址
+    "https://[fd00:ec2::254]/",                  # AWS IPv6 元数据地址
+    "https://[fe80::1]/",                        # IPv6 链路本地
     "https://2130706433/v1",                     # 十进制回环
     "https://0x7f000001/v1",                     # 十六进制回环
     "https://0177.0.0.1/v1",                     # 八进制回环
@@ -69,6 +86,64 @@ def test_public_https_custom_8443_is_allowed() -> None:
 def test_unsafe_urls_are_rejected(url: str) -> None:
     with pytest.raises(BaseUrlRejectedError):
         validate_outbound_url(url, allow_local=False, allowed_origins=ALLOWED)
+
+
+@pytest.mark.parametrize("url", [item for item in POISONED if item not in {
+    "http://127.0.0.1:11434", "http://[::1]:11434"}])
+def test_whitelist_never_bypasses_hard_denied_targets(url: str) -> None:
+    """白名单只豁免本地/私有地址与 http，不得放行内部服务名、内部端口或元数据地址。"""
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(url, allow_local=True, allowed_origins=POISONED)
+
+
+def test_whitelist_still_allows_legal_local_ollama_origins() -> None:
+    validate_outbound_url("http://127.0.0.1:11434/v1", allow_local=True, allowed_origins=POISONED)
+    validate_outbound_url("http://[::1]:11434/v1", allow_local=True, allowed_origins=POISONED)
+
+
+@pytest.mark.parametrize("url", [
+    "https://api.example.com:99999/v1",
+    "https://api.example.com:0x1/v1",
+    "https://[::1:bad]/v1",
+])
+def test_invalid_port_or_ipv6_maps_to_e_sys_02_not_value_error(url: str) -> None:
+    """非法端口/非法 IPv6 必须映射为 E-SYS-02，不能让内部接口返回 500。"""
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(url, allow_local=False, allowed_origins=())
+
+
+def test_origin_of_never_raises_on_invalid_port() -> None:
+    assert origin_of("https://api.example.com:99999/v1") == ""
+    assert origin_of("https://api.example.com:0x1/v1") == ""
+
+
+def test_dns_timeout_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    def slow_getaddrinfo(*_args, **_kwargs):  # noqa: ANN001, ANN202
+        time.sleep(0.3)
+        raise socket.gaierror("slow")
+
+    monkeypatch.setattr(ssrf_guard, "DNS_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(socket, "getaddrinfo", slow_getaddrinfo)
+
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url("https://api.example.com/v1", allow_local=False, allowed_origins=())
+
+
+def test_validation_resolves_dns_once_and_does_not_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """记录残余风险：校验只解析一次 DNS，实际连接时 httpx 会再次解析（不宣称已防住 rebinding）。"""
+    calls: list[str] = []
+    real_getaddrinfo = socket.getaddrinfo
+
+    def counting_getaddrinfo(host, port, *args, **kwargs):  # noqa: ANN001, ANN202
+        if host == "api.example.com":
+            calls.append(host)
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", counting_getaddrinfo)
+
+    validate_outbound_url("https://api.example.com/v1", allow_local=False, allowed_origins=())
+
+    assert calls == ["api.example.com"]
 
 
 def test_rejection_message_never_echoes_the_target() -> None:

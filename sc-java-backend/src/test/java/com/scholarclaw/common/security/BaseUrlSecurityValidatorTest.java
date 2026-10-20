@@ -22,6 +22,14 @@ class BaseUrlSecurityValidatorTest {
     private static final BaseUrlSecurityValidator STRICT = new BaseUrlSecurityValidator(false, "");
     private static final BaseUrlSecurityValidator WITH_LOCAL_WHITELIST = new BaseUrlSecurityValidator(
             true, "http://127.0.0.1:11434, http://192.168.1.20:11434");
+    /**
+     * 被管理员误配的“毒化白名单”：即使写进白名单，内部服务名/端口与元数据地址也必须硬拒绝。
+     */
+    private static final BaseUrlSecurityValidator POISONED_WHITELIST = new BaseUrlSecurityValidator(
+            true,
+            "http://sc-mysql:3306, http://127.0.0.1:3306, http://100.100.100.200, "
+                    + "http://[fd00:ec2::254], http://[fe80::1], "
+                    + "http://127.0.0.1:11434, http://[::1]:11434");
 
     @Test
     @DisplayName("公网 https 443 / 8443 放行")
@@ -51,6 +59,9 @@ class BaseUrlSecurityValidatorTest {
             "https://sc-python-ai/",
             // 云元数据 / 回环 / 内网字面量
             "https://169.254.169.254/latest/meta-data",
+            "https://100.100.100.200/latest/meta-data",
+            "https://[fd00:ec2::254]/",
+            "https://[fe80::1]/",
             "https://127.0.0.1:443/",
             "https://10.0.0.8:443/",
             "https://172.16.0.5:443/",
@@ -88,6 +99,32 @@ class BaseUrlSecurityValidatorTest {
         // 主机不同同理
         assertThatThrownBy(() -> WITH_LOCAL_WHITELIST.validate("http://127.0.0.2:11434"))
                 .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    @DisplayName("毒化白名单不能放行内部服务名、内部端口与云元数据地址（硬拒绝优先）")
+    void whitelistNeverBypassesHardDeniedTargets() {
+        for (String poisoned : new String[]{
+                "http://sc-mysql:3306",
+                "http://127.0.0.1:3306",
+                "http://100.100.100.200",
+                "http://[fd00:ec2::254]",
+                "http://[fe80::1]",
+        }) {
+            assertThatThrownBy(() -> POISONED_WHITELIST.validate(poisoned))
+                    .as("白名单中的 %s 必须仍被硬拒绝", poisoned)
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(ex -> org.assertj.core.api.Assertions
+                            .assertThat(((BusinessException) ex).getErrorCode())
+                            .isEqualTo(ErrorCode.E_SYS_02));
+        }
+
+        // 同一份白名单里的合法 Ollama 地址仍然放行
+        assertThatCode(() -> POISONED_WHITELIST.validate("http://127.0.0.1:11434"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> POISONED_WHITELIST.validate("http://[::1]:11434"))
+                .as("回环 IPv6 不是元数据硬拒绝项，白名单可显式放行")
+                .doesNotThrowAnyException();
     }
 
     @Test

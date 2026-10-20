@@ -25,6 +25,8 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,6 +49,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/user")
 public class UserConfigController {
+
+    private static final Logger log = LoggerFactory.getLogger(UserConfigController.class);
 
     /**
      * 已有课程数量（`API-USER-003` 响应附加字段）。
@@ -90,14 +94,23 @@ public class UserConfigController {
         Long userId = SecurityContextUtils.requireCurrentUserId();
         UserConfigEntity current = currentEntity();
         ModelProbeType probeType = ModelProbeType.valueOf(request.probeType());
+        if (probeType == ModelProbeType.BOTH) {
+            // DTO 的 @Pattern 已拦截；这里再挡一层，防止将来有人绕过校验直接调用
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    "公共探测接口只支持 CHAT 或 EMBEDDING。");
+        }
 
         // Java 侧第一道 SSRF 校验（04 §4.2.2 规则 1）；Python 出站前还会做 DNS 解析后的二次校验
         baseUrlSecurityValidator.validate(request.baseUrl());
 
         String providedKey = normalizeSecret(request.apiKey());
-        String savedChatKey = probeType.includesChat() ? decryptIfPresent(current.getChatApiKeyCipher()) : null;
-        String savedEmbeddingKey =
-                probeType.includesEmbedding() ? decryptIfPresent(current.getEmbeddingApiKeyCipher()) : null;
+        // 惰性解密：只有"未提供新 Key 且明确要求用已保存 Key"时才碰旧密文。
+        // 否则旧密文损坏/主密钥更换会让"用新 Key 恢复配置"也失败。
+        boolean useSavedKey = request.useSavedKey() && providedKey == null;
+        String savedChatKey = probeType.includesChat() && useSavedKey
+                ? decryptIfPresent(current.getChatApiKeyCipher()) : null;
+        String savedEmbeddingKey = probeType.includesEmbedding() && useSavedKey
+                ? decryptIfPresent(current.getEmbeddingApiKeyCipher()) : null;
 
         ModelEndpoint chatEndpoint = null;
         if (probeType.includesChat()) {
@@ -112,11 +125,10 @@ public class UserConfigController {
 
         PythonAiEngineClient.ProbeResult outcome =
                 pythonAiEngineClient.probeModel(userId, probeType, chatEndpoint, embeddingEndpoint);
-        boolean reachable = switch (probeType) {
-            case CHAT -> outcome.chatReachable();
-            case EMBEDDING -> outcome.embeddingReachable();
-            case BOTH -> outcome.chatReachable() && outcome.embeddingReachable();
-        };
+        // 公共接口只允许单类型探测；BOTH 仅用于内部保存流程（DTO 已用 @Pattern 拦截）
+        boolean reachable = probeType == ModelProbeType.CHAT
+                ? outcome.chatReachable()
+                : outcome.embeddingReachable();
         String message = outcome.actualDim() != null
                 ? "模型连通性探测通过，实测向量维度：" + outcome.actualDim()
                 : "模型连通性探测通过";
@@ -353,7 +365,17 @@ public class UserConfigController {
 
     /** 解密后只取前 3 位与后 4 位（{@code 04} `API-USER-001`），明文即刻丢弃。 */
     private static String masked(String cipherText, AesGcmCryptoService cryptoService) {
-        return cipherText == null ? null : AesGcmCryptoService.mask(cryptoService.decrypt(cipherText));
+        if (cipherText == null) {
+            return null;
+        }
+        try {
+            return AesGcmCryptoService.mask(cryptoService.decrypt(cipherText));
+        } catch (BusinessException e) {
+            // 旧密文损坏/主密钥更换时不能让整个配置页 500：返回占位掩码，
+            // 用户仍可通过“重新保存”或“销毁 Key”恢复（不记录密文或异常细节）。
+            log.warn("已保存的 API Key 无法解密，返回占位掩码（用户可重新保存或销毁）");
+            return "****";
+        }
     }
 
     private static String formatTime(LocalTime time) {

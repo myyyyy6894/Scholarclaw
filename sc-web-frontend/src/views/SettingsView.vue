@@ -391,6 +391,9 @@ function goToLogin(): void {
           <el-checkbox v-model="modelForm.reuseChatApiKey" class="sc-settings__checkbox">
             复用对话模型的 API Key
           </el-checkbox>
+          <div v-if="modelForm.reuseChatApiKey" class="sc-settings__hint sc-settings__hint--block">
+            单独测试 Embedding 前需先在上方输入一次对话 Key；直接保存时会自动复用已保存的对话 Key。
+          </div>
           <div class="sc-settings__row">
             <el-button :loading="probingEmbedding" @click="onProbe('EMBEDDING')">
               测试 Embedding 模型
@@ -547,6 +550,11 @@ function goToLogin(): void {
 .sc-settings__hint {
   color: #909399;
   font-size: 13px;
+}
+
+.sc-settings__hint--block {
+  display: block;
+  margin: -8px 0 16px;
 }
 
 .sc-settings__checkbox {

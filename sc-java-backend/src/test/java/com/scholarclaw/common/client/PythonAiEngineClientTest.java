@@ -3,6 +3,7 @@ package com.scholarclaw.common.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.config.JacksonConfig;
 import com.scholarclaw.common.exception.BusinessException;
@@ -12,7 +13,10 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.ZoneId;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,10 +25,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 /**
- * Java → Python 模型探测客户端（{@code 04} §4.9.1 `API-INT-AI-001`）。
+ * Java → Python 统一内部 AI 客户端（TASK-303、`04` §4.9）。
  *
- * <p>用本机 {@link HttpServer} 做真实 HTTP 往返，验证三件事：内部令牌与追踪号确实被带上、
- * Python 信封的 `code` 被原样映射成 Java {@link ErrorCode}、以及不可解析响应被归为上游错误。
+ * <p>用本机 {@link HttpServer} 做真实 HTTP 往返，验证：
+ * 内部请求头（令牌/追踪号/用户）、通用 `postJson`、错误码映射、异常消息脱敏、读取超时分类。
  */
 class PythonAiEngineClientTest {
 
@@ -37,17 +41,30 @@ class PythonAiEngineClientTest {
     private final AtomicReference<Headers> capturedHeaders = new AtomicReference<>();
     private final AtomicReference<String> responseBody = new AtomicReference<>("{}");
     private final AtomicReference<Integer> responseStatus = new AtomicReference<>(200);
+    private final AtomicLong delayMillis = new AtomicLong(0);
 
     @BeforeEach
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/internal/ai/v1/model/probe", exchange -> {
+        // 根上下文：探测与未来内部接口共用同一套断言
+        server.createContext("/", exchange -> {
             capturedHeaders.set(exchange.getRequestHeaders());
             exchange.getRequestBody().readAllBytes();
-            byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(responseStatus.get(), body.length);
-            exchange.getResponseBody().write(body);
-            exchange.close();
+            try {
+                long delay = delayMillis.get();
+                if (delay > 0) {
+                    Thread.sleep(delay);
+                }
+                byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(responseStatus.get(), body.length);
+                exchange.getResponseBody().write(body);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (IOException e) {
+                // 客户端已超时断开时写入会失败；测试只关心客户端侧的 UPSTREAM_TIMEOUT
+            } finally {
+                exchange.close();
+            }
         });
         server.start();
         baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
@@ -67,7 +84,7 @@ class PythonAiEngineClientTest {
     }
 
     @Test
-    @DisplayName("成功响应解析为 ProbeResult，并携带内部令牌与追踪号")
+    @DisplayName("成功响应解析为 ProbeResult，并携带内部令牌、追踪号与用户 ID")
     void mapsSuccessfulEnvelope() {
         responseBody.set("""
                 {"code":"OK","message":"ok","data":{"chat_reachable":true,
@@ -88,18 +105,48 @@ class PythonAiEngineClientTest {
     }
 
     @Test
-    @DisplayName("Python 错误信封的 code 原样映射为 Java 错误码，不回传上游正文")
-    void mapsErrorEnvelopeToSameErrorCode() {
-        responseStatus.set(502);
+    @DisplayName("通用 postJson 返回 data 节点；无用户身份时不发送 X-User-Id")
+    void postJsonIsTheUnifiedEntryAndOmitsUserHeaderWhenAbsent() {
+        responseBody.set("{\"code\":\"OK\",\"data\":{\"ok\":true}}");
+
+        JsonNode data = client(baseUrl).postJson("/internal/ai/v1/agent/route-and-extract",
+                Map.of("raw_text", "hello"), null);
+
+        assertThat(data.path("ok").asBoolean()).isTrue();
+        assertThat(capturedHeaders.get().getFirst("X-Internal-Token")).isEqualTo(TOKEN);
+        assertThat(capturedHeaders.get().getFirst("X-Trace-Id")).startsWith("tr_");
+        assertThat(capturedHeaders.get().getFirst("X-User-Id")).isNull();
+    }
+
+    @Test
+    @DisplayName("Python 错误信封的 code 映射为 Java 错误码，且不使用 Python 的原始 message")
+    void mapsErrorEnvelopeWithoutExposingPythonMessage() {
+        responseStatus.set(400);
         responseBody.set("""
-                {"code":"UPSTREAM_MODEL_AUTH_ERROR","message":"模型服务鉴权失败，请检查 API Key。"}
+                {"code":"VALIDATION_ERROR","message":"secret detail: column x is null"}
                 """);
 
         assertThatThrownBy(() -> client(baseUrl)
                 .probeModel(10001L, ModelProbeType.CHAT, endpoint(), null))
                 .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException business = (BusinessException) ex;
+                    assertThat(business.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR);
+                    assertThat(business.getMessage()).isEqualTo(ErrorCode.VALIDATION_ERROR.defaultMessage());
+                    assertThat(business.getMessage()).doesNotContain("secret detail");
+                });
+    }
+
+    @Test
+    @DisplayName("内部令牌不匹配（Python AUTH_FORBIDDEN）映射为服务端配置错误，不暴露为前端 403")
+    void mapsInternalAuthFailureToInternalError() {
+        responseStatus.set(403);
+        responseBody.set("{\"code\":\"AUTH_FORBIDDEN\",\"message\":\"internal token mismatch\"}");
+
+        assertThatThrownBy(() -> client(baseUrl)
+                .probeModel(10001L, ModelProbeType.CHAT, endpoint(), null))
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
-                        .isEqualTo(ErrorCode.UPSTREAM_MODEL_AUTH_ERROR));
+                        .isEqualTo(ErrorCode.INTERNAL_ERROR));
     }
 
     @Test
@@ -115,6 +162,19 @@ class PythonAiEngineClientTest {
                 .probeModel(10001L, ModelProbeType.CHAT, endpoint(), null))
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(ErrorCode.UPSTREAM_MODEL_ERROR));
+    }
+
+    @Test
+    @DisplayName("读取超时映射为 UPSTREAM_TIMEOUT，而不是原始 IO 异常")
+    void mapsReadTimeoutToUpstreamTimeout() {
+        delayMillis.set(500);
+        PythonAiEngineClient slowClient = new PythonAiEngineClient(baseUrl, TOKEN, 1000, 100, MAPPER);
+
+        assertThatThrownBy(() -> slowClient.postJson("/internal/ai/v1/model/probe",
+                Map.of("probe_type", "CHAT"), 10001L, Duration.ofMillis(100)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.UPSTREAM_TIMEOUT));
     }
 
     @Test

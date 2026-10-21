@@ -314,7 +314,7 @@ function goToLogin(): void {
       <el-card class="sc-card-gap" shadow="never">
         <template #header>BYOK 模型配置</template>
 
-        <el-form label-position="top">
+        <el-form label-position="top" autocomplete="off">
           <el-divider content-position="left">对话模型</el-divider>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="8">
@@ -331,14 +331,24 @@ function goToLogin(): void {
             </el-col>
             <el-col :xs="24" :sm="16">
               <el-form-item label="Base URL">
-                <el-input v-model="modelForm.chatBaseUrl" placeholder="https://api.deepseek.com/v1" />
+                <el-input
+                  v-model="modelForm.chatBaseUrl"
+                  name="sc-chat-base-url"
+                  autocomplete="off"
+                  placeholder="https://api.deepseek.com/v1"
+                />
               </el-form-item>
             </el-col>
           </el-row>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="12">
               <el-form-item label="模型名称">
-                <el-input v-model="modelForm.chatModel" placeholder="deepseek-chat" />
+                <el-input
+                  v-model="modelForm.chatModel"
+                  name="sc-chat-model-name"
+                  autocomplete="off"
+                  placeholder="deepseek-chat"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12">
@@ -347,7 +357,10 @@ function goToLogin(): void {
                   v-model="modelForm.chatApiKey"
                   type="password"
                   show-password
-                  autocomplete="off"
+                  name="sc-chat-api-key"
+                  autocomplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore
                   :placeholder="chatKeyPlaceholder"
                 />
               </el-form-item>
@@ -377,14 +390,24 @@ function goToLogin(): void {
             </el-col>
             <el-col :xs="24" :sm="16">
               <el-form-item label="Base URL">
-                <el-input v-model="modelForm.embeddingBaseUrl" placeholder="https://api.siliconflow.cn/v1" />
+                <el-input
+                  v-model="modelForm.embeddingBaseUrl"
+                  name="sc-embedding-base-url"
+                  autocomplete="off"
+                  placeholder="https://api.siliconflow.cn/v1"
+                />
               </el-form-item>
             </el-col>
           </el-row>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="12">
               <el-form-item label="模型名称">
-                <el-input v-model="modelForm.embeddingModel" placeholder="BAAI/bge-m3" />
+                <el-input
+                  v-model="modelForm.embeddingModel"
+                  name="sc-embedding-model-name"
+                  autocomplete="off"
+                  placeholder="BAAI/bge-m3"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12">
@@ -393,7 +416,10 @@ function goToLogin(): void {
                   v-model="modelForm.embeddingApiKey"
                   type="password"
                   show-password
-                  autocomplete="off"
+                  name="sc-embedding-api-key"
+                  autocomplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore
                   :disabled="modelForm.reuseChatApiKey"
                   :placeholder="modelForm.reuseChatApiKey ? '已复用对话模型 Key' : embeddingKeyPlaceholder"
                 />

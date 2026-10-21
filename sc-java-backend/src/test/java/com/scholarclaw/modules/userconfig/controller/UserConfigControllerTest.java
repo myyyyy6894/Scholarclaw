@@ -81,7 +81,8 @@ class UserConfigControllerTest {
                 new BaseUrlSecurityValidator(false, ""),
                 pythonAiEngineClient,
                 new ModelConfigRules(false, ""),
-                new ModelKeyBindingRules());
+                new ModelKeyBindingRules(),
+                userId -> 0);
 
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())

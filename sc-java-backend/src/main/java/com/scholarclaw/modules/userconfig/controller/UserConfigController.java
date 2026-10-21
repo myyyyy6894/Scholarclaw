@@ -18,6 +18,7 @@ import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
 import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
+import com.scholarclaw.modules.userconfig.service.UserCourseCountProvider;
 import jakarta.validation.Valid;
 import java.time.DateTimeException;
 import java.time.LocalTime;
@@ -60,8 +61,6 @@ public class UserConfigController {
      * 因此这里的 0 是事实而非占位。课程模块上线后必须改为经该模块的只读能力查询——
      * `userconfig` 不得直接访问 `t_course_namespace`（{@code 02} §4.1 Strict DAG）。
      */
-    private static final int EXISTING_COURSE_COUNT = 0;
-
     private static final String PROBE_UPSTREAM_FAILED = "模型探测未通过，原配置保持不变。";
     private static final Set<String> IM_PLATFORMS = Set.of("QQ_ONEBOT", "WECOM");
 
@@ -71,19 +70,22 @@ public class UserConfigController {
     private final PythonAiEngineClient pythonAiEngineClient;
     private final ModelConfigRules modelConfigRules;
     private final ModelKeyBindingRules modelKeyBindingRules;
+    private final UserCourseCountProvider userCourseCountProvider;
 
     public UserConfigController(UserConfigService userConfigService,
                                 AesGcmCryptoService cryptoService,
                                 BaseUrlSecurityValidator baseUrlSecurityValidator,
                                 PythonAiEngineClient pythonAiEngineClient,
                                 ModelConfigRules modelConfigRules,
-                                ModelKeyBindingRules modelKeyBindingRules) {
+                                ModelKeyBindingRules modelKeyBindingRules,
+                                UserCourseCountProvider userCourseCountProvider) {
         this.userConfigService = userConfigService;
         this.cryptoService = cryptoService;
         this.baseUrlSecurityValidator = baseUrlSecurityValidator;
         this.pythonAiEngineClient = pythonAiEngineClient;
         this.modelConfigRules = modelConfigRules;
         this.modelKeyBindingRules = modelKeyBindingRules;
+        this.userCourseCountProvider = userCourseCountProvider;
     }
 
     /** `API-USER-001`：查询当前用户配置与脱敏密钥视图。 */
@@ -246,7 +248,8 @@ public class UserConfigController {
                         request.defaultEmbeddingProvider(), request.embeddingBaseUrl(),
                         request.defaultEmbeddingModel(), outcome.actualDim(), embeddingCipher));
         return Result.ok("模型配置已保存",
-                toVO(updated, cryptoService, modelConfigRules, EXISTING_COURSE_COUNT));
+                toVO(updated, cryptoService, modelConfigRules,
+                        userCourseCountProvider.countActiveCourses(userId)));
     }
 
     /** `API-USER-004`：更新个人偏好与 IM 绑定（组 B 偏好列）。 */

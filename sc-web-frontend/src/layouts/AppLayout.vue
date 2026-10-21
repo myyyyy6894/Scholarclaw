@@ -47,6 +47,9 @@ async function doLogout(): Promise<void> {
       <router-link class="sc-layout__brand" :to="{ name: 'home' }">{{ appTitle }}</router-link>
       <div class="sc-layout__actions">
         <span class="sc-layout__user">{{ userLabel }}</span>
+        <router-link v-if="auth.isAuthenticated" class="sc-layout__link" :to="{ name: 'courses' }">
+          课程空间
+        </router-link>
         <router-link v-if="auth.isAuthenticated" class="sc-layout__link" :to="{ name: 'settings' }">
           模型配置
         </router-link>

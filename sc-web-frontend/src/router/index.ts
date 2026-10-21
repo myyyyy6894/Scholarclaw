@@ -2,6 +2,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 import AppLayout from '@/layouts/AppLayout.vue'
 import { installAuthGuard } from '@/router/guard'
+import CoursesView from '@/views/CoursesView.vue'
 import HomeView from '@/views/HomeView.vue'
 import LoginView from '@/views/LoginView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
@@ -37,6 +38,12 @@ const routes: RouteRecordRaw[] = [
         name: 'login',
         component: LoginView,
         meta: { title: '登录', guestOnly: true },
+      },
+      {
+        path: 'courses',
+        name: 'courses',
+        component: CoursesView,
+        meta: { title: '课程空间', requiresAuth: true },
       },
       {
         path: 'settings',

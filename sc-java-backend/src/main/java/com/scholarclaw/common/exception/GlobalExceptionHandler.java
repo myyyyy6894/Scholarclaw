@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 /**
  * 全局异常映射（{@code 04} §2.3.2 六类异常）。
@@ -72,6 +73,14 @@ public class GlobalExceptionHandler {
                 .map(violation -> violation.getPropertyPath() + ": " + violation.getMessage())
                 .collect(Collectors.joining("; "));
         return validationFailure(detail);
+    }
+
+    /** 超过 Spring multipart 上限：按契约 `400 FILE_SIZE_EXCEEDED`，不能落成 500。 */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Result<Void>> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
+        log.warn("上传文件超过 multipart 上限");
+        return ResponseEntity.status(resolveStatus(ErrorCode.FILE_SIZE_EXCEEDED))
+                .body(Result.failure(ErrorCode.FILE_SIZE_EXCEEDED));
     }
 
     /** 请求体无法解析（JSON 语法错误、类型不匹配）同样归类为参数校验失败。 */

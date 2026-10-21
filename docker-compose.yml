@@ -207,6 +207,8 @@ services:
       SC_LOCAL_MODEL_ALLOWED_ORIGINS: ${SC_LOCAL_MODEL_ALLOWED_ORIGINS:-}
       SC_IM_PUSH_ENABLED: ${SC_IM_PUSH_ENABLED:-false}
       SC_ONEBOT_ACCESS_TOKEN: ${SC_ONEBOT_ACCESS_TOKEN:-}
+      # 共享卷根目录（TASK-403）：容器内固定路径，可通过 .env 覆盖但通常不需要。
+      SC_STORAGE_ROOT: ${SC_STORAGE_ROOT:-/data/scholarclaw/storage}
     volumes:
       # 共享卷读写（Java 负责落盘与物理删除）
       - vol_shared_storage:/data/scholarclaw/storage

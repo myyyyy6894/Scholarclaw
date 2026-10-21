@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -14,6 +15,7 @@ import com.scholarclaw.common.exception.GlobalExceptionHandler;
 import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeUploadService;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
@@ -22,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
@@ -38,12 +41,14 @@ class KnowledgeDocControllerTest {
                     ZoneId.of("Asia/Shanghai")).build();
 
     private KnowledgeDocService service;
+    private KnowledgeUploadService uploadService;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         service = mock(KnowledgeDocService.class);
-        mockMvc = MockMvcBuilders.standaloneSetup(new KnowledgeDocController(service))
+        uploadService = mock(KnowledgeUploadService.class);
+        mockMvc = MockMvcBuilders.standaloneSetup(new KnowledgeDocController(service, uploadService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -88,6 +93,23 @@ class KnowledgeDocControllerTest {
         mockMvc.perform(get("/api/v1/courses/not-a-number/docs"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    @DisplayName("上传文件返回 202 与 UPLOADED 元数据")
+    void uploadReturnsAccepted() throws Exception {
+        when(uploadService.upload(eq(USER_ID), eq(COURSE_ID), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new KnowledgeDocVO(50002L, COURSE_ID, "a.pdf", ".pdf", 10,
+                        "UPLOADED", 1, 1, null, null, 0, 0, 0,
+                        null, null, null, null,
+                        "2026-10-21T10:00:00.000+08:00", "2026-10-21T10:00:00.000+08:00"));
+        MockMultipartFile file = new MockMultipartFile("file", "a.pdf",
+                "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        mockMvc.perform(multipart("/api/v1/courses/2001/docs/upload").file(file))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.doc_id").value("50002"))
+                .andExpect(jsonPath("$.data.status").value("UPLOADED"));
     }
 
     private static KnowledgeDocVO doc() {

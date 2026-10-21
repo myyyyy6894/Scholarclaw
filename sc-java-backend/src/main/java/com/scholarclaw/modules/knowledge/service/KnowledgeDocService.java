@@ -236,6 +236,20 @@ public class KnowledgeDocService {
         return doc;
     }
 
+    /** 上传补偿：仅删除仍是 UPLOADED 的未完成元数据，绝不误删已进入解析的文档。 */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteUncommittedMetadata(Long userId, Long docId) {
+        docMapper.delete(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getDocId, docId)
+                .eq(KnowledgeDocEntity::getUserId, userId)
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name()));
+    }
+
+    /** 对外视图转换（上传接口返回新文档时复用同一字段集）。 */
+    public KnowledgeDocVO toVO(KnowledgeDocEntity doc) {
+        return toVO(doc, ScTimeZone.zoneId());
+    }
+
     private KnowledgeDocEntity transitionToParsing(Long userId, Long docId,
                                                    DocumentStatus requiredStatus, String message) {
         KnowledgeDocEntity doc = requireOwnedDoc(userId, docId);

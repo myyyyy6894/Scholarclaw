@@ -90,7 +90,7 @@ docker compose exec -T sc-python-ai python3 - < scripts/e2e/p3_mock_smoke.py
 
 `trace_passthrough_smoke.py` 只使用容器内已有的 `SC_INTERNAL_SERVICE_TOKEN`，不读取、不打印 `.env`；`p3_mock_smoke.py` 只绑定容器内回环地址的临时 mock，不访问真实供应商。
 
-## 4. 课程空间冒烟（TASK-401）
+## 4. 课程空间与上传冒烟（TASK-401~403）
 
 在临时 mock 模型白名单生效、mock 容器运行后：
 
@@ -100,6 +100,7 @@ python3 scripts/e2e/course_smoke.py \
 ```
 
 覆盖：保存已验证 Embedding 配置、建课锁定维度、同名 409、`existing_course_count`、
+真实 multipart 上传（路径穿越文件名净化、文件落盘）、重复/伪造/非法扩展名拦截、
 文档列表与真实统计、切换模型版本递增与文档 `PARSING`/旧父块清空、跨用户隔离、
 删除后 DDL 任务解绑保留与文档 `DELETING`、重复删除 404。
 脚本只使用假 Key；ID 用十进制字符串；验证后按上面的临时 env 流程恢复容器。

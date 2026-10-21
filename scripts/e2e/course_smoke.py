@@ -64,6 +64,36 @@ def mysql_query(sql: str) -> str:
     return completed.stdout.strip()
 
 
+def docker_exec(service: str, command: str) -> str:
+    completed = subprocess.run(
+        ["docker", "compose", "exec", "-T", service, "sh", "-lc", command],
+        text=True, capture_output=True,
+    )
+    if completed.returncode != 0:
+        sys.stderr.write(completed.stderr)
+        raise SystemExit(f"{service} 命令失败")
+    return completed.stdout.strip()
+
+
+def upload_file(base_url: str, token: str, course_id: str, filename: str,
+                content: bytes, content_type: str) -> tuple[int, dict]:
+    boundary = "----scholarclaw-e2e-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    request = urllib.request.Request(
+        f"{base_url}/api/v1/courses/{course_id}/docs/upload", data=body, method="POST")
+    request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.status, json.loads(response.read().decode())
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8", "replace"))
+
+
 def save_models(base_url: str, token: str, mock_base_url: str) -> tuple[int, dict]:
     return call(base_url, "PUT", "/api/v1/user/model-config", token=token, body={
         "chat_provider": "OPENAI_COMPATIBLE",
@@ -121,16 +151,44 @@ def main() -> int:
                          and len(payload.get("data", [])) == 1
                          and payload["data"][0]["course_id"] == course_id))
 
-    # 插入一份 READY 文档与父块，验证 TASK-402 文档列表/统计/课程事件状态迁移
-    doc_id = mysql_query(
-        "INSERT INTO t_knowledge_doc (user_id, course_id, doc_name, file_ext, file_size_bytes, "
-        "file_sha256, storage_rel_path, status, parse_version, course_index_version, "
-        "indexed_embedding_provider, indexed_embedding_model, indexed_embedding_dim, "
-        "page_count, chunk_count, retry_count) VALUES ("
-        f"{int(user_id)}, {int(course_id)}, '第5章_事务处理.pdf', '.pdf', 1024, "
-        f"REPEAT('a', 64), 'raw/{int(user_id)}/{int(course_id)}/placeholder.pdf', 'READY', "
-        "1, 1, 'OPENAI_COMPATIBLE', 'embed-mock', 8, 1, 1, 0);\n"
-        "SELECT LAST_INSERT_ID();")
+    # TASK-403：真实上传 PDF（路径穿越文件名应被净化），再验证 TASK-402 状态机
+    pdf_bytes = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n"
+    status, payload = upload_file(args.base_url, token, course_id,
+                                  "../../etc/passwd.pdf", pdf_bytes, "application/pdf")
+    uploaded = payload.get("data") or {}
+    doc_id = uploaded.get("doc_id")
+    results.append(check("上传合法 PDF 返回 202/UPLOADED", status == 202
+                         and uploaded.get("status") == "UPLOADED"
+                         and uploaded.get("doc_name") == "passwd.pdf",
+                         f"{status} {payload}"))
+    file_exists = docker_exec("sc-java-backend",
+                              f"test -f /data/scholarclaw/storage/raw/{int(user_id)}/"
+                              f"{int(course_id)}/{int(doc_id)}.pdf && echo yes || echo no")
+    results.append(check("原始文件写入共享卷 raw/{uid}/{cid}/{doc_id}.pdf",
+                         file_exists == "yes", file_exists))
+
+    status, payload = upload_file(args.base_url, token, course_id,
+                                  "passwd.pdf", pdf_bytes, "application/pdf")
+    results.append(check("同课程重复文件 409", status == 409
+                         and payload.get("code") == "DOC_DUPLICATE_SHA256",
+                         f"{status} {payload}"))
+    status, payload = upload_file(args.base_url, token, course_id,
+                                  "fake.pdf", b"not a pdf", "application/pdf")
+    results.append(check("伪造 PDF Magic 400", status == 400
+                         and payload.get("code") == "FILE_MAGIC_INVALID",
+                         f"{status} {payload}"))
+    status, payload = upload_file(args.base_url, token, course_id,
+                                  "a.exe", b"MZ", "application/octet-stream")
+    results.append(check("非白名单扩展名 400", status == 400
+                         and payload.get("code") == "FILE_TYPE_UNSUPPORTED",
+                         f"{status} {payload}"))
+
+    # 将上传文档模拟为 READY（实际解析属 TASK-501），以验证课程统计/切换/删除事件
+    mysql_query(
+        "UPDATE t_knowledge_doc SET status = 'READY', indexed_embedding_provider = "
+        "'OPENAI_COMPATIBLE', indexed_embedding_model = 'embed-mock', "
+        "indexed_embedding_dim = 8, page_count = 1, chunk_count = 1 "
+        f"WHERE doc_id = {int(doc_id)};")
     mysql_query(
         "INSERT INTO t_knowledge_parent_chunk (parent_chunk_id, doc_id, user_id, course_id, "
         "parse_version, chunk_seq, page_start, page_end, section_title, content, char_length) "
@@ -212,6 +270,9 @@ def main() -> int:
                          doc_state == "DELETING\t3", repr(doc_state)))
     mysql_query(f"DELETE FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
     mysql_query(f"DELETE FROM t_knowledge_parent_chunk WHERE doc_id = {int(doc_id)};")
+    docker_exec("sc-java-backend",
+                f"rm -f /data/scholarclaw/storage/raw/{int(user_id)}/{int(course_id)}/"
+                f"{int(doc_id)}.pdf")
     mysql_query(f"DELETE FROM t_ddl_task WHERE source_msg_id = '{ddl_key}';")
     status, payload = call(args.base_url, "GET", "/api/v1/courses", token=token)
     results.append(check("删除后列表为空", status == 200 and payload.get("data") == []))

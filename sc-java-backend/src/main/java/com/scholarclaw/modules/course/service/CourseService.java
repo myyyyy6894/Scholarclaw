@@ -128,7 +128,7 @@ public class CourseService implements UserCourseCountProvider {
     /** `API-COURSE-003`：探测新模型成功后原子递增索引版本；旧配置在探测失败时不受影响。 */
     public ChangeEmbeddingModelVO changeEmbeddingModel(Long userId, Long courseId,
                                                         ChangeEmbeddingModelRequest request) {
-        CourseNamespaceEntity course = requireActiveCourse(userId, courseId);
+        CourseNamespaceEntity course = getActiveCourse(userId, courseId);
         if (IndexStatus.REBUILDING.name().equals(course.getIndexStatus())) {
             throw new BusinessException(ErrorCode.E_SYS_03,
                     "当前课程索引正在重建中，请等待重建完成后再试。");
@@ -175,7 +175,7 @@ public class CourseService implements UserCourseCountProvider {
 
     /** `API-COURSE-004`：第一阶段软删，事件监听方负责文档/DDL/会话；物理清理由 GC 兜底。 */
     public DeleteCourseVO deleteCourse(Long userId, Long courseId) {
-        requireActiveCourse(userId, courseId);
+        getActiveCourse(userId, courseId);
         courseMutationService.softDelete(userId, courseId);
         return new DeleteCourseVO(courseId);
     }
@@ -215,7 +215,8 @@ public class CourseService implements UserCourseCountProvider {
         return (int) Math.min(count, Integer.MAX_VALUE);
     }
 
-    private CourseNamespaceEntity requireActiveCourse(Long userId, Long courseId) {
+    /** 课程归属与活动状态校验；跨用户/已删除课程统一 404（防 IDOR）。 */
+    public CourseNamespaceEntity getActiveCourse(Long userId, Long courseId) {
         CourseNamespaceEntity course = courseNamespaceMapper.selectOne(
                 Wrappers.<CourseNamespaceEntity>lambdaQuery()
                         .eq(CourseNamespaceEntity::getCourseId, courseId)

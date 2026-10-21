@@ -121,6 +121,32 @@ def main() -> int:
                          and len(payload.get("data", [])) == 1
                          and payload["data"][0]["course_id"] == course_id))
 
+    # 插入一份 READY 文档与父块，验证 TASK-402 文档列表/统计/课程事件状态迁移
+    doc_id = mysql_query(
+        "INSERT INTO t_knowledge_doc (user_id, course_id, doc_name, file_ext, file_size_bytes, "
+        "file_sha256, storage_rel_path, status, parse_version, course_index_version, "
+        "indexed_embedding_provider, indexed_embedding_model, indexed_embedding_dim, "
+        "page_count, chunk_count, retry_count) VALUES ("
+        f"{int(user_id)}, {int(course_id)}, '第5章_事务处理.pdf', '.pdf', 1024, "
+        f"REPEAT('a', 64), 'raw/{int(user_id)}/{int(course_id)}/placeholder.pdf', 'READY', "
+        "1, 1, 'OPENAI_COMPATIBLE', 'embed-mock', 8, 1, 1, 0);\n"
+        "SELECT LAST_INSERT_ID();")
+    mysql_query(
+        "INSERT INTO t_knowledge_parent_chunk (parent_chunk_id, doc_id, user_id, course_id, "
+        "parse_version, chunk_seq, page_start, page_end, section_title, content, char_length) "
+        f"VALUES ('pc_{doc_id}_v1_1', {int(doc_id)}, {int(user_id)}, {int(course_id)}, "
+        "1, 1, 1, 1, '第5章', '事务处理', 4);")
+
+    status, payload = call(args.base_url, "GET", f"/api/v1/courses/{course_id}/docs", token=token)
+    docs = payload.get("data") or []
+    results.append(check("文档列表返回 READY 文档", status == 200 and len(docs) == 1
+                         and docs[0]["doc_id"] == doc_id and docs[0]["status"] == "READY",
+                         f"{status} {payload}"))
+    status, payload = call(args.base_url, "GET", "/api/v1/courses", token=token)
+    results.append(check("课程统计 ready_doc_count=1", status == 200
+                         and payload["data"][0]["ready_doc_count"] == 1,
+                         str(payload.get("data"))))
+
     # 真实数据库校验：删除课程时 DDL 任务解绑保留（course_id=NULL，course_name 保留）
     ddl_key = f"e2e-ddl-{suffix}"
     mysql_query(
@@ -140,16 +166,33 @@ def main() -> int:
                                  "embedding_provider": "OPENAI_COMPATIBLE",
                                  "embedding_model": "embed-mock-v2"})
     switched = payload.get("data") or {}
+    expected_status = "REBUILDING" if (switched.get("reindexing_doc_count") or 0) > 0 else "ACTIVE"
     results.append(check("切换模型成功并回填探测维度", status == 200
                          and switched.get("embedding_dim") == 8
                          and switched.get("current_index_version") == 2
-                         and switched.get("index_status") == "ACTIVE",
+                         and switched.get("index_status") == expected_status,
                          f"{status} {payload}"))
+
+    status, payload = call(args.base_url, "GET", f"/api/v1/courses/{course_id}/docs", token=token)
+    docs = payload.get("data") or []
+    results.append(check("切换后文档转 PARSING（旧索引立即失效）",
+                         status == 200 and docs and docs[0]["status"] == "PARSING"
+                         and docs[0]["parse_version"] == 2
+                         and docs[0]["course_index_version"] == 2,
+                         f"{status} {payload}"))
+    chunk_count = mysql_query(
+        f"SELECT COUNT(*) FROM t_knowledge_parent_chunk WHERE doc_id = {int(doc_id)};")
+    results.append(check("切换后旧父块已清空", chunk_count == "0", chunk_count))
 
     other_name = f"e2e_course_other_{suffix}"
     other_token, _ = register_or_login(args.base_url, other_name, password)
     status, payload = call(args.base_url, "GET", "/api/v1/courses", token=other_token)
     results.append(check("其他用户看不到课程", status == 200 and payload.get("data") == []))
+    status, payload = call(args.base_url, "GET", f"/api/v1/courses/{course_id}/docs",
+                           token=other_token)
+    results.append(check("其他用户读取课程文档 404",
+                         status == 404 and payload.get("code") == "RESOURCE_NOT_FOUND",
+                         f"{status} {payload}"))
     status, payload = call(args.base_url, "DELETE", f"/api/v1/courses/{course_id}",
                            token=other_token)
     results.append(check("跨用户删除 404", status == 404
@@ -163,6 +206,12 @@ def main() -> int:
         f"WHERE source_msg_id = '{ddl_key}';")
     results.append(check("DDL 任务已解绑且课程名保留", ddl_row == "NULL\t操作系统原理",
                          repr(ddl_row)))
+    doc_state = mysql_query(
+        f"SELECT status, parse_version FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
+    results.append(check("删除课程后文档转 DELETING 且版本递增",
+                         doc_state == "DELETING\t3", repr(doc_state)))
+    mysql_query(f"DELETE FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
+    mysql_query(f"DELETE FROM t_knowledge_parent_chunk WHERE doc_id = {int(doc_id)};")
     mysql_query(f"DELETE FROM t_ddl_task WHERE source_msg_id = '{ddl_key}';")
     status, payload = call(args.base_url, "GET", "/api/v1/courses", token=token)
     results.append(check("删除后列表为空", status == 200 and payload.get("data") == []))

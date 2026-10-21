@@ -100,7 +100,8 @@ python3 scripts/e2e/course_smoke.py \
 ```
 
 覆盖：保存已验证 Embedding 配置、建课锁定维度、同名 409、`existing_course_count`、
-切换模型版本递增、跨用户隔离、删除后 DDL 任务解绑保留、重复删除 404。
+文档列表与真实统计、切换模型版本递增与文档 `PARSING`/旧父块清空、跨用户隔离、
+删除后 DDL 任务解绑保留与文档 `DELETING`、重复删除 404。
 脚本只使用假 Key；ID 用十进制字符串；验证后按上面的临时 env 流程恢复容器。
 
 ## 5. 安全约束

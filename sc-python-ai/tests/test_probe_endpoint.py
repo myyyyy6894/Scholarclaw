@@ -141,6 +141,61 @@ def test_missing_internal_token_is_rejected_even_for_valid_body(
     assert "sk-endpoint-test-secret" not in response.text
 
 
+def test_missing_user_id_header_is_validation_error(
+    authorized_remote_client: TestClient,
+) -> None:
+    del authorized_remote_client.headers["X-User-Id"]
+
+    response = authorized_remote_client.post(PROBE_PATH, json=_body())
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_non_decimal_user_id_header_is_validation_error(
+    authorized_remote_client: TestClient,
+) -> None:
+    response = authorized_remote_client.post(
+        PROBE_PATH, json=_body(), headers={"X-User-Id": "user-10001"})
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_user_id_header_body_mismatch_is_rejected_without_probe(
+    authorized_remote_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    async def fake_probe(*_args, **_kwargs) -> ProbeOutcome:
+        nonlocal called
+        called = True
+        return ProbeOutcome(True, True, 8, 1)
+
+    monkeypatch.setattr(endpoints_probe, "probe_models", fake_probe)
+    body = _body()
+    body["user_id"] = "10002"
+
+    response = authorized_remote_client.post(PROBE_PATH, json=body)
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert called is False, "头体不一致时不得继续执行探测"
+
+
+@pytest.mark.parametrize("body", [
+    {"user_id": "10001", "probe_type": "BOTH", "chat_config": _endpoint_config("x")},
+    {"user_id": "10001", "probe_type": "BOTH", "embedding_config": _endpoint_config("x")},
+])
+def test_both_missing_any_config_is_validation_error(
+    authorized_remote_client: TestClient, body: dict
+) -> None:
+    response = authorized_remote_client.post(PROBE_PATH, json=body)
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
 # ----------------------------------------------------------------------
 # 内部 Schema：Provider 集合与 API Key 长度（与 Java 保存 DTO / 03 对齐）
 # ----------------------------------------------------------------------
@@ -202,6 +257,14 @@ def test_schema_allows_deepseek_for_chat_probe() -> None:
     )
 
     assert request.chat_config is not None
+
+
+def test_schema_rejects_non_canonical_provider_case() -> None:
+    with pytest.raises(ValidationError):
+        ModelProbeRequest(
+            user_id="10001", probe_type="CHAT",
+            chat_config={**_config("DEEPSEEK"), "provider": "deepseek"},
+        )
 
 
 def test_schema_rejects_non_ascii_api_key() -> None:

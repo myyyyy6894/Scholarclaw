@@ -212,6 +212,25 @@ async def test_connect_timeout_maps_to_upstream_timeout_without_retry() -> None:
     assert exc_info.value.error_code is AiErrorCode.UPSTREAM_TIMEOUT
 
 
+@pytest.mark.parametrize("status", [201, 202, 204, 206])
+async def test_non_200_2xx_is_upstream_error(status: int) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, content=b"{}")
+
+    async with _gateway(handler) as gateway:
+        with pytest.raises(UpstreamModelError) as exc_info:
+            await gateway.post_json(
+                ENDPOINT, "/chat/completions", {}, retry=RetryPolicy.standard())
+
+    assert calls == 1, "非 200 的 2xx 不是成功响应，也不重试"
+    assert exc_info.value.error_code is AiErrorCode.UPSTREAM_MODEL_ERROR
+    assert exc_info.value.retryable is False
+
+
 async def test_probe_default_is_no_retry() -> None:
     calls = 0
 

@@ -33,6 +33,8 @@ export interface UserConfig {
   embedding_api_key_masked: string | null
   default_embedding_model: string | null
   default_embedding_dim: number | null
+  /** 服务端判定的“对话模型配置完整有效”；不得用 `chat_provider != null` 代替。 */
+  has_byok_config: boolean
   timezone: string
   dnd_start_time: string
   dnd_end_time: string

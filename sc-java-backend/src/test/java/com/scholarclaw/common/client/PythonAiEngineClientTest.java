@@ -208,6 +208,14 @@ class PythonAiEngineClientTest {
     }
 
     @Test
+    @DisplayName("连接超时统一钳制到 5s 上限，避免越界配置挤压读取预算")
+    void clampsConnectTimeout() {
+        assertThat(PythonAiEngineClient.clampConnectTimeoutMillis(10_000)).isEqualTo(5_000);
+        assertThat(PythonAiEngineClient.clampConnectTimeoutMillis(0)).isEqualTo(5_000);
+        assertThat(PythonAiEngineClient.clampConnectTimeoutMillis(1_500)).isEqualTo(1_500);
+    }
+
+    @Test
     @DisplayName("未配置 Python 基址时直接失败，不发起请求")
     void failsWhenBaseUrlMissing() {
         assertThatThrownBy(() -> client("")

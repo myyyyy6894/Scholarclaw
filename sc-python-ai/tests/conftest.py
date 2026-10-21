@@ -114,9 +114,12 @@ def remote_client(client_factory: ClientFactory) -> Iterator[TestClient]:
 
 @pytest.fixture
 def authorized_remote_client(client_factory: ClientFactory) -> Iterator[TestClient]:
-    """带合法内部令牌的非环回客户端，等价于 Java 跨容器调用。"""
+    """带合法内部令牌与身份头的非环回客户端，等价于 Java 跨容器调用。"""
     with client_factory(REMOTE_HOST) as client:
-        client.headers.update({"X-Internal-Token": TEST_INTERNAL_TOKEN})
+        client.headers.update({
+            "X-Internal-Token": TEST_INTERNAL_TOKEN,
+            "X-User-Id": "10001",
+        })
         yield client
 
 

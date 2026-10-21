@@ -7,6 +7,7 @@ import com.scholarclaw.common.config.JacksonConfig;
 import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.modules.userconfig.dto.UserConfigVO;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -27,6 +28,7 @@ class UserConfigVOTest {
     /** 32 字节全零密钥：只用于单元测试，不参与任何真实加密。 */
     private static final AesGcmCryptoService CRYPTO =
             new AesGcmCryptoService(Base64.getEncoder().encodeToString(new byte[32]));
+    private static final ModelConfigRules RULES = new ModelConfigRules(false, "");
 
     private static UserConfigEntity entity() {
         UserConfigEntity entity = new UserConfigEntity();
@@ -43,7 +45,7 @@ class UserConfigVOTest {
     @Test
     @DisplayName("纯时刻输出 HH:mm:ss，完整时间戳带 +08:00 偏移量")
     void formatsTimesPerContract() {
-        UserConfigVO vo = UserConfigController.toVO(entity(), CRYPTO);
+        UserConfigVO vo = UserConfigController.toVO(entity(), CRYPTO, RULES);
 
         assertThat(vo.dndStartTime()).isEqualTo("23:30:00");
         assertThat(vo.dndEndTime()).isEqualTo("07:30:00");
@@ -53,7 +55,7 @@ class UserConfigVOTest {
     @Test
     @DisplayName("未配置密钥时 has_* 为 false 且掩码为 null；VO 不含任何密文字段")
     void doesNotLeakSecretMaterial() {
-        UserConfigVO vo = UserConfigController.toVO(entity(), CRYPTO);
+        UserConfigVO vo = UserConfigController.toVO(entity(), CRYPTO, RULES);
 
         assertThat(vo.hasChatApiKey()).isFalse();
         assertThat(vo.hasEmbeddingApiKey()).isFalse();
@@ -72,7 +74,7 @@ class UserConfigVOTest {
         entity.setChatApiKeyCipher(CRYPTO.encrypt("sk-1234567890abcdef8a9f"));
         entity.setEmbeddingApiKeyCipher(CRYPTO.encrypt("sk-embedding-3c2d"));
 
-        UserConfigVO vo = UserConfigController.toVO(entity, CRYPTO);
+        UserConfigVO vo = UserConfigController.toVO(entity, CRYPTO, RULES);
 
         assertThat(vo.hasChatApiKey()).isTrue();
         assertThat(vo.chatApiKeyMasked()).isEqualTo("sk-****8a9f");
@@ -88,7 +90,7 @@ class UserConfigVOTest {
         UserConfigEntity entity = entity();
         entity.setChatApiKeyCipher("v1:corrupted:corrupted");
 
-        UserConfigVO vo = UserConfigController.toVO(entity, CRYPTO);
+        UserConfigVO vo = UserConfigController.toVO(entity, CRYPTO, RULES);
 
         assertThat(vo.hasChatApiKey()).isTrue();
         assertThat(vo.chatApiKeyMasked()).isEqualTo("****");
@@ -97,11 +99,29 @@ class UserConfigVOTest {
     @Test
     @DisplayName("existing_course_count 只在保存响应中出现，GET 视图整字段省略")
     void existingCourseCountIsOnlyPresentOnSaveResponse() throws Exception {
-        String getJson = mapper().writeValueAsString(UserConfigController.toVO(entity(), CRYPTO));
-        String saveJson = mapper().writeValueAsString(UserConfigController.toVO(entity(), CRYPTO, 0));
+        String getJson = mapper().writeValueAsString(
+                UserConfigController.toVO(entity(), CRYPTO, RULES));
+        String saveJson = mapper().writeValueAsString(
+                UserConfigController.toVO(entity(), CRYPTO, RULES, 0));
 
         assertThat(getJson).doesNotContain("existing_course_count");
         assertThat(saveJson).contains("\"existing_course_count\":0");
+    }
+
+    @Test
+    @DisplayName("has_byok_config 由服务端完整配置判定，部分配置不算已配置")
+    void hasByokConfigReflectsCompleteChatConfig() {
+        UserConfigEntity complete = entity();
+        complete.setChatProvider("DEEPSEEK");
+        complete.setChatBaseUrl("https://api.deepseek.com/v1");
+        complete.setChatModel("deepseek-chat");
+        complete.setChatApiKeyCipher(CRYPTO.encrypt("sk-1234567890abcdef8a9f"));
+        assertThat(UserConfigController.toVO(complete, CRYPTO, RULES).hasByokConfig()).isTrue();
+
+        UserConfigEntity partial = entity();
+        partial.setChatProvider("DEEPSEEK");
+        partial.setChatModel("deepseek-chat");
+        assertThat(UserConfigController.toVO(partial, CRYPTO, RULES).hasByokConfig()).isFalse();
     }
 
     @Test

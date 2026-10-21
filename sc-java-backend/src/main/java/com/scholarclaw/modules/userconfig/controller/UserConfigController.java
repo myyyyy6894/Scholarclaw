@@ -89,7 +89,7 @@ public class UserConfigController {
     /** `API-USER-001`：查询当前用户配置与脱敏密钥视图。 */
     @GetMapping("/config")
     public Result<UserConfigVO> getCurrentUserConfig() {
-        return Result.ok("操作成功", toVO(currentEntity(), cryptoService));
+        return Result.ok("操作成功", toVO(currentEntity(), cryptoService, modelConfigRules));
     }
 
     /** `API-USER-002`：模型连通性与真实维度探测（无副作用，不写库）。 */
@@ -245,7 +245,8 @@ public class UserConfigController {
                         request.chatProvider(), request.chatBaseUrl(), request.chatModel(), chatCipher,
                         request.defaultEmbeddingProvider(), request.embeddingBaseUrl(),
                         request.defaultEmbeddingModel(), outcome.actualDim(), embeddingCipher));
-        return Result.ok("模型配置已保存", toVO(updated, cryptoService, EXISTING_COURSE_COUNT));
+        return Result.ok("模型配置已保存",
+                toVO(updated, cryptoService, modelConfigRules, EXISTING_COURSE_COUNT));
     }
 
     /** `API-USER-004`：更新个人偏好与 IM 绑定（组 B 偏好列）。 */
@@ -270,7 +271,7 @@ public class UserConfigController {
         UserConfigEntity updated = userConfigService.updatePreferences(
                 userId, request.timezone(), dndStart, dndEnd,
                 platform == null ? null : platform.toUpperCase(Locale.ROOT), imUid);
-        return Result.ok("偏好设置已更新", toVO(updated, cryptoService));
+        return Result.ok("偏好设置已更新", toVO(updated, cryptoService, modelConfigRules));
     }
 
     /** `API-USER-005`：销毁已保存的 API Key（幂等，重复调用同样成功）。 */
@@ -297,7 +298,7 @@ public class UserConfigController {
                     "target 取值必须为 ALL、CHAT 或 EMBEDDING。");
         }
         UserConfigEntity updated = userConfigService.clearApiKeys(userId, clearChat, clearEmbedding);
-        return Result.ok("已销毁保存的 API Key", toVO(updated, cryptoService));
+        return Result.ok("已销毁保存的 API Key", toVO(updated, cryptoService, modelConfigRules));
     }
 
     private UserConfigEntity currentEntity() {
@@ -394,8 +395,9 @@ public class UserConfigController {
     private static final DateTimeFormatter TIMESTAMP_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
 
-    static UserConfigVO toVO(UserConfigEntity entity, AesGcmCryptoService cryptoService) {
-        return toVO(entity, cryptoService, null);
+    static UserConfigVO toVO(UserConfigEntity entity, AesGcmCryptoService cryptoService,
+                             ModelConfigRules modelConfigRules) {
+        return toVO(entity, cryptoService, modelConfigRules, null);
     }
 
     /**
@@ -404,7 +406,7 @@ public class UserConfigController {
      * @param existingCourseCount 仅 `API-USER-003` 返回；`API-USER-001` 传 null，字段被整体省略
      */
     static UserConfigVO toVO(UserConfigEntity entity, AesGcmCryptoService cryptoService,
-                             Integer existingCourseCount) {
+                             ModelConfigRules modelConfigRules, Integer existingCourseCount) {
         String chatKeyMasked = masked(entity.getChatApiKeyCipher(), cryptoService);
         String embeddingKeyMasked = masked(entity.getEmbeddingApiKeyCipher(), cryptoService);
         return new UserConfigVO(
@@ -427,6 +429,7 @@ public class UserConfigController {
                 entity.getBoundImPlatform(),
                 entity.getBoundImUid(),
                 formatTimestamp(entity.getUpdatedAt(), entity.getTimezone()),
+                modelConfigRules.isChatConfigValid(entity),
                 existingCourseCount);
     }
 

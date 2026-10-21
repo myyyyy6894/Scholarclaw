@@ -49,6 +49,11 @@ export function createModelForm(config?: UserConfig | null): ModelConfigFormStat
 
 export class ModelFormValidationError extends Error {}
 
+/** 服务端是否已有完整有效的对话模型配置；不得只看 `chat_provider` 是否存在。 */
+export function isModelConfigured(config: UserConfig | null | undefined): boolean {
+  return config?.has_byok_config === true
+}
+
 /** 客户端必填校验；服务端仍会做完整校验（长度、SSRF 白名单、Key 规则）。 */
 export function validateModelForm(form: ModelConfigFormState): void {
   assertFilled(form.chatBaseUrl, '对话模型 Base URL')

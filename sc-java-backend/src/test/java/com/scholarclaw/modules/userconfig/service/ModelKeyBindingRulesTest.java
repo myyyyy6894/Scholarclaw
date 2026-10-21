@@ -61,6 +61,27 @@ class ModelKeyBindingRulesTest {
     }
 
     @Test
+    @DisplayName("模型名仅大小写变化也必须拒绝复用旧 Key")
+    void rejectsCaseOnlyModelChange() {
+        assertThatThrownBy(() -> rules.requireSameTarget(
+                "DEEPSEEK", "https://api.deepseek.com/v1", "deepseek-chat",
+                "DEEPSEEK", "https://api.deepseek.com/v1", "DeepSeek-Chat"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> org.assertj.core.api.Assertions
+                        .assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    @DisplayName("模型名 trim 后完全一致仍允许复用")
+    void trimsModelNameBeforeComparison() {
+        assertThatCode(() -> rules.requireSameTarget(
+                "DEEPSEEK", "https://api.deepseek.com/v1", " deepseek-chat ",
+                "DEEPSEEK", "https://api.deepseek.com/v1", "deepseek-chat"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     @DisplayName("无法解析 origin 时不视为相同（不能放行到未知目标）")
     void rejectsUnparseableOrigin() {
         assertThatThrownBy(() -> rules.requireSameTarget(

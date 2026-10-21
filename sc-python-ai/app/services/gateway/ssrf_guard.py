@@ -144,10 +144,15 @@ def _validate_structure(
     if _is_metadata_literal(host):
         raise BaseUrlRejectedError()
 
-    # ---------- 第二层：白名单只豁免"本地/私有地址 + http" ----------
+    # ---------- 第二层：白名单只豁免"本地/私有/回环地址 + http" ----------
     origin = f"{scheme}://{_format_host(host)}{f':{port}' if port else ''}"
     whitelisted = allow_local and origin in {item.lower() for item in allowed_origins}
-    if not whitelisted:
+    if whitelisted:
+        # 白名单不是“任意地址放行”：只允许 http，且解析结果必须全部是本地/私有/回环地址
+        # （DNS 结果在 _check_resolved 中逐条校验；公网地址即使命中白名单也拒绝）。
+        if scheme != "http":
+            raise BaseUrlRejectedError()
+    else:
         if scheme != "https":
             raise BaseUrlRejectedError()
         if port not in (None, *PUBLIC_ALLOWED_PORTS):
@@ -186,30 +191,53 @@ def _has_control_character(value: str) -> bool:
     return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value)
 
 
+#: 共享地址空间（CGNAT）：`is_private` 在部分 Python 版本中为 False，显式拒绝。
+SHARED_ADDRESS_NETWORKS = (ipaddress.ip_network("100.64.0.0/10"),)
+
+
+def _normalize_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """把 IPv4-mapped IPv6（`::ffff:100.100.100.200`）还原为 IPv4 再判定。"""
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
 def _is_metadata_literal(host: str) -> bool:
     if host in METADATA_IPS:
         return True
     try:
-        address = ipaddress.ip_address(host)
+        address = _normalize_address(ipaddress.ip_address(host))
     except ValueError:
         return False
-    # IPv4/IPv6 链路本地（169.254.0.0/16、fe80::/10）不可能是合法模型地址
-    return address.is_link_local
+    # IPv4/IPv6 链路本地（169.254.0.0/16、fe80::/10）不可能是合法模型地址；
+    # IPv4-mapped 形式必须先还原，否则 ::ffff:169.254.169.254 会漏判。
+    return str(address) in METADATA_IPS or address.is_link_local
 
 
 def _is_hard_denied_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """元数据与链路本地地址：白名单也不能放行。回环/私网不在其中（白名单可显式放行）。"""
-    return str(address) in METADATA_IPS or address.is_link_local
+    normalized = _normalize_address(address)
+    return str(normalized) in METADATA_IPS or normalized.is_link_local
 
 
 def _check_resolved(
     addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...],
     whitelisted: bool,
 ) -> None:
+    if not addresses:
+        raise BaseUrlRejectedError()
     for address in addresses:
-        if _is_hard_denied_ip(address):
+        normalized = _normalize_address(address)
+        # 硬拒绝项永远优先：元数据/链路本地地址即使命中白名单也不放行。
+        if _is_hard_denied_ip(normalized):
             raise BaseUrlRejectedError()
-        if not whitelisted and _is_internal(address):
+        if whitelisted:
+            # 白名单命中后仍逐条检查全部 DNS 结果：任一公网地址即拒绝，不能只信第一条。
+            if not _is_internal(normalized):
+                raise BaseUrlRejectedError()
+        elif _is_internal(normalized):
             raise BaseUrlRejectedError()
 
 
@@ -264,11 +292,16 @@ def _addresses_from(
 
 
 def _is_internal(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    normalized = _normalize_address(address)
     return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
+        normalized.is_private
+        or normalized.is_loopback
+        or normalized.is_link_local
+        or normalized.is_reserved
+        or normalized.is_multicast
+        or normalized.is_unspecified
+        or (
+            isinstance(normalized, ipaddress.IPv4Address)
+            and any(normalized in network for network in SHARED_ADDRESS_NETWORKS)
+        )
     )

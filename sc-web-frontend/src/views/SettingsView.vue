@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -15,13 +15,13 @@ import type {
   ChatProvider,
   ClearKeysTarget,
   EmbeddingProvider,
-  ModelProbeResult,
   UserConfig,
 } from '@/api/user-config'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import {
   createModelForm,
+  isModelConfigured,
   isProbeOutcomeSuccessful,
   keyStatusLabel,
   ModelFormValidationError,
@@ -31,6 +31,7 @@ import {
   validateProbeSection,
 } from '@/views/settings/model-config-form'
 import type { ModelConfigFormState, SingleProbeType } from '@/views/settings/model-config-form'
+import { useModelProbeResults } from '@/views/settings/use-model-probe-results'
 import {
   createPreferencesForm,
   PreferencesValidationError,
@@ -53,16 +54,14 @@ const loadError = ref('')
 const config = ref<UserConfig | null>(null)
 
 const modelForm = ref<ModelConfigFormState>(createModelForm())
+const { chatProbe, embeddingProbe, savedHint } = useModelProbeResults(modelForm)
 const prefsForm = ref<PreferencesFormState>(createPreferencesForm())
 
 const savingModel = ref(false)
 const savingPrefs = ref(false)
 const probingChat = ref(false)
 const probingEmbedding = ref(false)
-const chatProbe = ref<ModelProbeResult | null>(null)
-const embeddingProbe = ref<ModelProbeResult | null>(null)
 const clearingTarget = ref<ClearKeysTarget | null>(null)
-const savedHint = ref('')
 
 const CHAT_PROVIDERS: Array<{ value: ChatProvider; label: string }> = [
   { value: 'OPENAI_COMPATIBLE', label: 'OpenAI 兼容' },
@@ -94,38 +93,7 @@ const embeddingKeyPlaceholder = computed(() =>
     : '请输入 Embedding API Key',
 )
 
-const hasAnyConfig = computed(
-  () => config.value?.chat_provider !== null && config.value?.chat_provider !== undefined,
-)
-
-// 探测结果只对“产生它时的表单值”有效：任何相关字段变更都必须清空，
-// 否则用户改完地址/模型/Key 后仍会看到旧的“连接成功”，把无效配置伪装成已验证。
-watch(
-  [
-    () => modelForm.value.chatProvider,
-    () => modelForm.value.chatBaseUrl,
-    () => modelForm.value.chatModel,
-    () => modelForm.value.chatApiKey,
-  ],
-  () => {
-    chatProbe.value = null
-  },
-)
-
-watch(
-  [
-    () => modelForm.value.embeddingProvider,
-    () => modelForm.value.embeddingBaseUrl,
-    () => modelForm.value.embeddingModel,
-    () => modelForm.value.embeddingApiKey,
-    () => modelForm.value.reuseChatApiKey,
-    // 复用模式下 Embedding 的 Key 来源是对话 Key，改它同样要让 Embedding 探测结果失效
-    () => modelForm.value.chatApiKey,
-  ],
-  () => {
-    embeddingProbe.value = null
-  },
-)
+const hasAnyConfig = computed(() => isModelConfigured(config.value))
 
 onMounted(() => {
   void loadConfig()

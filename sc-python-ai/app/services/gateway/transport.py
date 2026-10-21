@@ -8,7 +8,8 @@
 * 把上游失败分类为 `app.core.exceptions` 中的确定性异常，**不把上游响应体原文当异常消息抛出**
   （响应体可能回显凭据或包含不可信内容）；
 * 拒绝把 `3xx` 当作成功：重定向一律判为 `E-SYS-02`，避免绕过 `ssrf_guard` 的
-  URL/IP 校验（TASK-203/204；网关的完整重试/分类策略属 TASK-301）。
+  URL/IP 校验（TASK-203/204；网关的完整重试/分类策略属 TASK-301）；
+* **只把 HTTP `200` 当作成功**：`201/202/204/206` 等其他 2xx 统一 `UPSTREAM_MODEL_ERROR`。
 
 本模块不含任何模型语义（探测/对话/向量化属 TASK-301/302），也不解析响应体。
 """
@@ -41,6 +42,9 @@ BACKOFF_SECONDS: tuple[float, ...] = (1.0, 3.0)
 
 #: 上游返回非预期状态码时的可读提示（错误码仍取 `UPSTREAM_MODEL_ERROR`）。
 UNEXPECTED_UPSTREAM_MESSAGE = "上游模型返回了未预期的状态，请检查模型名称与请求参数。"
+
+#: 非 200 的 2xx（201/202/204/206 等）不视为成功：探测只接受标准 200 JSON 响应。
+NON_200_SUCCESS_MESSAGE = "上游模型返回了非 200 的成功状态，无法识别响应。"
 
 SleepFunction = Callable[[float], Awaitable[None]]
 
@@ -87,6 +91,11 @@ def classify_upstream_failure(status_code: int) -> AiEngineError:
     return NonRetryableAiError(AiErrorCode.UPSTREAM_MODEL_ERROR, UNEXPECTED_UPSTREAM_MESSAGE)
 
 
+def non_200_success_error() -> AiEngineError:
+    """非 200 的 2xx（201/202/204/206 等）统一按上游错误处理，不当作成功。"""
+    return UpstreamModelError(NON_200_SUCCESS_MESSAGE, retryable=False)
+
+
 async def request_with_retry(
     client: httpx.AsyncClient,
     method: str,
@@ -118,17 +127,19 @@ async def request_with_retry(
         if 300 <= response.status_code < 400:
             raise BaseUrlRejectedError()
 
-        if response.status_code < 400:
-            return response
+        if response.status_code != 200:
+            if response.status_code < 300:
+                raise non_200_success_error()
+            failure = classify_upstream_failure(response.status_code)
+            # 重试判定统一使用 RETRYABLE_UPSTREAM_STATUS（429/502/503/504），
+            # 不依赖异常类型自带的 retryable 标记，避免 500/501/505 被误重试。
+            if response.status_code in RETRYABLE_UPSTREAM_STATUS and attempt < len(BACKOFF_SECONDS):
+                await sleep(BACKOFF_SECONDS[attempt])
+                attempt += 1
+                continue
+            raise failure
 
-        failure = classify_upstream_failure(response.status_code)
-        # 重试判定统一使用 RETRYABLE_UPSTREAM_STATUS（429/502/503/504），
-        # 不依赖异常类型自带的 retryable 标记，避免 500/501/505 被误重试。
-        if response.status_code in RETRYABLE_UPSTREAM_STATUS and attempt < len(BACKOFF_SECONDS):
-            await sleep(BACKOFF_SECONDS[attempt])
-            attempt += 1
-            continue
-        raise failure
+        return response
 
 
 def safe_url_for_log(url: str) -> str:

@@ -154,7 +154,10 @@ class SsrfSafeModelGateway:
                     if 300 <= status < 400:
                         # 重定向视为拒绝：既防 SSRF 绕行，也避免把 302 当成功
                         raise BaseUrlRejectedError()
-                    if status >= 400:
+                    if status != 200:
+                        if status < 300:
+                            # 201/202/204/206 等非 200 的 2xx 不是探测契约里的成功响应
+                            raise transport_module.non_200_success_error()
                         failure = transport_module.classify_upstream_failure(status)
                         # 只有 429/502/503/504 可重试；500/501/505 等其余 5xx 只请求一次。
                         if (

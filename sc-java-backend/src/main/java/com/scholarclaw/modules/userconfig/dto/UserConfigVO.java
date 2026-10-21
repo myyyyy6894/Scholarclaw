@@ -38,5 +38,6 @@ public record UserConfigVO(
         String boundImPlatform,
         String boundImUid,
         String updatedAt,
+        boolean hasByokConfig,
         @JsonInclude(JsonInclude.Include.NON_NULL) Integer existingCourseCount) {
 }

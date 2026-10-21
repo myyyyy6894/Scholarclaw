@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>允许的复用边界：</b>
  * <ul>
- *   <li>`use_saved_key=true`：provider、规范化 origin、模型名**全部一致**才允许；</li>
+ *   <li>`use_saved_key=true`：provider（可规范化大小写）、规范化 origin、模型名（`trim()` 后精确且大小写敏感）**全部一致**才允许；</li>
  *   <li>`reuse_chat_api_key=true`：产品明确允许把对话 Key 复用于 Embedding 模型，因此只要求
  *       provider 与规范化 origin 一致；模型名可以不同（这是唯一被产品明确允许的例外）；</li>
  *   <li>本次请求**新输入**的 Key 不受此规则约束（它本来就是用户为新目标显式提供的）。</li>
@@ -51,12 +51,12 @@ public class ModelKeyBindingRules {
     boolean isSameTarget(String savedProvider, String savedBaseUrl, String savedModel,
                          String submittedProvider, String submittedBaseUrl, String submittedModel) {
         return isSameProviderAndOrigin(savedProvider, savedBaseUrl, submittedProvider, submittedBaseUrl)
-                && sameText(savedModel, submittedModel);
+                && sameModelName(savedModel, submittedModel);
     }
 
     boolean isSameProviderAndOrigin(String savedProvider, String savedBaseUrl,
                                     String submittedProvider, String submittedBaseUrl) {
-        if (!sameText(savedProvider, submittedProvider)) {
+        if (!sameProvider(savedProvider, submittedProvider)) {
             return false;
         }
         String savedOrigin = ModelConfigRules.originOf(savedBaseUrl);
@@ -65,9 +65,25 @@ public class ModelKeyBindingRules {
         return !savedOrigin.isEmpty() && savedOrigin.equals(submittedOrigin);
     }
 
-    private static boolean sameText(String left, String right) {
+    /** Provider 可规范化大小写（存储/请求的写法差异不应导致误拒）。 */
+    private static boolean sameProvider(String left, String right) {
         return left != null && right != null
                 && left.trim().toUpperCase(Locale.ROOT).equals(right.trim().toUpperCase(Locale.ROOT));
+    }
+
+    /**
+     * 模型名：`trim()` 后**精确、大小写敏感**比较。
+     *
+     * <p>`deepseek-chat` 与 `DeepSeek-Chat` 在上游可能解析为不同模型；仅改大小写也视为
+     * 更换目标，必须重新输入 Key，不能复用旧凭据。
+     */
+    private static boolean sameModelName(String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        String normalizedLeft = left.trim();
+        String normalizedRight = right.trim();
+        return !normalizedLeft.isEmpty() && normalizedLeft.equals(normalizedRight);
     }
 
     private static BusinessException violation() {

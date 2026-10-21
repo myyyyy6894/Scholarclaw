@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { nextTick, ref } from 'vue'
 
 import type { ModelProbeResult, UserConfig } from '@/api/user-config'
 import {
   createModelForm,
+  isModelConfigured,
   isProbeOutcomeSuccessful,
   keyStatusLabel,
   ModelFormValidationError,
@@ -11,6 +13,7 @@ import {
   validateModelForm,
   validateProbeSection,
 } from '@/views/settings/model-config-form'
+import { useModelProbeResults } from '@/views/settings/use-model-probe-results'
 import {
   createPreferencesForm,
   PreferencesValidationError,
@@ -38,6 +41,7 @@ const CONFIG: UserConfig = {
   embedding_api_key_masked: 'sk-****3c2d',
   default_embedding_model: 'BAAI/bge-m3',
   default_embedding_dim: 1024,
+  has_byok_config: true,
   timezone: 'Asia/Shanghai',
   dnd_start_time: '23:30:00',
   dnd_end_time: '07:30:00',
@@ -104,6 +108,22 @@ describe('model config form', () => {
 
     expect(request.use_saved_key).toBe(false)
     expect('api_key' in request).toBe(false)
+  })
+
+  it('无 Key 重新探测不会伪装成使用已保存 Key', () => {
+    const form = createModelForm({ ...CONFIG, has_chat_api_key: false, chat_api_key_masked: null })
+
+    const request = toProbeRequest(form, 'CHAT')
+
+    expect(request.use_saved_key).toBe(false)
+    expect(request.api_key).toBeUndefined()
+  })
+
+  it('“已配置模型”以服务端 has_byok_config 为准，部分配置不算已配置', () => {
+    expect(isModelConfigured(CONFIG)).toBe(true)
+    expect(isModelConfigured({ ...CONFIG, has_byok_config: false })).toBe(false)
+    expect(isModelConfigured({ ...CONFIG, has_byok_config: false, chat_base_url: null })).toBe(false)
+    expect(isModelConfigured(null)).toBe(false)
   })
 
   it('复用对话 Key 时，Embedding 探测使用本次输入的对话 Key', () => {
@@ -185,6 +205,48 @@ describe('model config form', () => {
     }
 
     expect(isProbeOutcomeSuccessful(outcome, 'CHAT')).toBe(true)
+  })
+})
+
+describe('probe result invalidation', () => {
+  const SUCCESS: ModelProbeResult = {
+    reachable: true,
+    probe_type: 'CHAT',
+    model_name: 'deepseek-chat',
+    actual_dim: null,
+    latency_ms: 10,
+  }
+
+  it('任一相关字段变更清空对应探测结果与保存提示', async () => {
+    const form = ref(createModelForm(CONFIG))
+    const { chatProbe, embeddingProbe, savedHint } = useModelProbeResults(form)
+    chatProbe.value = { ...SUCCESS }
+    embeddingProbe.value = { ...SUCCESS, probe_type: 'EMBEDDING', actual_dim: 8 }
+    savedHint.value = '已保存'
+
+    form.value.chatModel = 'DeepSeek-Chat'
+    await nextTick()
+
+    expect(chatProbe.value).toBeNull()
+    expect(embeddingProbe.value).not.toBeNull()
+    expect(savedHint.value).toBe('')
+
+    form.value.embeddingModel = 'another-embedding'
+    await nextTick()
+
+    expect(embeddingProbe.value).toBeNull()
+  })
+
+  it('复用对话 Key 时，修改对话 Key 也会让 Embedding 探测结果失效', async () => {
+    const form = ref(createModelForm(CONFIG))
+    form.value.reuseChatApiKey = true
+    const { embeddingProbe } = useModelProbeResults(form)
+    embeddingProbe.value = { ...SUCCESS, probe_type: 'EMBEDDING', actual_dim: 8 }
+
+    form.value.chatApiKey = 'sk-new-chat-key'
+    await nextTick()
+
+    expect(embeddingProbe.value).toBeNull()
   })
 })
 

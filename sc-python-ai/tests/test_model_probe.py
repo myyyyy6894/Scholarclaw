@@ -99,13 +99,15 @@ def stub_model_server() -> Iterator[str]:
         thread.join(timeout=5)
 
 
-def _settings(base_url: str, *, read_timeout: str = "2"):
-    return load_settings({
-        "SC_ALLOW_LOCAL_MODEL_BASE_URL": "true",
-        "SC_LOCAL_MODEL_ALLOWED_ORIGINS": base_url.rsplit("/v1", 1)[0],
+def _settings(base_url: str, *, read_timeout: str = "2", allow_local: bool = True):
+    env = {
         "SC_MODEL_CONNECT_TIMEOUT_SECONDS": "2",
         "SC_MODEL_READ_TIMEOUT_SECONDS": read_timeout,
-    })
+    }
+    if allow_local:
+        env["SC_ALLOW_LOCAL_MODEL_BASE_URL"] = "true"
+        env["SC_LOCAL_MODEL_ALLOWED_ORIGINS"] = base_url.rsplit("/v1", 1)[0]
+    return load_settings(env)
 
 
 def _config(base_url: str, *, api_key: str | None = "sk-test-key") -> ModelEndpointConfig:
@@ -225,7 +227,7 @@ async def test_slow_dns_is_covered_by_both_total_budget(monkeypatch: pytest.Monk
 
     base = "https://api.example.com/v1"
     with pytest.raises(UpstreamTimeoutError):
-        await probe_models(_settings(base), "BOTH", _config(base), _config(base))
+        await probe_models(_settings(base, allow_local=False), "BOTH", _config(base), _config(base))
 
 
 @pytest.mark.asyncio
@@ -284,6 +286,37 @@ async def test_missing_config_is_validation_error(stub_model_server: str) -> Non
         await probe_models(_settings(stub_model_server), "BOTH", _config(stub_model_server), None)
 
     assert excinfo.value.error_code == AiErrorCode.VALIDATION_ERROR
+    assert _StubHandler.received_paths == [], "缺少配置时不得发起任何出站请求"
+
+
+@pytest.mark.asyncio
+async def test_both_missing_chat_config_fails_before_any_request(stub_model_server: str) -> None:
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(_settings(stub_model_server), "BOTH", None, _config(stub_model_server))
+
+    assert excinfo.value.error_code == AiErrorCode.VALIDATION_ERROR
+    assert _StubHandler.received_paths == []
+
+
+@pytest.mark.asyncio
+async def test_chat_response_without_message_is_not_success(stub_model_server: str) -> None:
+    _StubHandler.body = {"choices": [{}]}
+
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(_settings(stub_model_server), "CHAT", _config(stub_model_server), None)
+
+    assert excinfo.value.error_code == AiErrorCode.UPSTREAM_MODEL_ERROR
+
+
+@pytest.mark.asyncio
+async def test_embedding_with_non_numeric_vector_is_not_success(stub_model_server: str) -> None:
+    _StubHandler.body = {"data": [{"embedding": ["not-a-number"]}]}
+
+    with pytest.raises(NonRetryableAiError) as excinfo:
+        await probe_models(
+            _settings(stub_model_server), "EMBEDDING", None, _config(stub_model_server))
+
+    assert excinfo.value.error_code == AiErrorCode.UPSTREAM_MODEL_ERROR
 
 
 @pytest.mark.asyncio

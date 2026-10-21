@@ -1,10 +1,12 @@
 """受控模型网关层（`02` §5.1 第 4 层 `SsrfSafeModelGateway`）。
 
-TASK-102 只建立**传输基础**（`transport.py`）：出站客户端构造、超时、退避重试、
-失败分类、禁止跟随重定向、日志用 URL 脱敏。
+包含：
 
-**明确留给 TASK-301 的部分**：`SsrfSafeModelGateway` 本体及其 URL/IP 7 步 SSRF 校验
-（协议与端口白名单、云元数据地址 `169.254.169.254`、容器服务名与内网网段、
-本地 Ollama 白名单双开关、DNS 解析后 IP 复核），以及具体的模型请求方法（探测 / 对话 / 向量化）。
-本任务不创建该类，避免出现"名为 SsrfSafe 却没有 SSRF 校验"的误导性骨架。
+* `transport.py`：出站客户端构造、超时、退避重试、失败分类、禁止跟随重定向、
+  日志用 URL 脱敏；
+* `ssrf_guard.py`：每次出站前的同步/异步 DNS 校验（硬拒绝 + 本地白名单 + 全部解析结果检查）；
+* `ssrf_safe_model_gateway.py`：`SsrfSafeModelGateway` 本体、2 MiB 流式上限与显式重试策略；
+* `model_probe.py`：CHAT / EMBEDDING / BOTH 探测、真实维度与响应结构校验。
+
+所有外部模型出站必须经 :class:`SsrfSafeModelGateway`，不得另建裸 `httpx` 客户端。
 """

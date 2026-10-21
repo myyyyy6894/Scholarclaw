@@ -30,6 +30,9 @@ class BaseUrlSecurityValidatorTest {
             "http://sc-mysql:3306, http://127.0.0.1:3306, http://100.100.100.200, "
                     + "http://[fd00:ec2::254], http://[fe80::1], "
                     + "http://127.0.0.1:11434, http://[::1]:11434");
+    /** 误把公网地址写进白名单：白名单只能放行本地/私有/回环 + http。 */
+    private static final BaseUrlSecurityValidator PUBLIC_IN_WHITELIST = new BaseUrlSecurityValidator(
+            true, "http://api.deepseek.com, https://api.deepseek.com, http://127.0.0.1:11434");
 
     @Test
     @DisplayName("公网 https 443 / 8443 放行")
@@ -72,6 +75,10 @@ class BaseUrlSecurityValidatorTest {
             "https://100.100.100.200/latest/meta-data",
             "https://[fd00:ec2::254]/",
             "https://[fe80::1]/",
+            "https://[::ffff:100.100.100.200]/",
+            "https://[::ffff:169.254.169.254]/",
+            "https://[::ffff:127.0.0.1]/",
+            "https://100.64.0.1/",
             "https://127.0.0.1:443/",
             "https://10.0.0.8:443/",
             "https://172.16.0.5:443/",
@@ -134,6 +141,23 @@ class BaseUrlSecurityValidatorTest {
                 .doesNotThrowAnyException();
         assertThatCode(() -> POISONED_WHITELIST.validate("http://[::1]:11434"))
                 .as("回环 IPv6 不是元数据硬拒绝项，白名单可显式放行")
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("白名单只放行本地/私有/回环地址与 http；公网地址即使命中白名单也拒绝")
+    void whitelistOnlyAllowsLocalHttp() {
+        assertThatThrownBy(() -> PUBLIC_IN_WHITELIST.validate("http://api.deepseek.com"))
+                .as("公网 http 地址命中白名单也不能放行")
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> org.assertj.core.api.Assertions
+                        .assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.E_SYS_02));
+        assertThatThrownBy(() -> PUBLIC_IN_WHITELIST.validate("https://api.deepseek.com"))
+                .as("白名单只允许 http")
+                .isInstanceOf(BusinessException.class);
+
+        assertThatCode(() -> PUBLIC_IN_WHITELIST.validate("http://127.0.0.1:11434"))
                 .doesNotThrowAnyException();
     }
 

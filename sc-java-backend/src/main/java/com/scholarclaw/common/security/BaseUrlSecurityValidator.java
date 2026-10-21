@@ -116,9 +116,17 @@ public class BaseUrlSecurityValidator {
             throw reject("指向云元数据、链路本地或回环地址");
         }
 
-        // ---------- 第二层：白名单只豁免"本地/私有地址 + http" ----------
+        // ---------- 第二层：白名单只豁免"本地/私有/回环地址 + http" ----------
         String origin = scheme + "://" + originHost + (port > 0 ? ":" + port : "");
         if (allowLocalModelBaseUrl && allowedOrigins.contains(origin)) {
+            // 白名单不是“任意地址放行”：只允许 http，且主机必须是本地/私有/回环字面量。
+            // 公网域名即使被误配进白名单也必须拒绝（DNS 解析后的复核由 Python 侧完成）。
+            if (!"http".equals(scheme)) {
+                throw reject("白名单只允许 http");
+            }
+            if (!isInternalLiteral(checkHost)) {
+                throw reject("白名单只允许本地/私有/回环地址");
+            }
             log.debug("Base URL 命中本地模型白名单（硬拒绝项已先行排除）");
             return;
         }
@@ -151,11 +159,12 @@ public class BaseUrlSecurityValidator {
      * **回环地址不在此硬拒绝**——本地 Ollama 白名单需要能显式放行回环。
      */
     static boolean isMetadataLiteral(String host) {
-        if ("169.254.169.254".equals(host) || "100.100.100.200".equals(host)
-                || "fd00:ec2::254".equalsIgnoreCase(host)) {
+        String normalized = normalizeMappedIpv4(host);
+        if ("169.254.169.254".equals(normalized) || "100.100.100.200".equals(normalized)
+                || "fd00:ec2::254".equalsIgnoreCase(normalized)) {
             return true;
         }
-        Matcher matcher = IPV4.matcher(host);
+        Matcher matcher = IPV4.matcher(normalized);
         if (matcher.matches()) {
             int a = Integer.parseInt(matcher.group(1));
             int b = Integer.parseInt(matcher.group(2));
@@ -165,12 +174,46 @@ public class BaseUrlSecurityValidator {
             // 只对 IPv6 字面量调用；含冒号的输入不会触发 DNS
             try {
                 InetAddress address = InetAddress.getByName(host);
+                byte[] bytes = address.getAddress();
+                if (bytes.length == 4) {
+                    return isMetadataLiteral(formatIpv4(bytes));
+                }
+                if (bytes.length == 16 && isIpv4Mapped(bytes)) {
+                    // ::ffff:100.100.100.200 / ::ffff:a9fe:a9fe 等形式先还原为 IPv4
+                    return isMetadataLiteral(formatIpv4(Arrays.copyOfRange(bytes, 12, 16)));
+                }
                 return address.isLinkLocalAddress();
             } catch (UnknownHostException e) {
                 return false;
             }
         }
         return false;
+    }
+
+    /** `::ffff:100.100.100.200` 这类点分 IPv4-mapped 字面量还原为 IPv4。 */
+    private static String normalizeMappedIpv4(String host) {
+        String lower = host.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("::ffff:") && lower.indexOf('.') > "::ffff:".length()) {
+            return lower.substring("::ffff:".length());
+        }
+        return lower;
+    }
+
+    private static boolean isIpv4Mapped(byte[] bytes) {
+        if (bytes.length != 16) {
+            return false;
+        }
+        for (int i = 0; i < 10; i++) {
+            if (bytes[i] != 0) {
+                return false;
+            }
+        }
+        return (bytes[10] & 0xFF) == 0xFF && (bytes[11] & 0xFF) == 0xFF;
+    }
+
+    private static String formatIpv4(byte[] bytes) {
+        return (bytes[0] & 0xFF) + "." + (bytes[1] & 0xFF) + "."
+                + (bytes[2] & 0xFF) + "." + (bytes[3] & 0xFF);
     }
 
     /**

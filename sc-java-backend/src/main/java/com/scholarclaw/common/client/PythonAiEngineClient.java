@@ -47,6 +47,9 @@ public class PythonAiEngineClient {
     public static final String PROBE_PATH = "/internal/ai/v1/model/probe";
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
 
+    /** 内部调用连接超时上限：超过 5s 会挤压 Java 的 10s 读取预算（`04` §4.9.1）。 */
+    static final long MAX_CONNECT_TIMEOUT_MILLIS = 5_000L;
+
     private final String baseUrl;
     private final String internalToken;
     private final HttpClient httpClient;
@@ -64,10 +67,18 @@ public class PythonAiEngineClient {
         this.defaultReadTimeout = Duration.ofMillis(readTimeoutMillis);
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(connectTimeoutMillis))
+                .connectTimeout(Duration.ofMillis(clampConnectTimeoutMillis(connectTimeoutMillis)))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .proxy(ProxySelector.of(null))
                 .build();
+    }
+
+    /** 连接超时统一钳制到 `(0, 5s]`，避免配置越界挤压 Java → Python 的读取预算。 */
+    static long clampConnectTimeoutMillis(long configuredMillis) {
+        if (configuredMillis <= 0) {
+            return MAX_CONNECT_TIMEOUT_MILLIS;
+        }
+        return Math.min(configuredMillis, MAX_CONNECT_TIMEOUT_MILLIS);
     }
 
     /**

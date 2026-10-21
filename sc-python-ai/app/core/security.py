@@ -22,7 +22,7 @@ from fastapi import Request
 
 from app.core import tracing
 from app.core.config import Settings, get_settings
-from app.core.exceptions import InternalTokenInvalidError
+from app.core.exceptions import AiErrorCode, InternalTokenInvalidError, NonRetryableAiError
 from app.core.logging import get_logger
 
 INTERNAL_TOKEN_HEADER: Final = "X-Internal-Token"
@@ -83,6 +83,18 @@ async def require_internal_token(request: Request) -> None:
     verify_internal_token(request)
 
 
+async def require_internal_identity(request: Request) -> str:
+    """业务内部接口的依赖：合法令牌 + 合法十进制 `X-User-Id`。
+
+    身份头是内部调用契约的一部分（`04` §2.7.1）：缺失、非十进制或超长都返回
+    `400 VALIDATION_ERROR`，不得继续执行探测。健康检查走环回例外，不使用本依赖。
+    """
+    verify_internal_token(request)
+    user_id = _require_user_id(request.headers.get(tracing.USER_ID_HEADER))
+    tracing.bind_user_id(user_id)
+    return user_id
+
+
 async def require_internal_token_or_loopback(request: Request) -> None:
     """健康检查接口的依赖：环回地址免令牌，其余仍需合法令牌。"""
     verify_internal_token(request, allow_loopback=True)
@@ -94,3 +106,15 @@ def _sanitize_user_id(raw: str | None) -> str | None:
         return None
     candidate = raw.strip()
     return candidate if candidate.isdigit() else None
+
+
+def _require_user_id(raw: str | None) -> str:
+    """业务内部接口的严格身份校验：缺失、非十进制或超长一律 400。"""
+    if raw is None:
+        raise NonRetryableAiError(
+            AiErrorCode.VALIDATION_ERROR, "内部请求必须携带 X-User-Id。")
+    candidate = raw.strip()
+    if not candidate.isdigit() or not 1 <= len(candidate) <= 19:
+        raise NonRetryableAiError(
+            AiErrorCode.VALIDATION_ERROR, "X-User-Id 必须为 1~19 位十进制字符串。")
+    return candidate

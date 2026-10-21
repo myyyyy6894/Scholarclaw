@@ -5,6 +5,7 @@ DNS 用 monkeypatch 固定为真实公网 IP（8.8.8.8），测试不依赖外�
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 import time
 
@@ -40,6 +41,10 @@ _DNS_TABLE = {
     "0x7f000001": "127.0.0.1",
     "0177.0.0.1": "127.0.0.1",
     "127.1": "127.0.0.1",
+    "::ffff:100.100.100.200": "100.100.100.200",
+    "::ffff:169.254.169.254": "169.254.169.254",
+    "::ffff:127.0.0.1": "127.0.0.1",
+    "100.64.0.1": "100.64.0.1",
 }
 
 
@@ -99,6 +104,62 @@ def test_whitelist_never_bypasses_hard_denied_targets(url: str) -> None:
 def test_whitelist_still_allows_legal_local_ollama_origins() -> None:
     validate_outbound_url("http://127.0.0.1:11434/v1", allow_local=True, allowed_origins=POISONED)
     validate_outbound_url("http://[::1]:11434/v1", allow_local=True, allowed_origins=POISONED)
+
+
+def test_whitelist_does_not_allow_public_addresses_or_https() -> None:
+    """白名单只放行本地/私有/回环 + http；公网地址即使命中白名单也必须拒绝。"""
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(
+            "http://api.example.com/v1", allow_local=True,
+            allowed_origins=("http://api.example.com",))
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(
+            "https://127.0.0.1:11434/v1", allow_local=True,
+            allowed_origins=("https://127.0.0.1:11434",))
+
+
+def test_whitelist_checks_every_dns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """白名单命中后仍须检查全部解析结果：一条私网 + 一条公网也必须拒绝。"""
+    monkeypatch.setattr(
+        ssrf_guard,
+        "_resolve",
+        lambda _host: (ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("8.8.8.8")),
+    )
+
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(
+            "http://127.0.0.1:11434/v1", allow_local=True,
+            allowed_origins=("http://127.0.0.1:11434",))
+
+
+@pytest.mark.parametrize("url", [
+    "https://[::ffff:100.100.100.200]/",
+    "https://[::ffff:169.254.169.254]/",
+    "https://[::ffff:127.0.0.1]/",
+    "https://100.64.0.1/",
+])
+def test_ipv4_mapped_and_shared_addresses_are_rejected(url: str) -> None:
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(url, allow_local=False, allowed_origins=())
+
+
+def test_hard_denied_mapped_metadata_beats_whitelist() -> None:
+    origin = "http://[::ffff:100.100.100.200]"
+    with pytest.raises(BaseUrlRejectedError):
+        validate_outbound_url(origin, allow_local=True, allowed_origins=(origin,))
+
+
+@pytest.mark.asyncio
+async def test_async_whitelist_checks_every_dns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def mixed_resolve(_host: str):  # noqa: ANN202
+        return (ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("8.8.8.8"))
+
+    monkeypatch.setattr(ssrf_guard, "_resolve_async", mixed_resolve)
+
+    with pytest.raises(BaseUrlRejectedError):
+        await ssrf_guard.validate_outbound_url_async(
+            "http://127.0.0.1:11434/v1", allow_local=True,
+            allowed_origins=("http://127.0.0.1:11434",))
 
 
 @pytest.mark.parametrize("url", [
@@ -225,6 +286,11 @@ def test_local_origin_requires_switch_and_exact_whitelist() -> None:
 def test_unresolvable_host_is_rejected() -> None:
     with pytest.raises(BaseUrlRejectedError):
         validate_outbound_url("https://no-such-host.invalid/v1", allow_local=False, allowed_origins=())
+
+
+def test_public_ipv6_is_not_misclassified_as_shared_ipv4() -> None:
+    assert ssrf_guard._is_internal(
+        ipaddress.ip_address("2001:4860:4860::8888")) is False
 
 
 def test_origin_of_normalizes_scheme_and_host() -> None:

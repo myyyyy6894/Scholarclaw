@@ -7,8 +7,9 @@
 3. 若检测到禁止注入本服务的敏感变量，只告警变量**名**（绝不打印值）；
 4. 注册追踪中间件、统一异常映射与内部接口路由。
 
+**已经接入**：内部令牌鉴权、`/internal/ai/v1/health`、`/internal/ai/v1/model/probe`（TASK-302/303）。
 **尚未接入**（按任务分阶段落地，不建空壳）：RabbitMQ 消费者生命周期（TASK-502）、
-ChromaDB 客户端（TASK-504）、`/model/probe`（TASK-302）、`/agent/route-and-extract`（TASK-706）、
+ChromaDB 客户端（TASK-504）、`/agent/route-and-extract`（TASK-706）、
 `/rag/qa-stream` 与 `/rag/vectors`（TASK-604/605）。
 """
 

@@ -69,14 +69,21 @@ async def probe_models(
     if probe_type not in {"CHAT", "EMBEDDING", "BOTH"}:
         raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "probe_type 取值非法。")
 
+    # 条件必填必须在创建网关/任务、发起任何出站请求之前完成：
+    # BOTH 缺任一配置时返回 400，且不产生任何后台探测。
+    chat_required = _require(chat_config, "chat_config") if probe_type in {"CHAT", "BOTH"} else None
+    embedding_required = (
+        _require(embedding_config, "embedding_config")
+        if probe_type in {"EMBEDDING", "BOTH"}
+        else None
+    )
+
     async with SsrfSafeModelGateway(settings, read_timeout=probe_read_timeout) as gateway:
         if probe_type == "BOTH":
             # BOTH 并行执行，并用总预算覆盖整个探测：DNS、连接、读取任一环节变慢时，
             # 由 wait_for 统一中止并返回 504 UPSTREAM_TIMEOUT，避免撞上 Java 的 10s 读取超时。
-            chat_task = asyncio.create_task(
-                _probe_chat(gateway, _require(chat_config, "chat_config")))
-            embedding_task = asyncio.create_task(
-                _probe_embedding(gateway, _require(embedding_config, "embedding_config")))
+            chat_task = asyncio.create_task(_probe_chat(gateway, chat_required))
+            embedding_task = asyncio.create_task(_probe_embedding(gateway, embedding_required))
             try:
                 chat_reachable, actual_dim = await asyncio.wait_for(
                     asyncio.gather(chat_task, embedding_task),
@@ -93,10 +100,9 @@ async def probe_models(
                 raise
             embedding_reachable = actual_dim > 0
         elif probe_type == "CHAT":
-            chat_reachable = await _probe_chat(gateway, _require(chat_config, "chat_config"))
+            chat_reachable = await _probe_chat(gateway, chat_required)
         else:
-            actual_dim = await _probe_embedding(
-                gateway, _require(embedding_config, "embedding_config"))
+            actual_dim = await _probe_embedding(gateway, embedding_required)
             embedding_reachable = actual_dim > 0
 
     return ProbeOutcome(
@@ -138,6 +144,11 @@ async def _probe_chat(gateway: SsrfSafeModelGateway, config: ModelEndpointConfig
     if not isinstance(choices, list) or not choices:
         raise NonRetryableAiError(
             AiErrorCode.UPSTREAM_MODEL_ERROR, "上游返回结构不符合 OpenAI 兼容对话接口约定。")
+    first = choices[0]
+    message = first.get("message") if isinstance(first, dict) else None
+    if not isinstance(message, dict) or not ({"role", "content"} & message.keys()):
+        raise NonRetryableAiError(
+            AiErrorCode.UPSTREAM_MODEL_ERROR, "上游对话响应缺少 choices[0].message。")
     return True
 
 
@@ -152,4 +163,7 @@ async def _probe_embedding(gateway: SsrfSafeModelGateway, config: ModelEndpointC
     if not isinstance(embedding, list) or not embedding:
         raise NonRetryableAiError(
             AiErrorCode.UPSTREAM_MODEL_ERROR, "上游向量接口未返回有效向量。")
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in embedding):
+        raise NonRetryableAiError(
+            AiErrorCode.UPSTREAM_MODEL_ERROR, "上游向量接口返回了非数值向量。")
     return len(embedding)

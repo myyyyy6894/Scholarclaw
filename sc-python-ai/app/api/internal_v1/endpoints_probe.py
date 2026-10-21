@@ -13,8 +13,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.core.config import get_settings
+from app.core.exceptions import AiErrorCode, NonRetryableAiError
 from app.core.logging import get_logger
-from app.core.security import require_internal_token
+from app.core.security import require_internal_identity
 from app.schemas.common import InternalResponse
 from app.schemas.probe import ModelEndpointPayload, ModelProbeData, ModelProbeRequest
 from app.services.gateway.model_probe import ModelEndpointConfig, probe_models
@@ -43,8 +44,13 @@ def _to_config(payload: ModelEndpointPayload | None) -> ModelEndpointConfig | No
 )
 async def probe(
     body: ModelProbeRequest,
-    _: Annotated[None, Depends(require_internal_token)],
+    header_user_id: Annotated[str, Depends(require_internal_identity)],
 ) -> InternalResponse[ModelProbeData]:
+    if body.user_id != header_user_id:
+        raise NonRetryableAiError(
+            AiErrorCode.VALIDATION_ERROR,
+            "请求体 user_id 与 X-User-Id 不一致，已拒绝探测。",
+        )
     outcome = await probe_models(
         get_settings(),
         body.probe_type,

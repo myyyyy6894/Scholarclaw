@@ -123,6 +123,16 @@ async def _verify_retry_boundaries(base_url: str, handler: type[_MockHandler]) -
             else:
                 _check(f"5xx {status} 应失败", False, "未抛异常")
 
+    for status in (201, 202, 204, 206):
+        handler.status = status
+        handler.calls = 0
+        async with SsrfSafeModelGateway(settings) as gateway:
+            try:
+                await gateway.post_json(endpoint, "/chat/completions", {})
+            except UpstreamModelError as exc:
+                _check(f"非 200 2xx {status} 视为失败", handler.calls == 1
+                       and exc.error_code is AiErrorCode.UPSTREAM_MODEL_ERROR)
+
     for status in (429, 502, 503, 504):
         handler.status = status
         handler.calls = 0
@@ -149,6 +159,17 @@ async def _verify_both_budget(base_url: str, handler: type[_MockHandler]) -> Non
     model_probe_module.BOTH_TOTAL_TIMEOUT_SECONDS = 1.0
     try:
         endpoint = ModelEndpoint("OLLAMA", f"{base_url}/v1", SECRET, "mock-model")
+        handler.calls = 0
+        try:
+            await model_probe_module.probe_models(settings, "BOTH", endpoint, None)
+        except Exception as exc:  # noqa: BLE001 - 只断言错误码与零出站
+            _check("BOTH 缺配置返回 400", getattr(exc, "error_code", None)
+                   is AiErrorCode.VALIDATION_ERROR and handler.calls == 0,
+                   f"error={type(exc).__name__} calls={handler.calls}")
+        else:
+            _check("BOTH 缺配置应失败", False, "未抛异常")
+
+        handler.calls = 0
         started = time.monotonic()
         try:
             await model_probe_module.probe_models(settings, "BOTH", endpoint, endpoint)
@@ -186,6 +207,28 @@ async def _verify_ssrf(base_url: str) -> None:
         _check("SSRF 合法单点不误拦", True)
     except BaseUrlRejectedError as exc:
         _check("SSRF 合法单点不误拦", False, str(exc))
+
+    try:
+        await ssrf_guard.validate_outbound_url_async(
+            "http://api.example.com/v1", allow_local=True,
+            allowed_origins=("http://api.example.com",))
+    except BaseUrlRejectedError:
+        _check("白名单不放行公网地址", True)
+    else:
+        _check("白名单不放行公网地址", False, "未拒绝")
+
+    for url in (
+        "https://[::ffff:100.100.100.200]/",
+        "https://[::ffff:169.254.169.254]/",
+        "https://100.64.0.1/",
+    ):
+        try:
+            await ssrf_guard.validate_outbound_url_async(
+                url, allow_local=False, allowed_origins=())
+        except BaseUrlRejectedError:
+            _check(f"SSRF 拒绝地址变体 {url}", True)
+        else:
+            _check(f"SSRF 拒绝地址变体 {url}", False, "未拒绝")
 
 
 def _verify_trace_and_logs(log_text: str) -> None:

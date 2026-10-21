@@ -68,6 +68,8 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_CHROMADB_BASE_URL = ""
 DEFAULT_MODEL_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_MODEL_READ_TIMEOUT_SECONDS = 30.0
+#: 模型出站连接超时上限（`04` §4.9.1 / `NFR-REL-01`）：超过 5s 会挤压 Java 的 10s 读取预算。
+MAX_MODEL_CONNECT_TIMEOUT_SECONDS = 5.0
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
@@ -118,8 +120,11 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         local_model_allowed_origins=origins,
         storage_raw_path=_read(env, ENV_STORAGE_RAW_PATH, DEFAULT_STORAGE_RAW_PATH),
         log_level=_read(env, ENV_LOG_LEVEL, DEFAULT_LOG_LEVEL).upper(),
-        model_connect_timeout_seconds=_parse_positive_float(
-            env, ENV_MODEL_CONNECT_TIMEOUT_SECONDS, DEFAULT_MODEL_CONNECT_TIMEOUT_SECONDS
+        model_connect_timeout_seconds=min(
+            _parse_positive_float(
+                env, ENV_MODEL_CONNECT_TIMEOUT_SECONDS, DEFAULT_MODEL_CONNECT_TIMEOUT_SECONDS
+            ),
+            MAX_MODEL_CONNECT_TIMEOUT_SECONDS,
         ),
         model_read_timeout_seconds=_parse_positive_float(
             env, ENV_MODEL_READ_TIMEOUT_SECONDS, DEFAULT_MODEL_READ_TIMEOUT_SECONDS

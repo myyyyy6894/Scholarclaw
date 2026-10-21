@@ -71,6 +71,13 @@ def test_non_positive_timeout_is_rejected() -> None:
         config.load_settings({"SC_MODEL_READ_TIMEOUT_SECONDS": "0"})
 
 
+def test_connect_timeout_is_clamped_to_five_seconds() -> None:
+    settings = config.load_settings({"SC_MODEL_CONNECT_TIMEOUT_SECONDS": "10"})
+
+    assert settings.model_connect_timeout_seconds == config.MAX_MODEL_CONNECT_TIMEOUT_SECONDS
+    assert settings.model_connect_timeout_seconds == 5.0
+
+
 def test_invalid_timezone_is_rejected() -> None:
     with pytest.raises(config.SettingsError):
         config.load_settings({"SC_TIMEZONE": "Mars/Olympus"})

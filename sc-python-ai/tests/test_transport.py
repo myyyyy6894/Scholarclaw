@@ -160,6 +160,25 @@ async def test_connect_timeout_maps_to_upstream_timeout_without_retry() -> None:
     assert exc_info.value.error_code is AiErrorCode.UPSTREAM_TIMEOUT
 
 
+@pytest.mark.parametrize("status", [201, 202, 204, 206])
+async def test_non_200_2xx_is_not_success(status: int) -> None:
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(status, content=b"{}")
+
+    async with _client(handler) as client:
+        with pytest.raises(UpstreamModelError) as exc_info:
+            await transport.request_with_retry(
+                client, "POST", "https://api.example.com/v1/chat", sleep=_SleepRecorder()
+            )
+
+    assert attempts == [1]
+    assert exc_info.value.error_code is AiErrorCode.UPSTREAM_MODEL_ERROR
+    assert exc_info.value.retryable is False
+
+
 async def test_rate_limited_after_retries_keeps_specific_error_code() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, json={})

@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0、P1、P2、P3、P4 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22 验收通过）；P5 / TASK-501（文档异步任务生产）与 TASK-502（Python 文档解析消费者）已实现，状态 `IN_REVIEW`。** TASK-501 起上传/重试/重建/课程切换会向 `rag.ingest.queue` 发布 `MQ-INGEST-001` 消息；消费者代码已落地但默认关闭（待 TASK-503 回调与 TASK-504 向量接入），接入前文档会停留在 `PARSING`。仓库内冒烟脚本仍使用 SQL 夹具构造 READY，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
+**当前进度：P0、P1、P2、P3、P4 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22 验收通过）；P5 / TASK-501（文档异步任务生产）、TASK-502（Python 文档解析消费者）与 TASK-503（Java 解析上下文与回调）已实现，状态 `IN_REVIEW`。** TASK-501 起上传/重试/重建/课程切换会向 `rag.ingest.queue` 发布 `MQ-INGEST-001` 消息；`/parse-context` 与 `/ingest-result` 已落地；Python 消费者默认关闭（待 TASK-504 向量接入），接入前文档会停留在 `PARSING`。仓库内冒烟脚本仍使用 SQL 夹具构造 READY，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 
@@ -79,7 +79,7 @@ cd sc-python-ai
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
 ```
 
-**尚未验证：** `sc-python-ai` 的 ChromaDB 客户端（TASK-504）未落地；RabbitMQ 生产端与解析消费者已分别在 TASK-501/502 落地，但消费者默认关闭，等待 TASK-503 回调。模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
+**尚未验证：** `sc-python-ai` 的 ChromaDB 客户端（TASK-504）未落地；RabbitMQ 生产端、解析消费者与 Java 回调已分别在 TASK-501/502/503 落地，但消费者默认关闭，等待 TASK-504 向量写入。模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
 
 ### 3.3 Web 前端（已实测）
 

@@ -7,13 +7,16 @@
 3. 若检测到禁止注入本服务的敏感变量，只告警变量**名**（绝不打印值）；
 4. 注册追踪中间件、统一异常映射与内部接口路由。
 
-**已经接入**：内部令牌鉴权、`/internal/ai/v1/health`、`/internal/ai/v1/model/probe`（TASK-302/303）。
-**尚未接入**（按任务分阶段落地，不建空壳）：RabbitMQ 消费者生命周期（TASK-502）、
-ChromaDB 客户端（TASK-504）、`/agent/route-and-extract`（TASK-706）、
+**已经接入**：内部令牌鉴权、`/internal/ai/v1/health`、`/internal/ai/v1/model/probe`（TASK-302/303）、
+文档解析管线与 RabbitMQ 消费者（TASK-502，默认由 `SC_INGEST_CONSUMER_ENABLED=false` 关闭，
+等待 TASK-503 回调与 TASK-504 向量写入）。
+**尚未接入**：ChromaDB 客户端（TASK-504）、`/agent/route-and-extract`（TASK-706）、
 `/rag/qa-stream` 与 `/rag/vectors`（TASK-604/605）。
 """
 
 from __future__ import annotations
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -22,6 +25,7 @@ from app.core.config import detect_forbidden_env_vars, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.tracing import TraceIdMiddleware
+from app.services.ingest.consumer import build_ingest_consumer
 
 SERVICE_TITLE = "sc-python-ai"
 SERVICE_VERSION = "1.0.0"
@@ -42,8 +46,26 @@ def create_app() -> FastAPI:
             ", ".join(forbidden),
         )
 
+    consumer = None
+    if settings.ingest_consumer_enabled:
+        consumer = build_ingest_consumer(settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if consumer is not None:
+            try:
+                await consumer.start()
+            except Exception:  # broker 未就绪不应拖垮 HTTP 服务
+                logger.exception("文档解析消费者启动失败，HTTP 服务继续运行")
+        try:
+            yield
+        finally:
+            if consumer is not None:
+                await consumer.close()
+
     app = FastAPI(
         title=SERVICE_TITLE,
+        lifespan=lifespan,
         version=SERVICE_VERSION,
         # 本服务仅暴露内部接口且不映射宿主机端口，无需对外提供交互式文档
         docs_url=None,

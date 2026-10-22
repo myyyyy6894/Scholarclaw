@@ -32,6 +32,15 @@ ENV_MODEL_CONNECT_TIMEOUT_SECONDS = "SC_MODEL_CONNECT_TIMEOUT_SECONDS"
 ENV_MODEL_READ_TIMEOUT_SECONDS = "SC_MODEL_READ_TIMEOUT_SECONDS"
 #: ChromaDB 内部基址（TASK-105 起用于健康探针；未注入则不注册该探针，见 app/core/health.py）。
 ENV_CHROMADB_BASE_URL = "SC_CHROMADB_BASE_URL"
+ENV_JAVA_BACKEND_BASE_URL = "SC_JAVA_BACKEND_BASE_URL"
+ENV_RABBITMQ_HOST = "SC_RABBITMQ_HOST"
+ENV_RABBITMQ_PORT = "SC_RABBITMQ_PORT"
+ENV_RABBITMQ_USER = "SC_RABBITMQ_USER"
+ENV_RABBITMQ_PASSWORD = "SC_RABBITMQ_PASSWORD"
+ENV_MQ_INGEST_QUEUE = "SC_MQ_INGEST_QUEUE"
+ENV_MQ_INGEST_DLQ = "SC_MQ_INGEST_DLQ"
+ENV_INGEST_CONSUMER_ENABLED = "SC_INGEST_CONSUMER_ENABLED"
+ENV_INGEST_MAX_PAGES = "SC_INGEST_MAX_PAGES"
 
 #: 允许本服务读取的全部环境变量名。新增配置必须先在此登记并说明用途。
 ALLOWED_ENV_VARS = frozenset(
@@ -45,6 +54,15 @@ ALLOWED_ENV_VARS = frozenset(
         ENV_MODEL_CONNECT_TIMEOUT_SECONDS,
         ENV_MODEL_READ_TIMEOUT_SECONDS,
         ENV_CHROMADB_BASE_URL,
+        ENV_JAVA_BACKEND_BASE_URL,
+        ENV_RABBITMQ_HOST,
+        ENV_RABBITMQ_PORT,
+        ENV_RABBITMQ_USER,
+        ENV_RABBITMQ_PASSWORD,
+        ENV_MQ_INGEST_QUEUE,
+        ENV_MQ_INGEST_DLQ,
+        ENV_INGEST_CONSUMER_ENABLED,
+        ENV_INGEST_MAX_PAGES,
     }
 )
 
@@ -68,6 +86,11 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_CHROMADB_BASE_URL = ""
 DEFAULT_MODEL_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_MODEL_READ_TIMEOUT_SECONDS = 30.0
+DEFAULT_RABBITMQ_HOST = "localhost"
+DEFAULT_RABBITMQ_PORT = 5672
+DEFAULT_MQ_INGEST_QUEUE = "rag.ingest.queue"
+DEFAULT_MQ_INGEST_DLQ = "rag.ingest.dlq"
+DEFAULT_INGEST_MAX_PAGES = 300
 #: 模型出站连接超时上限（`04` §4.9.1 / `NFR-REL-01`）：超过 5s 会挤压 Java 的 10s 读取预算。
 MAX_MODEL_CONNECT_TIMEOUT_SECONDS = 5.0
 
@@ -94,6 +117,15 @@ class Settings:
     model_connect_timeout_seconds: float
     model_read_timeout_seconds: float
     chromadb_base_url: str
+    java_backend_base_url: str
+    rabbitmq_host: str
+    rabbitmq_port: int
+    rabbitmq_user: str
+    rabbitmq_password: str
+    mq_ingest_queue: str
+    mq_ingest_dlq: str
+    ingest_consumer_enabled: bool
+    ingest_max_pages: int
 
     @property
     def internal_token_configured(self) -> bool:
@@ -130,6 +162,16 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             env, ENV_MODEL_READ_TIMEOUT_SECONDS, DEFAULT_MODEL_READ_TIMEOUT_SECONDS
         ),
         chromadb_base_url=_read(env, ENV_CHROMADB_BASE_URL, DEFAULT_CHROMADB_BASE_URL).rstrip("/"),
+        java_backend_base_url=_read(
+            env, ENV_JAVA_BACKEND_BASE_URL, "").rstrip("/"),
+        rabbitmq_host=_read(env, ENV_RABBITMQ_HOST, DEFAULT_RABBITMQ_HOST),
+        rabbitmq_port=_parse_positive_int(env, ENV_RABBITMQ_PORT, DEFAULT_RABBITMQ_PORT),
+        rabbitmq_user=_read(env, ENV_RABBITMQ_USER, "scholarclaw"),
+        rabbitmq_password=_read(env, ENV_RABBITMQ_PASSWORD, ""),
+        mq_ingest_queue=_read(env, ENV_MQ_INGEST_QUEUE, DEFAULT_MQ_INGEST_QUEUE),
+        mq_ingest_dlq=_read(env, ENV_MQ_INGEST_DLQ, DEFAULT_MQ_INGEST_DLQ),
+        ingest_consumer_enabled=_parse_bool(env, ENV_INGEST_CONSUMER_ENABLED, False),
+        ingest_max_pages=_parse_positive_int(env, ENV_INGEST_MAX_PAGES, DEFAULT_INGEST_MAX_PAGES),
     )
 
     _pin_active_timezone(zone)
@@ -189,6 +231,19 @@ def _parse_bool(env: Mapping[str, str], name: str, default: bool) -> bool:
     if normalized in _FALSE_VALUES:
         return False
     raise SettingsError(f"{name} 取值 {raw!r} 无法识别为布尔值，请使用 true/false")
+
+
+def _parse_positive_int(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError as error:
+        raise SettingsError(f"{name} 必须为正整数") from error
+    if value <= 0:
+        raise SettingsError(f"{name} 必须为正整数")
+    return value
 
 
 def _parse_positive_float(env: Mapping[str, str], name: str, default: float) -> float:

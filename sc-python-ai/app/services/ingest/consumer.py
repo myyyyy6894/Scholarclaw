@@ -23,6 +23,7 @@ from app.core.exceptions import AiEngineError, AiErrorCode, NonRetryableAiError
 from app.core.logging import get_logger
 from app.services.ingest.java_client import IngestResultClient, ParseContextClient
 from app.services.ingest.models import ParseContext, ParseResult
+from app.services.ingest.indexer import DocumentIndexer
 from app.services.ingest.pipeline import parse_task
 
 logger = get_logger(__name__)
@@ -103,12 +104,13 @@ class JavaIngestResultSink:
 
 class IngestConsumer:
     def __init__(self, settings: Settings, *, context_client: ParseContextClient,
-                 result_sink: IngestResultSink,
+                 result_sink: IngestResultSink, indexer: DocumentIndexer,
                  retry_delays: tuple[float, ...] = RETRY_DELAYS_SECONDS,
                  sleep=asyncio.sleep) -> None:
         self._settings = settings
         self._context_client = context_client
         self._result_sink = result_sink
+        self._indexer = indexer
         self._retry_delays = retry_delays
         self._sleep = sleep
         self._connection: aio_pika.abc.AbstractRobustConnection | None = None
@@ -188,6 +190,7 @@ class IngestConsumer:
         result = await asyncio.to_thread(
             parse_task, self._settings.storage_raw_path, context,
             max_pages=self._settings.ingest_max_pages)
+        await self._indexer.index(context, result)
         delivered = await self._result_sink.ready(payload, context, result, trace_id=trace_id)
         if not delivered:
             logger.warning("解析结果未被 Java 接受 doc_id=%s trace_id=%s",
@@ -222,4 +225,5 @@ def build_ingest_consumer(settings: Settings) -> IngestConsumer:
         settings,
         context_client=ParseContextClient(settings),
         result_sink=JavaIngestResultSink(IngestResultClient(settings)),
+        indexer=DocumentIndexer(settings),
     )

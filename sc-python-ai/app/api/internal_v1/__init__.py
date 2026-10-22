@@ -5,19 +5,20 @@
 
 * `endpoints_probe.py`（TASK-302，已实现）：`POST /model/probe`
 * `endpoints_agent.py`（TASK-706）：`POST /agent/route-and-extract`
-* `endpoints_rag.py`（TASK-604/605）：`POST /rag/qa-stream`、`DELETE /rag/vectors`
+* `endpoints_rag.py`（TASK-504/604/605）：`DELETE /rag/vectors`、`POST /rag/qa-stream`
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.internal_v1 import endpoints_health, endpoints_probe
+from app.api.internal_v1 import endpoints_health, endpoints_probe, endpoints_rag
 
 INTERNAL_API_PREFIX = "/internal/ai/v1"
 
 internal_v1_router = APIRouter()
 internal_v1_router.include_router(endpoints_health.router)
 internal_v1_router.include_router(endpoints_probe.router)
+internal_v1_router.include_router(endpoints_rag.router)
 
 __all__ = ["INTERNAL_API_PREFIX", "internal_v1_router"]

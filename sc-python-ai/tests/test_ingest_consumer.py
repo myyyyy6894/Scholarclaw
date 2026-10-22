@@ -57,6 +57,15 @@ class _ContextClient:
         return self.context
 
 
+class _Indexer:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def index(self, context, result):
+        self.calls += 1
+        return len(result.children)
+
+
 class _Sink:
     def __init__(self) -> None:
         self.ready_calls = []
@@ -107,14 +116,17 @@ async def test_consumer_parses_and_delivers(tmp_path: Path) -> None:
     raw.parent.mkdir(parents=True)
     raw.write_text("第一段内容。" * 40, encoding="utf-8")
     sink = _Sink()
+    indexer = _Indexer()
     consumer = IngestConsumer(_settings(tmp_path),
                               context_client=_ContextClient(_context("raw/10001/2001/50001.txt")),
-                              result_sink=sink, retry_delays=(0.0,), sleep=_no_sleep)
+                              result_sink=sink, indexer=indexer,
+                              retry_delays=(0.0,), sleep=_no_sleep)
 
     await consumer.handle(_message())
 
     assert len(sink.ready_calls) == 1
     assert sink.ready_calls[0][2].page_count == 1
+    assert indexer.calls == 1
 
 
 @pytest.mark.asyncio
@@ -124,7 +136,8 @@ async def test_consumer_acks_expired_task_without_parsing(tmp_path: Path) -> Non
     object.__setattr__(expired, "abort_reason", "STALE_PARSE_VERSION")
     sink = _Sink()
     consumer = IngestConsumer(_settings(tmp_path), context_client=_ContextClient(expired),
-                              result_sink=sink, retry_delays=(0.0,), sleep=_no_sleep)
+                              result_sink=sink, indexer=_Indexer(),
+                              retry_delays=(0.0,), sleep=_no_sleep)
 
     await consumer.handle(_message())
 
@@ -141,7 +154,8 @@ async def test_consumer_retries_retryable_error(tmp_path: Path) -> None:
                             error=RetryableAiError(AiErrorCode.INTERNAL_ERROR, "temporary"))
     sink = _Sink()
     consumer = IngestConsumer(_settings(tmp_path), context_client=client,
-                              result_sink=sink, retry_delays=(0.0,), sleep=_no_sleep)
+                              result_sink=sink, indexer=_Indexer(),
+                              retry_delays=(0.0,), sleep=_no_sleep)
 
     await consumer.handle(_message())
 

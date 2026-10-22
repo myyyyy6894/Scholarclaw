@@ -73,7 +73,8 @@ def test_loopback_exemption_applies_to_health_only(client_factory) -> None:
 def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
     """记录当前内部路由规模：新增内部接口时必须同步确认鉴权依赖已加。
 
-    TASK-302 新增 `POST /model/probe`（跨容器调用，必须携带 `X-Internal-Token`）。
+    TASK-302 新增 `POST /model/probe`；TASK-504 新增 `DELETE /rag/vectors`。
+    两者均为跨容器调用，必须携带 `X-Internal-Token`。
     """
     from app.main import create_app
 
@@ -83,7 +84,8 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
         if getattr(route, "path", "").startswith("/internal/")
     }
 
-    assert paths == {HEALTH_PATH, "/internal/ai/v1/model/probe"}
+    assert paths == {HEALTH_PATH, "/internal/ai/v1/model/probe",
+                     "/internal/ai/v1/rag/vectors"}
 
 
 def test_user_id_header_is_ignored_when_token_invalid(remote_client: TestClient) -> None:

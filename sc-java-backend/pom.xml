@@ -97,7 +97,12 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- 说明：RabbitMQ 依赖到 TASK-501（rag.ingest.queue）才需要，此阶段不引入。 -->
+        <!-- RabbitMQ（TASK-501）：`04` §4.9.9 `MQ-INGEST-001` 的 `rag.ingest.queue` 生产端。
+             消费者在 `sc-python-ai`（TASK-502），本服务只负责持久化消息与 DLQ 声明。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

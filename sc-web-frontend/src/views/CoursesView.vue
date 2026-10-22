@@ -130,7 +130,7 @@ async function submitSwitch(): Promise<void> {
     const result = await changeCourseEmbedding(course.course_id, request)
     switchForm.value.course = null
     notifySuccess(
-      `已切换到 ${result.embedding_model}（维度 ${result.embedding_dim}，索引版本 ${result.current_index_version}）；重建任务尚未执行，待 TASK-501/505 接入`,
+      `已切换到 ${result.embedding_model}（维度 ${result.embedding_dim}，索引版本 ${result.current_index_version}）；已提交重建请求，实际执行由 TASK-502 消费者接入后推进`,
     )
     await loadCourses()
   } catch (error) {
@@ -229,7 +229,7 @@ async function onDelete(course: CourseNamespace): Promise<void> {
         :closable="false"
         show-icon
         title="每门课程锁定一套 Embedding 模型与维度"
-        description="创建时会复制【个人设置】中已验证的默认 Embedding 配置；切换模型会重新探测并升级课程索引版本，重建任务待 TASK-501/505 接入。"
+        description="创建时会复制【个人设置】中已验证的默认 Embedding 配置；切换模型会重新探测并升级课程索引版本，重建任务由 TASK-502 消费者执行。"
       />
 
       <el-skeleton v-if="loading" class="sc-course__skeleton" :rows="4" animated />
@@ -333,7 +333,7 @@ async function onDelete(course: CourseNamespace): Promise<void> {
         :closable="false"
         show-icon
         title="切换会递增课程索引版本"
-        description="切换只更新课程 Embedding 与索引版本，并把文档置为待重建；重建任务尚未执行，待 TASK-501/505 接入。探测失败时原课程配置保持不变。"
+        description="切换会更新课程 Embedding 与索引版本并发布 REINDEX；实际重建由 TASK-502 消费者接入后执行。探测失败时原课程配置保持不变。"
       />
       <el-form label-width="130px" class="sc-course__form">
         <el-form-item label="模型来源">

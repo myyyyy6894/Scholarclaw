@@ -14,6 +14,7 @@ import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
@@ -38,12 +39,15 @@ class KnowledgeDocActionControllerTest {
                     ZoneId.of("Asia/Shanghai")).build();
 
     private KnowledgeDocService docService;
+    private KnowledgeIngestService ingestService;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         docService = mock(KnowledgeDocService.class);
-        mockMvc = MockMvcBuilders.standaloneSetup(new KnowledgeDocActionController(docService, true))
+        ingestService = mock(KnowledgeIngestService.class);
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                        new KnowledgeDocActionController(docService, ingestService, true))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -61,9 +65,7 @@ class KnowledgeDocActionControllerTest {
     @Test
     @DisplayName("retry 返回 PARSING 文档")
     void retryReturnsParsing() throws Exception {
-        KnowledgeDocEntity updated = doc();
-        when(docService.retryFailed(USER_ID, DOC_ID)).thenReturn(updated);
-        when(docService.toVO(updated)).thenReturn(vo());
+        when(ingestService.retry(USER_ID, DOC_ID)).thenReturn(vo());
 
         mockMvc.perform(post("/api/v1/docs/50001/retry"))
                 .andExpect(status().isOk())
@@ -74,9 +76,7 @@ class KnowledgeDocActionControllerTest {
     @Test
     @DisplayName("reindex 返回 PARSING 文档")
     void reindexReturnsParsing() throws Exception {
-        KnowledgeDocEntity updated = doc();
-        when(docService.reindexReady(USER_ID, DOC_ID)).thenReturn(updated);
-        when(docService.toVO(updated)).thenReturn(vo());
+        when(ingestService.reindex(USER_ID, DOC_ID)).thenReturn(vo());
 
         mockMvc.perform(post("/api/v1/docs/50001/reindex"))
                 .andExpect(status().isOk())
@@ -86,7 +86,8 @@ class KnowledgeDocActionControllerTest {
     @Test
     @DisplayName("P4 门禁关闭时 retry 返回 501 且不修改状态")
     void retryBlockedWhenManualIngestDisabled() throws Exception {
-        mockMvc = MockMvcBuilders.standaloneSetup(new KnowledgeDocActionController(docService, false))
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                        new KnowledgeDocActionController(docService, ingestService, false))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -95,8 +96,8 @@ class KnowledgeDocActionControllerTest {
         mockMvc.perform(post("/api/v1/docs/50001/retry"))
                 .andExpect(status().isNotImplemented())
                 .andExpect(jsonPath("$.code").value("FEATURE_NOT_AVAILABLE"));
-        org.mockito.Mockito.verify(docService, org.mockito.Mockito.never())
-                .retryFailed(USER_ID, DOC_ID);
+        org.mockito.Mockito.verify(ingestService, org.mockito.Mockito.never())
+                .retry(USER_ID, DOC_ID);
     }
 
     @Test

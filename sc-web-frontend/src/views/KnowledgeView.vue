@@ -180,7 +180,11 @@ async function onFileSelected(event: Event): Promise<void> {
   uploading.value = true
   try {
     const uploaded = await uploadDoc(course.course_id, file)
-    notifySuccess(`《${uploaded.doc_name}》已上传，状态为待解析（异步解析待 TASK-501 接入）`)
+    notifySuccess(
+      uploaded.status === 'PARSING'
+        ? `《${uploaded.doc_name}》已上传并进入解析队列`
+        : `《${uploaded.doc_name}》已上传，暂未入队，系统将自动补投`,
+    )
     // 上传期间用户可能切到别的课程：只刷新上传目标课程，避免污染当前列表
     if (selectedCourseId.value === course.course_id) {
       await loadDocs()
@@ -229,7 +233,7 @@ function formatTime(value: string | null): string {
         <h2>{{ currentCourse?.course_name ?? '课程知识库' }}</h2>
         <p>
           左侧选中的课程会作为后续 RAG 问答的默认课程。上传成功后文件先进入“待解析”；
-          异步解析与索引在 TASK-501 接入后才会推进，手动重试/重建尚未开放。
+          上传成功后立即发布解析任务；实际解析与索引由 TASK-502 消费者接入后推进。手动重试/重建入口待 TASK-506 联调后开放。
         </p>
       </div>
       <div v-if="courseSummary !== null" class="sc-kb-metrics">

@@ -18,13 +18,16 @@ import org.springframework.web.multipart.MultipartFile;
  * 元数据落库、移动到 raw、路径回填。文件校验不占用数据库事务；数据库与文件移动在
  * {@link KnowledgeUploadCommitService} 的单一事务内完成，失败整体回滚。
  *
- * <p><b>本任务不发 MQ</b>：成功后文档保持 `UPLOADED`，由 TASK-501 的异步任务生产器发布
- * `INITIAL_INGEST` 并推进为 `PARSING`。
+ * <p><b>异步解析：</b>事务提交后由 {@link KnowledgeIngestService} 发布 `INITIAL_INGEST`；
+ * 发布成功才推进为 `PARSING`，发布失败保留 `UPLOADED` 等待僵尸巡检补投。
+ * 真正的解析消费者属 TASK-502。
  */
 @Service
 public class KnowledgeUploadService {
 
     private final KnowledgeUploadCommitService commitService;
+    private final KnowledgeIngestService ingestService;
+    private final KnowledgeDocService docService;
     private final CourseService courseService;
     private final UserConfigService userConfigService;
     private final ModelConfigRules modelConfigRules;
@@ -32,12 +35,16 @@ public class KnowledgeUploadService {
     private final StorageService storageService;
 
     public KnowledgeUploadService(KnowledgeUploadCommitService commitService,
+                                  KnowledgeIngestService ingestService,
+                                  KnowledgeDocService docService,
                                   CourseService courseService,
                                   UserConfigService userConfigService,
                                   ModelConfigRules modelConfigRules,
                                   FileUploadSecurityValidator uploadValidator,
                                   StorageService storageService) {
         this.commitService = commitService;
+        this.ingestService = ingestService;
+        this.docService = docService;
         this.courseService = courseService;
         this.userConfigService = userConfigService;
         this.modelConfigRules = modelConfigRules;
@@ -66,7 +73,10 @@ public class KnowledgeUploadService {
 
         ValidatedUpload staged = uploadValidator.validateAndStage(file);
         try {
-            return commitService.commit(userId, courseId, staged);
+            KnowledgeDocVO committed = commitService.commit(userId, courseId, staged);
+            // 事务已提交：发布 INITIAL_INGEST；失败时保留 UPLOADED，由僵尸巡检补投
+            ingestService.enqueueInitial(userId, Long.valueOf(committed.docId()));
+            return docService.toVO(docService.requireOwnedDoc(userId, Long.valueOf(committed.docId())));
         } finally {
             storageService.deleteQuietly(staged.tempFile());
         }

@@ -164,8 +164,9 @@ def main() -> int:
                                   "../../etc/passwd.pdf", pdf_bytes, "application/pdf")
     uploaded = payload.get("data") or {}
     doc_id = uploaded.get("doc_id")
-    results.append(check("上传合法 PDF 返回 202/UPLOADED", status == 202
-                         and uploaded.get("status") == "UPLOADED"
+    results.append(check("上传合法 PDF 返回 202 且进入解析队列", status == 202
+                         and uploaded.get("status") == "PARSING"
+                         and bool(uploaded.get("last_ingest_job_id"))
                          and uploaded.get("doc_name") == "passwd.pdf",
                          f"{status} {payload}"))
     file_exists = docker_exec("sc-java-backend",
@@ -221,19 +222,30 @@ def main() -> int:
         f"VALUES ('pc_{doc_id}_v1_1', {int(doc_id)}, {int(user_id)}, {int(course_id)}, "
         "1, 1, 1, 1, '第5章', '事务处理', 4);")
 
-    # P4 门禁：MQ 生产者未接入前，重试/重建必须 501 且不改变数据库状态
+    # TASK-501：READY -> REINDEX；FAILED -> RETRY，均发布 MQ 并递增版本
     status, payload = call(args.base_url, "POST", f"/api/v1/docs/{doc_id}/reindex", token=token)
-    results.append(check("重建接口在 P4 返回 501 门禁", status == 501
-                         and payload.get("code") == "FEATURE_NOT_AVAILABLE",
+    reindexed = payload.get("data") or {}
+    results.append(check("重建接口使 READY → PARSING 且版本递增", status == 200
+                         and reindexed.get("status") == "PARSING"
+                         and reindexed.get("parse_version") == 2
+                         and bool(reindexed.get("last_ingest_job_id")),
                          f"{status} {payload}"))
+    mysql_query(f"UPDATE t_knowledge_doc SET status='FAILED', parse_version=2, "
+                f"error_code='SCAN_PDF_OCR_NOT_ENABLED' WHERE doc_id={int(doc_id)};")
     status, payload = call(args.base_url, "POST", f"/api/v1/docs/{doc_id}/retry", token=token)
-    results.append(check("重试接口在 P4 返回 501 门禁", status == 501
-                         and payload.get("code") == "FEATURE_NOT_AVAILABLE",
+    retried = payload.get("data") or {}
+    results.append(check("重试接口使 FAILED → PARSING 且版本递增", status == 200
+                         and retried.get("status") == "PARSING"
+                         and retried.get("parse_version") == 3
+                         and bool(retried.get("last_ingest_job_id")),
                          f"{status} {payload}"))
-    doc_after_gate = mysql_query(
-        f"SELECT status, parse_version FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
-    results.append(check("门禁拦截后文档仍为 READY 且版本未变", doc_after_gate == "READY\t1",
-                         repr(doc_after_gate)))
+    retry_state = mysql_query(
+        "SELECT status, parse_version, IF(last_ingest_job_id IS NULL, '0', '1') "
+        f"FROM t_knowledge_doc WHERE doc_id={int(doc_id)};")
+    results.append(check("重试状态与任务 ID 已落库", retry_state == "PARSING\t3\t1",
+                         repr(retry_state)))
+    mysql_query(f"UPDATE t_knowledge_doc SET status='READY', parse_version=3, "
+                f"error_code=NULL, error_msg=NULL WHERE doc_id={int(doc_id)};")
 
     # FIX-05：DELETING 过渡态必须出现在默认列表中
     status, payload = upload_file(args.base_url, token, course_id,
@@ -314,7 +326,7 @@ def main() -> int:
     first = docs.get(doc_id) or {}
     results.append(check("切换后文档转 PARSING（旧索引立即失效）",
                          status == 200 and first.get("status") == "PARSING"
-                         and first.get("parse_version") == 2
+                         and first.get("parse_version") == 4
                          and first.get("course_index_version") == 2,
                          f"{status} {payload}"))
     results.append(check("切换后索引快照被清空",
@@ -353,7 +365,7 @@ def main() -> int:
     doc_state = mysql_query(
         f"SELECT status, parse_version FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
     results.append(check("删除课程后文档转 DELETING 且版本递增",
-                         doc_state == "DELETING\t3", repr(doc_state)))
+                         doc_state == "DELETING\t5", repr(doc_state)))
     status, payload = call(args.base_url, "DELETE", f"/api/v1/docs/{doc_id}", token=token)
     results.append(check("文档删除接口幂等返回 DELETING", status == 200
                          and (payload.get("data") or {}).get("status") == "DELETING",

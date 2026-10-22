@@ -155,13 +155,62 @@ public class KnowledgeDocService {
     /** `UPLOADED -> PARSING`：仅匹配指定 parse_version。返回 false 表示已被并发推进/删除。 */
     @Transactional(rollbackFor = Exception.class)
     public boolean markParsing(Long docId, int parseVersion) {
-        return docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
+        return markParsing(docId, parseVersion, null);
+    }
+
+    /** `UPLOADED -> PARSING`，同时回填任务 ID 与入队时间。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean markParsing(Long docId, int parseVersion, String ingestJobId) {
+        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
+        var update = Wrappers.<KnowledgeDocEntity>lambdaUpdate()
                 .eq(KnowledgeDocEntity::getDocId, docId)
                 .eq(KnowledgeDocEntity::getParseVersion, parseVersion)
                 .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
                 .set(KnowledgeDocEntity::getStatus, DocumentStatus.PARSING.name())
-                .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
-                .setSql(CLEAR_INDEX_SNAPSHOT_SQL)) == 1;
+                .set(KnowledgeDocEntity::getEnqueuedAt, now)
+                .set(KnowledgeDocEntity::getUpdatedAt, now)
+                .setSql(CLEAR_INDEX_SNAPSHOT_SQL);
+        if (ingestJobId != null) {
+            update.set(KnowledgeDocEntity::getLastIngestJobId, ingestJobId);
+        } else {
+            update.setSql("last_ingest_job_id = NULL");
+        }
+        return docMapper.update(null, update) == 1;
+    }
+
+    /** 回填 `PARSING` 文档的任务 ID 与入队时间（重试/重建/课程切换后的补投使用）。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean recordEnqueued(Long docId, int parseVersion, String ingestJobId) {
+        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
+        return docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
+                .eq(KnowledgeDocEntity::getDocId, docId)
+                .eq(KnowledgeDocEntity::getParseVersion, parseVersion)
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.PARSING.name())
+                .set(KnowledgeDocEntity::getLastIngestJobId, ingestJobId)
+                .set(KnowledgeDocEntity::getEnqueuedAt, now)
+                .set(KnowledgeDocEntity::getUpdatedAt, now)) == 1;
+    }
+
+    /** `UPLOADED` 且尚未成功入队的僵尸文档（`ZombieIngestScanner` 补投）。 */
+    public List<KnowledgeDocEntity> findStaleUploaded(LocalDateTime updatedBefore, int limit) {
+        return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
+                .ne(KnowledgeDocEntity::getStorageRelPath, "pending")
+                .isNull(KnowledgeDocEntity::getEnqueuedAt)
+                .lt(KnowledgeDocEntity::getUpdatedAt, updatedBefore)
+                .orderByAsc(KnowledgeDocEntity::getUpdatedAt)
+                .last("LIMIT " + Math.max(1, Math.min(limit, 200))));
+    }
+
+    /** 课程切换后需要发布 `REINDEX` 的 `PARSING` 文档。 */
+    public List<KnowledgeDocEntity> findParsingForCourse(Long userId, Long courseId,
+                                                         int courseIndexVersion) {
+        return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getUserId, userId)
+                .eq(KnowledgeDocEntity::getCourseId, courseId)
+                .eq(KnowledgeDocEntity::getCourseIndexVersion, courseIndexVersion)
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.PARSING.name())
+                .orderByAsc(KnowledgeDocEntity::getDocId));
     }
 
     /**
@@ -203,20 +252,30 @@ public class KnowledgeDocService {
                 .setSql(CLEAR_INDEX_SNAPSHOT_SQL)) == 1;
     }
 
-    /** `FAILED -> PARSING`：供 `API-DOC-003`/TASK-501 使用；MQ 发布由后续任务补齐。 */
+    /** `FAILED -> PARSING`：`API-DOC-003`；发布 `RETRY_FAILED` 由调用方在事务提交后执行。 */
     @Transactional(rollbackFor = Exception.class)
     public KnowledgeDocEntity retryFailed(Long userId, Long docId) {
-        requireEmbeddingConfig(userId);
-        return transitionToParsing(userId, docId, DocumentStatus.FAILED,
-                "仅解析失败(FAILED)状态的课件可执行手动重试。");
+        return retryFailed(userId, docId, null);
     }
 
-    /** `READY -> PARSING`：供 `API-DOC-004`/TASK-501 使用。 */
+    @Transactional(rollbackFor = Exception.class)
+    public KnowledgeDocEntity retryFailed(Long userId, Long docId, String ingestJobId) {
+        requireEmbeddingConfig(userId);
+        return transitionToParsing(userId, docId, DocumentStatus.FAILED,
+                "仅解析失败(FAILED)状态的课件可执行手动重试。", ingestJobId);
+    }
+
+    /** `READY -> PARSING`：`API-DOC-004`。 */
     @Transactional(rollbackFor = Exception.class)
     public KnowledgeDocEntity reindexReady(Long userId, Long docId) {
+        return reindexReady(userId, docId, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public KnowledgeDocEntity reindexReady(Long userId, Long docId, String ingestJobId) {
         requireEmbeddingConfig(userId);
         return transitionToParsing(userId, docId, DocumentStatus.READY,
-                "文档当前非就绪状态，请勿重复操作。");
+                "文档当前非就绪状态，请勿重复操作。", ingestJobId);
     }
 
     /** `非 DELETED -> DELETING`：同一事务内清空父块；重复删除幂等。 */
@@ -280,13 +339,14 @@ public class KnowledgeDocService {
     }
 
     private KnowledgeDocEntity transitionToParsing(Long userId, Long docId,
-                                                   DocumentStatus requiredStatus, String message) {
+                                                   DocumentStatus requiredStatus, String message,
+                                                   String ingestJobId) {
         KnowledgeDocEntity doc = requireOwnedDoc(userId, docId);
         if (!requiredStatus.name().equals(doc.getStatus())) {
             throw new BusinessException(ErrorCode.STATE_CONFLICT, message);
         }
         CourseNamespaceEntity course = courseService.getActiveCourse(userId, doc.getCourseId());
-        int affected = docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
+        var update = Wrappers.<KnowledgeDocEntity>lambdaUpdate()
                 .eq(KnowledgeDocEntity::getDocId, docId)
                 .eq(KnowledgeDocEntity::getUserId, userId)
                 .eq(KnowledgeDocEntity::getStatus, requiredStatus.name())
@@ -297,7 +357,13 @@ public class KnowledgeDocService {
                 .set(KnowledgeDocEntity::getErrorMsg, null)
                 .set(KnowledgeDocEntity::getEnqueuedAt, ScTimeZone.now().toLocalDateTime())
                 .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
-                .setSql("parse_version = parse_version + 1, " + CLEAR_INDEX_SNAPSHOT_SQL));
+                .setSql("parse_version = parse_version + 1, " + CLEAR_INDEX_SNAPSHOT_SQL);
+        if (ingestJobId == null) {
+            update.setSql("last_ingest_job_id = NULL");
+        } else {
+            update.set(KnowledgeDocEntity::getLastIngestJobId, ingestJobId);
+        }
+        int affected = docMapper.update(null, update);
         if (affected != 1) {
             throw new BusinessException(ErrorCode.STATE_CONFLICT, message);
         }

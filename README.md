@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0、P1、P2、P3、P4 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22 验收通过）；下一阶段 P5 / TASK-501。** 注意：P4 的手动重试/重建接口在 TASK-501/505 接入前返回 `501`，上传后文档停留在 `UPLOADED`；仓库内冒烟脚本使用 SQL 夹具，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
+**当前进度：P0、P1、P2、P3、P4 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22 验收通过）；P5 / TASK-501（文档异步任务生产）已实现，状态 `IN_REVIEW`。** TASK-501 起上传/重试/重建/课程切换会向 `rag.ingest.queue` 发布 `MQ-INGEST-001` 消息；消费者属 TASK-502，接入前文档会停留在 `PARSING`。仓库内冒烟脚本仍使用 SQL 夹具构造 READY，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 
@@ -79,7 +79,7 @@ cd sc-python-ai
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
 ```
 
-**尚未验证：** `sc-python-ai` 的 ChromaDB 客户端（TASK-504）与 RabbitMQ 消费者（TASK-502）未落地；模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
+**尚未验证：** `sc-python-ai` 的 ChromaDB 客户端（TASK-504）与 RabbitMQ 消费者（TASK-502）未落地；Java 生产端已在 TASK-501 落地。模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
 
 ### 3.3 Web 前端（已实测）
 
@@ -219,6 +219,9 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 | 对端基址（Java） | `SC_PYTHON_AI_BASE_URL` | 空（compose 注入 `http://sc-python-ai:8000`） | Java 的健康探针真实调用 Python 健康接口；结果进 `data.peers`，不参与 `data.status` |
 | 对端基址（Python） | `SC_JAVA_BACKEND_BASE_URL` | 空（compose 注入 `http://sc-java-backend:8080`） | 仅供容器 healthcheck（`sc-python-ai/healthcheck.py`）验证反向调通；TASK-503 的 `JavaInternalApiClient` 复用同一变量 |
 | 派生索引基址（Python） | `SC_CHROMADB_BASE_URL` | 空（compose 注入 `http://sc-chromadb:8000`） | ChromaDB 心跳探针基址；留空则不注册该探针，避免单机只跑本服务时误报 DOWN |
+| 文档解析 MQ（Java） | `SC_MQ_INGEST_ENABLED` | `true` | TASK-501 生产端总开关；关闭时不连接 RabbitMQ |
+| 文档解析队列（Java） | `SC_MQ_INGEST_EXCHANGE` / `SC_MQ_INGEST_QUEUE` / `SC_MQ_INGEST_DLQ` | `rag.ingest.exchange` / `rag.ingest.queue` / `rag.ingest.dlq` | `MQ-INGEST-001` 队列与死信声明 |
+| 僵尸任务巡检（Java） | `SC_ZOMBIE_SCAN_ENABLED` | `true` | 补投 `UPLOADED` 且未入队的解析任务 |
 | 依赖探针超时（Java） | `SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS` | `1500` | TCP 可达性探针超时（Redis/RabbitMQ 两项；MySQL 已改为连接池级探针） |
 | JWT 有效期（Java） | `SC_JWT_TTL_SECONDS` | `604800` | 访问令牌有效期（秒），默认 7 天，与 `04` §2.7.2 一致 |
 | 数据库迁移开关（Java） | `SC_DB_MIGRATION_ENABLED` | `true` | 启动期自动执行 `db/migration/V*.sql`；生产改由运维先手工迁移时设为 `false` |

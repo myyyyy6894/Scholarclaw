@@ -14,6 +14,7 @@ import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
 import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
+import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.service.FileUploadSecurityValidator.ValidatedUpload;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
@@ -33,6 +34,8 @@ class KnowledgeUploadServiceTest {
     private static final long DOC_ID = 50001L;
 
     private KnowledgeUploadCommitService commitService;
+    private KnowledgeIngestService ingestService;
+    private KnowledgeDocService docService;
     private CourseService courseService;
     private UserConfigService userConfigService;
     private FileUploadSecurityValidator validator;
@@ -43,12 +46,15 @@ class KnowledgeUploadServiceTest {
     @BeforeEach
     void setUp() {
         commitService = mock(KnowledgeUploadCommitService.class);
+        ingestService = mock(KnowledgeIngestService.class);
+        docService = mock(KnowledgeDocService.class);
         courseService = mock(CourseService.class);
         userConfigService = mock(UserConfigService.class);
         validator = mock(FileUploadSecurityValidator.class);
         storageService = mock(StorageService.class);
-        service = new KnowledgeUploadService(commitService, courseService,
-                userConfigService, new ModelConfigRules(false, ""), validator, storageService);
+        service = new KnowledgeUploadService(commitService, ingestService, docService,
+                courseService, userConfigService, new ModelConfigRules(false, ""),
+                validator, storageService);
         file = mock(MultipartFile.class);
     }
 
@@ -89,12 +95,15 @@ class KnowledgeUploadServiceTest {
         ValidatedUpload staged = new ValidatedUpload("a.pdf", ".pdf", 10, "sha", temp);
         when(validator.validateAndStage(file)).thenReturn(staged);
         when(commitService.commit(USER_ID, COURSE_ID, staged)).thenReturn(sampleVo());
+        when(docService.requireOwnedDoc(USER_ID, DOC_ID)).thenReturn(doc());
+        when(docService.toVO(any())).thenReturn(sampleVo());
 
         KnowledgeDocVO result = service.upload(USER_ID, COURSE_ID, file);
 
         assertThat(result.docId()).isEqualTo(DOC_ID);
         assertThat(result.status()).isEqualTo("UPLOADED");
         verify(commitService).commit(USER_ID, COURSE_ID, staged);
+        verify(ingestService).enqueueInitial(USER_ID, DOC_ID);
         verify(storageService).deleteQuietly(temp);
     }
 
@@ -111,6 +120,7 @@ class KnowledgeUploadServiceTest {
 
         assertThatThrownBy(() -> service.upload(USER_ID, COURSE_ID, file))
                 .isInstanceOf(BusinessException.class);
+        verify(ingestService, never()).enqueueInitial(any(), any());
         verify(storageService).deleteQuietly(temp);
     }
 
@@ -134,6 +144,22 @@ class KnowledgeUploadServiceTest {
         course.setIndexStatus(status.name());
         course.setIsDeleting(0);
         return course;
+    }
+
+    private static KnowledgeDocEntity doc() {
+        KnowledgeDocEntity doc = new KnowledgeDocEntity();
+        doc.setDocId(DOC_ID);
+        doc.setUserId(USER_ID);
+        doc.setCourseId(COURSE_ID);
+        doc.setDocName("a.pdf");
+        doc.setFileExt(".pdf");
+        doc.setFileSizeBytes(10L);
+        doc.setStatus("UPLOADED");
+        doc.setParseVersion(1);
+        doc.setCourseIndexVersion(1);
+        doc.setStorageRelPath("raw/10001/2001/50001.pdf");
+        doc.setFileSha256("sha");
+        return doc;
     }
 
     private static KnowledgeDocVO sampleVo() {

@@ -126,14 +126,16 @@ def main() -> int:
         page.wait_for_url("**/knowledge", timeout=10000)
         page.get_by_role("button", name=course_a, exact=False).first.click()
         page.locator("input[type=file]").set_input_files(pdf_path)
-        page.get_by_text("待解析").first.wait_for(timeout=15000)
-        results.append(check("上传合法 PDF 后显示“待解析”", True))
+        page.locator(".el-table__row").first.wait_for(timeout=15000)
+        row_text = page.locator(".el-table__row").first.inner_text()
+        results.append(check("上传合法 PDF 后进入解析状态",
+                             "解析中" in row_text or "待解析" in row_text, row_text))
 
         page.wait_for_timeout(2600)
         page.screenshot(path=f"{args.screenshot_dir}/sc-p4-knowledge.png", full_page=True)
         body = page.locator("body").inner_text()
-        results.append(check("页面明确重试/重建待接入",
-                             "TASK-501/505" in body or "尚未开放" in body))
+        results.append(check("页面明确重试/重建入口待联调",
+                             "TASK-506" in body or "尚未开放" in body))
         results.append(check("页面无重试/重建按钮",
                              page.get_by_role("button", name="重试", exact=True).count() == 0
                              and page.get_by_role("button", name="重建", exact=True).count() == 0))
@@ -151,10 +153,10 @@ def main() -> int:
         row = page.locator(".el-table__row", has_text=course_a).first
         row.get_by_role("button", name="切换模型").click()
         dialog = page.locator(".el-dialog", has_text="切换课程 Embedding 模型")
-        dialog.get_by_text("重建任务尚未执行", exact=False).wait_for(timeout=10000)
+        dialog.get_by_text("TASK-502", exact=False).wait_for(timeout=10000)
         dialog.get_by_role("button", name="确认切换").click()
-        page.get_by_text("重建任务尚未执行", exact=False).first.wait_for(timeout=15000)
-        results.append(check("课程切换成功且明示重建未执行", True))
+        page.get_by_text("已提交重建请求", exact=False).first.wait_for(timeout=15000)
+        results.append(check("课程切换成功且明示重建由 TASK-502 执行", True))
         page.wait_for_timeout(2600)
         page.screenshot(path=f"{args.screenshot_dir}/sc-p4-courses.png", full_page=True)
 

@@ -8,6 +8,7 @@ import com.scholarclaw.modules.knowledge.dto.DeleteDocVO;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,9 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 单个课件文档的状态操作（{@code 04} §4.4.3~4.4.5 `API-DOC-003/004/005`）。
  *
- * <p><b>P4 门禁：</b>`API-DOC-003/004` 依赖 TASK-501 的 `RETRY_FAILED`/`REINDEX` MQ 生产者。
- * 在生产者落地前，接口默认返回 `501 FEATURE_NOT_AVAILABLE`，绝不把文档改成没有消费者的
- * `PARSING`。`KnowledgeDocService.retryFailed/reindexReady` 保留为 P5 的领域服务基础。
+ * <p><b>TASK-501：</b>`API-DOC-003/004` 在数据库状态迁移提交后发布 `RETRY_FAILED`/`REINDEX`。
+ * `SC_MANUAL_INGEST_ENABLED=false` 时仍返回 `501 FEATURE_NOT_AVAILABLE`，用于关闭生产端；
+ * 消费者（TASK-502）未接入前文档会停留在 `PARSING`，UI 入口仍保持隐藏。
  *
  * <p>`API-DOC-005` 只做第一阶段 `DELETING`；物理文件与向量清理由 TASK-901/902 的 GC 完成。
  */
@@ -29,12 +30,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class KnowledgeDocActionController {
 
     private final KnowledgeDocService docService;
+    private final KnowledgeIngestService ingestService;
     private final boolean manualIngestEnabled;
 
     public KnowledgeDocActionController(
             KnowledgeDocService docService,
-            @Value("${sc.knowledge.manual-ingest-enabled:false}") boolean manualIngestEnabled) {
+            KnowledgeIngestService ingestService,
+            @Value("${sc.knowledge.manual-ingest-enabled:true}") boolean manualIngestEnabled) {
         this.docService = docService;
+        this.ingestService = ingestService;
         this.manualIngestEnabled = manualIngestEnabled;
     }
 
@@ -42,18 +46,18 @@ public class KnowledgeDocActionController {
     public Result<KnowledgeDocVO> retry(@PathVariable("docId") String docId) {
         Long parsed = parseDocId(docId);
         requireManualIngestAvailable();
-        KnowledgeDocEntity updated = docService.retryFailed(
+        KnowledgeDocVO updated = ingestService.retry(
                 SecurityContextUtils.requireCurrentUserId(), parsed);
-        return Result.ok("课件已重新进入解析队列", docService.toVO(updated));
+        return Result.ok("课件已重新进入解析队列", updated);
     }
 
     @PostMapping("/{docId}/reindex")
     public Result<KnowledgeDocVO> reindex(@PathVariable("docId") String docId) {
         Long parsed = parseDocId(docId);
         requireManualIngestAvailable();
-        KnowledgeDocEntity updated = docService.reindexReady(
+        KnowledgeDocVO updated = ingestService.reindex(
                 SecurityContextUtils.requireCurrentUserId(), parsed);
-        return Result.ok("课件已重新进入向量重建队列", docService.toVO(updated));
+        return Result.ok("课件已重新进入向量重建队列", updated);
     }
 
     @DeleteMapping("/{docId}")

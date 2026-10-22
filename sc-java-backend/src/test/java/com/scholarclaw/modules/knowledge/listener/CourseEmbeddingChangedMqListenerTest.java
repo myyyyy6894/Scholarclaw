@@ -9,6 +9,7 @@ import com.scholarclaw.common.event.CourseEmbeddingChangedEvent;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,13 +20,15 @@ class CourseEmbeddingChangedMqListenerTest {
     @DisplayName("课程切换提交后批量发布 REINDEX")
     void publishesAfterCourseEmbeddingChange() {
         KnowledgeIngestService ingestService = mock(KnowledgeIngestService.class);
+        KnowledgeVectorCleanupService cleanupService = mock(KnowledgeVectorCleanupService.class);
         when(ingestService.publishReindexForCourse(10001L, 2001L, 2)).thenReturn(3);
 
-        new CourseEmbeddingChangedMqListener(ingestService).onCourseEmbeddingChanged(
+        new CourseEmbeddingChangedMqListener(ingestService, cleanupService).onCourseEmbeddingChanged(
                 new CourseEmbeddingChangedEvent(10001L, 2001L, 1, 2,
                         "OPENAI_COMPATIBLE", "embed-v2", 1024));
 
         verify(ingestService).publishReindexForCourse(10001L, 2001L, 2);
+        verify(cleanupService).cleanupCourse(10001L, 2001L, 1);
     }
 
     @Test

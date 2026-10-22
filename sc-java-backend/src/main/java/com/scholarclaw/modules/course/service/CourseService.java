@@ -178,6 +178,11 @@ public class CourseService implements UserCourseCountProvider {
                 result.reindexingDocCount());
     }
 
+    /** 解析回调后收敛课程索引状态（TASK-505）。 */
+    public void refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
+        courseMutationService.refreshIndexStatus(userId, courseId, indexVersion);
+    }
+
     /** `API-COURSE-004`：第一阶段软删，事件监听方负责文档/DDL/会话；物理清理由 GC 兜底。 */
     public DeleteCourseVO deleteCourse(Long userId, Long courseId) {
         getActiveCourse(userId, courseId);

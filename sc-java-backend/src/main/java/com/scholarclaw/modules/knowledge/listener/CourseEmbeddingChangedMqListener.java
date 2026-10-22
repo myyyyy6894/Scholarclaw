@@ -2,6 +2,7 @@ package com.scholarclaw.modules.knowledge.listener;
 
 import com.scholarclaw.common.event.CourseEmbeddingChangedEvent;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -20,15 +21,21 @@ public class CourseEmbeddingChangedMqListener {
     private static final Logger log = LoggerFactory.getLogger(CourseEmbeddingChangedMqListener.class);
 
     private final KnowledgeIngestService ingestService;
+    private final KnowledgeVectorCleanupService vectorCleanupService;
 
-    public CourseEmbeddingChangedMqListener(KnowledgeIngestService ingestService) {
+    public CourseEmbeddingChangedMqListener(KnowledgeIngestService ingestService,
+                                            KnowledgeVectorCleanupService vectorCleanupService) {
         this.ingestService = ingestService;
+        this.vectorCleanupService = vectorCleanupService;
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCourseEmbeddingChanged(CourseEmbeddingChangedEvent event) {
         int published = ingestService.publishReindexForCourse(
                 event.userId(), event.courseId(), event.currentIndexVersion());
+        // 旧 Collection 不再被检索使用；删除失败由 GC 兜底
+        vectorCleanupService.cleanupCourse(event.userId(), event.courseId(),
+                event.previousIndexVersion());
         log.info("课程切换后发布 REINDEX courseId={} version={} published={}",
                 event.courseId(), event.currentIndexVersion(), published);
     }

@@ -69,6 +69,9 @@ public class KnowledgeIngestResultService {
         if ("FAILED".equals(status)) {
             boolean applied = docService.markFailed(docId, request.parseVersion(),
                     normalizeErrorCode(request.errorCode()), normalizeErrorMsg(request.errorMsg()));
+            if (applied) {
+                refreshCourse(doc, request.courseIndexVersion());
+            }
             return result(docId, applied);
         }
 
@@ -102,7 +105,13 @@ public class KnowledgeIngestResultService {
             parentChunkMapper.insert(toEntity(headerUserId, doc.getCourseId(), docId,
                     request.parseVersion(), item));
         }
+        refreshCourse(doc, request.courseIndexVersion());
         return result(docId, true);
+    }
+
+    private void refreshCourse(KnowledgeDocEntity doc, int indexVersion) {
+        // 与文档/父块同一事务：失败则整体回滚，由 Python 重试回调，避免状态分叉
+        courseService.refreshIndexStatus(doc.getUserId(), doc.getCourseId(), indexVersion);
     }
 
     private void validateReadyRequest(CourseNamespaceEntity course, Long docId,

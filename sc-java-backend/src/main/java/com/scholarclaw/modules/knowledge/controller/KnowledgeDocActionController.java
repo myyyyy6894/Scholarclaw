@@ -9,6 +9,7 @@ import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,14 +32,17 @@ public class KnowledgeDocActionController {
 
     private final KnowledgeDocService docService;
     private final KnowledgeIngestService ingestService;
+    private final KnowledgeVectorCleanupService vectorCleanupService;
     private final boolean manualIngestEnabled;
 
     public KnowledgeDocActionController(
             KnowledgeDocService docService,
             KnowledgeIngestService ingestService,
+            KnowledgeVectorCleanupService vectorCleanupService,
             @Value("${sc.knowledge.manual-ingest-enabled:true}") boolean manualIngestEnabled) {
         this.docService = docService;
         this.ingestService = ingestService;
+        this.vectorCleanupService = vectorCleanupService;
         this.manualIngestEnabled = manualIngestEnabled;
     }
 
@@ -63,8 +67,9 @@ public class KnowledgeDocActionController {
     @DeleteMapping("/{docId}")
     public Result<DeleteDocVO> delete(@PathVariable("docId") String docId) {
         Long parsed = parseDocId(docId);
-        KnowledgeDocEntity deleted = docService.softDelete(
-                SecurityContextUtils.requireCurrentUserId(), parsed);
+        Long userId = SecurityContextUtils.requireCurrentUserId();
+        KnowledgeDocEntity deleted = docService.softDelete(userId, parsed);
+        vectorCleanupService.cleanupDocument(userId, deleted.getCourseId(), parsed, null);
         return Result.ok("已标记为 DELETING，物理文件与向量等待 TASK-901/902 GC 清理",
                 new DeleteDocVO(parsed, deleted.getStatus()));
     }

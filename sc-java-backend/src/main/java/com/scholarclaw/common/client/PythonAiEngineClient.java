@@ -45,6 +45,8 @@ public class PythonAiEngineClient {
 
     /** Python 侧内部探测路径（`04` §4.9.1）。 */
     public static final String PROBE_PATH = "/internal/ai/v1/model/probe";
+    /** Python 侧内部向量清理路径（`04` §4.9.4）。 */
+    public static final String VECTORS_PATH = "/internal/ai/v1/rag/vectors";
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
 
     /** 内部调用连接超时上限：超过 5s 会挤压 Java 的 10s 读取预算（`04` §4.9.1）。 */
@@ -93,6 +95,16 @@ public class PythonAiEngineClient {
 
     /** 发起内部 JSON POST，按调用指定读取超时。 */
     public JsonNode postJson(String path, Object body, Long userId, Duration readTimeout) {
+        return sendJson("POST", path, body, userId, readTimeout);
+    }
+
+    /** 发起内部 JSON DELETE（向量清理等幂等操作）。 */
+    public JsonNode deleteJson(String path, Object body, Long userId, Duration readTimeout) {
+        return sendJson("DELETE", path, body, userId, readTimeout);
+    }
+
+    private JsonNode sendJson(String method, String path, Object body, Long userId,
+                              Duration readTimeout) {
         if (baseUrl.isBlank()) {
             log.error("sc-python-ai 内部基址未配置，无法发起内部调用 path={}", path);
             throw new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR, "AI 引擎地址未配置，请联系管理员。");
@@ -115,7 +127,7 @@ public class PythonAiEngineClient {
             builder.header(TraceContext.USER_ID_HEADER, String.valueOf(userId));
         }
         HttpRequest request = builder
-                .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                .method(method, HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
                 .build();
 
         HttpResponse<String> response;

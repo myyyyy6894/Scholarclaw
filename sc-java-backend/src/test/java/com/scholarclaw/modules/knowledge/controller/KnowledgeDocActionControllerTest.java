@@ -15,6 +15,7 @@ import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
@@ -40,14 +41,17 @@ class KnowledgeDocActionControllerTest {
 
     private KnowledgeDocService docService;
     private KnowledgeIngestService ingestService;
+    private KnowledgeVectorCleanupService cleanupService;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         docService = mock(KnowledgeDocService.class);
         ingestService = mock(KnowledgeIngestService.class);
+        cleanupService = mock(KnowledgeVectorCleanupService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
-                        new KnowledgeDocActionController(docService, ingestService, true))
+                        new KnowledgeDocActionController(docService, ingestService,
+                                cleanupService, true))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -87,7 +91,8 @@ class KnowledgeDocActionControllerTest {
     @DisplayName("P4 门禁关闭时 retry 返回 501 且不修改状态")
     void retryBlockedWhenManualIngestDisabled() throws Exception {
         mockMvc = MockMvcBuilders.standaloneSetup(
-                        new KnowledgeDocActionController(docService, ingestService, false))
+                        new KnowledgeDocActionController(docService, ingestService,
+                                cleanupService, false))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -111,6 +116,8 @@ class KnowledgeDocActionControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.deleted_doc_id").value("50001"))
                 .andExpect(jsonPath("$.data.status").value("DELETING"));
+        org.mockito.Mockito.verify(cleanupService)
+                .cleanupDocument(USER_ID, 2001L, DOC_ID, null);
     }
 
     @Test
@@ -124,6 +131,7 @@ class KnowledgeDocActionControllerTest {
     private static KnowledgeDocEntity doc() {
         KnowledgeDocEntity doc = new KnowledgeDocEntity();
         doc.setDocId(DOC_ID);
+        doc.setCourseId(2001L);
         doc.setStatus("PARSING");
         return doc;
     }

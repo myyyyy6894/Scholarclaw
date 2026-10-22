@@ -112,6 +112,45 @@ public class CourseMutationService {
         return new EmbeddingChangeResult(updated, stats.total());
     }
 
+    /**
+     * 解析回调后收敛课程索引状态（TASK-505）。
+     *
+     * <p>只在课程仍为 `REBUILDING` 且版本未变化时更新：仍有解析中文档则保持；
+     * 全部文档就绪 → `ACTIVE`；存在失败/未就绪 → `REBUILD_FAILED`。
+     * 使用条件更新而不是行锁，避免与课程切换的锁顺序冲突。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
+        CourseNamespaceEntity locked = courseNamespaceMapper.selectOne(
+                Wrappers.<CourseNamespaceEntity>lambdaQuery()
+                        .eq(CourseNamespaceEntity::getCourseId, courseId)
+                        .eq(CourseNamespaceEntity::getUserId, userId)
+                        .eq(CourseNamespaceEntity::getIsDeleting, 0));
+        if (locked == null || !IndexStatus.REBUILDING.name().equals(locked.getIndexStatus())
+                || !Objects.equals(locked.getIndexVersion(), indexVersion)) {
+            return;
+        }
+        CourseDocumentStatsProvider providerPort = statsProvider.getIfAvailable();
+        if (providerPort == null) {
+            return;
+        }
+        CourseDocumentStats stats = providerPort
+                .statsByCourse(userId, Map.of(courseId, indexVersion))
+                .getOrDefault(courseId, CourseDocumentStats.ZERO);
+        if (stats.parsing() > 0) {
+            return;
+        }
+        String status = stats.total() == 0 || stats.ready() >= stats.total()
+                ? IndexStatus.ACTIVE.name() : IndexStatus.REBUILD_FAILED.name();
+        courseNamespaceMapper.update(null, Wrappers.<CourseNamespaceEntity>lambdaUpdate()
+                .eq(CourseNamespaceEntity::getCourseId, courseId)
+                .eq(CourseNamespaceEntity::getUserId, userId)
+                .eq(CourseNamespaceEntity::getIndexVersion, indexVersion)
+                .eq(CourseNamespaceEntity::getIndexStatus, IndexStatus.REBUILDING.name())
+                .set(CourseNamespaceEntity::getIndexStatus, status)
+                .set(CourseNamespaceEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void softDelete(Long userId, Long courseId) {
         int affected = courseNamespaceMapper.update(null, Wrappers.<CourseNamespaceEntity>lambdaUpdate()

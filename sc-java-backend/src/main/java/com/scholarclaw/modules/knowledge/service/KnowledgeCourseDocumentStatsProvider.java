@@ -3,7 +3,6 @@ package com.scholarclaw.modules.knowledge.service;
 import com.scholarclaw.modules.course.service.CourseDocumentStatsProvider;
 import com.scholarclaw.modules.knowledge.mapper.CourseDocStatsRow;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -24,12 +23,13 @@ public class KnowledgeCourseDocumentStatsProvider implements CourseDocumentStats
     }
 
     @Override
-    public Map<Long, CourseDocumentStats> statsByCourse(Long userId, Collection<Long> courseIds) {
-        if (courseIds == null || courseIds.isEmpty()) {
+    public Map<Long, CourseDocumentStats> statsByCourse(Long userId,
+                                                        Map<Long, Integer> courseIndexVersions) {
+        if (courseIndexVersions == null || courseIndexVersions.isEmpty()) {
             return Map.of();
         }
         Map<Long, CourseDocumentStats> result = new HashMap<>();
-        for (CourseDocStatsRow row : docMapper.selectCourseStats(userId, courseIds)) {
+        for (CourseDocStatsRow row : docMapper.selectCourseStats(userId, courseIndexVersions)) {
             result.put(row.getCourseId(), new CourseDocumentStats(
                     intValue(row.getReadyCount()),
                     intValue(row.getParsingCount()),

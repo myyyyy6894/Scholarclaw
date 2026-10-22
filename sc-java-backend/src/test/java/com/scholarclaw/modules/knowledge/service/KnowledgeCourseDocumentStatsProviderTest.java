@@ -7,7 +7,6 @@ import static org.mockito.Mockito.when;
 import com.scholarclaw.modules.course.service.CourseDocumentStatsProvider.CourseDocumentStats;
 import com.scholarclaw.modules.knowledge.mapper.CourseDocStatsRow;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,10 +23,10 @@ class KnowledgeCourseDocumentStatsProviderTest {
         row.setParsingCount(2L);
         row.setFailedCount(1L);
         row.setTotalCount(7L);
-        when(mapper.selectCourseStats(10001L, List.of(2001L))).thenReturn(List.of(row));
+        when(mapper.selectCourseStats(10001L, Map.of(2001L, 2))).thenReturn(java.util.List.of(row));
 
         Map<Long, CourseDocumentStats> stats = new KnowledgeCourseDocumentStatsProvider(mapper)
-                .statsByCourse(10001L, List.of(2001L));
+                .statsByCourse(10001L, Map.of(2001L, 2));
 
         assertThat(stats.get(2001L).ready()).isEqualTo(4);
         assertThat(stats.get(2001L).parsing()).isEqualTo(2);

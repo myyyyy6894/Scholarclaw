@@ -4,6 +4,7 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import { installAuthGuard } from '@/router/guard'
 import CoursesView from '@/views/CoursesView.vue'
 import HomeView from '@/views/HomeView.vue'
+import KnowledgeView from '@/views/KnowledgeView.vue'
 import LoginView from '@/views/LoginView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
 import SettingsView from '@/views/SettingsView.vue'
@@ -44,6 +45,12 @@ const routes: RouteRecordRaw[] = [
         name: 'courses',
         component: CoursesView,
         meta: { title: '课程空间', requiresAuth: true },
+      },
+      {
+        path: 'knowledge',
+        name: 'knowledge',
+        component: KnowledgeView,
+        meta: { title: '课程知识库', requiresAuth: true },
       },
       {
         path: 'settings',

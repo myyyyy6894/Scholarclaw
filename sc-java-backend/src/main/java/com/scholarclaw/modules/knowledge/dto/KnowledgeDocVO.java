@@ -18,6 +18,8 @@ public record KnowledgeDocVO(
         int pageCount,
         int chunkCount,
         int retryCount,
+        /** P4 恒为 null；TASK-501 发布 `INITIAL_INGEST` 后回填。 */
+        String lastIngestJobId,
         String errorCode,
         String errorMsg,
         String enqueuedAt,

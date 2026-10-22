@@ -11,6 +11,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.config.JacksonConfig;
+import com.scholarclaw.common.exception.BusinessException;
+import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.common.exception.GlobalExceptionHandler;
 import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
@@ -19,6 +21,7 @@ import com.scholarclaw.modules.knowledge.service.KnowledgeUploadService;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -100,7 +103,7 @@ class KnowledgeDocControllerTest {
     void uploadReturnsAccepted() throws Exception {
         when(uploadService.upload(eq(USER_ID), eq(COURSE_ID), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(new KnowledgeDocVO(50002L, COURSE_ID, "a.pdf", ".pdf", 10,
-                        "UPLOADED", 1, 1, null, null, 0, 0, 0,
+                        "UPLOADED", 1, 1, null, null, 0, 0, 0, null,
                         null, null, null, null,
                         "2026-10-21T10:00:00.000+08:00", "2026-10-21T10:00:00.000+08:00"));
         MockMultipartFile file = new MockMultipartFile("file", "a.pdf",
@@ -112,9 +115,27 @@ class KnowledgeDocControllerTest {
                 .andExpect(jsonPath("$.data.status").value("UPLOADED"));
     }
 
+    @Test
+    @DisplayName("重复上传 409 的 data 携带 existing_doc_id，信封仍为五字段")
+    void duplicateUploadCarriesExistingDocId() throws Exception {
+        when(uploadService.upload(eq(USER_ID), eq(COURSE_ID), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new BusinessException(ErrorCode.DOC_DUPLICATE_SHA256,
+                        "该课件已存在。", Map.of("existing_doc_id", "50001",
+                        "existing_doc_name", "a.pdf")));
+        MockMultipartFile file = new MockMultipartFile("file", "a.pdf",
+                "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        mockMvc.perform(multipart("/api/v1/courses/2001/docs/upload").file(file))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DOC_DUPLICATE_SHA256"))
+                .andExpect(jsonPath("$.data.existing_doc_id").value("50001"))
+                .andExpect(jsonPath("$.data.existing_doc_name").value("a.pdf"))
+                .andExpect(jsonPath("$.trace_id").isString());
+    }
+
     private static KnowledgeDocVO doc() {
         return new KnowledgeDocVO(50001L, COURSE_ID, "第5章_事务处理.pdf", ".pdf", 6501171L,
-                "READY", 1, 1, "BAAI/bge-m3", 1024, 38, 112, 0,
+                "READY", 1, 1, "BAAI/bge-m3", 1024, 38, 112, 0, null,
                 null, null, "2026-10-15T10:31:00.000+08:00",
                 "2026-10-15T10:31:24.500+08:00", "2026-10-15T10:30:59.800+08:00",
                 "2026-10-15T10:31:24.500+08:00");

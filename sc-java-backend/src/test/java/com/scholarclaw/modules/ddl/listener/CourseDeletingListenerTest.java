@@ -3,7 +3,7 @@ package com.scholarclaw.modules.ddl.listener;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-import com.scholarclaw.modules.course.event.CourseDeletingEvent;
+import com.scholarclaw.common.event.CourseDeletingEvent;
 import com.scholarclaw.modules.ddl.mapper.DdlTaskMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

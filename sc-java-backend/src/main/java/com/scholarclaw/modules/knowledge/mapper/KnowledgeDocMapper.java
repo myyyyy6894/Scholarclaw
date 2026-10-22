@@ -2,8 +2,8 @@ package com.scholarclaw.modules.knowledge.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
-import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -19,7 +19,14 @@ public interface KnowledgeDocMapper extends BaseMapper<KnowledgeDocEntity> {
     @Select("""
             <script>
             SELECT course_id,
-                   SUM(CASE WHEN status = 'READY' THEN 1 ELSE 0 END) AS ready_count,
+                   SUM(CASE WHEN status = 'READY'
+                             AND (
+                               <foreach collection="courseIndexVersions" index="courseId"
+                                        item="indexVersion" separator=" OR ">
+                                 (course_id = #{courseId} AND course_index_version = #{indexVersion})
+                               </foreach>
+                             )
+                        THEN 1 ELSE 0 END) AS ready_count,
                    SUM(CASE WHEN status IN ('UPLOADED', 'PARSING') THEN 1 ELSE 0 END) AS parsing_count,
                    SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failed_count,
                    COUNT(*) AS total_count
@@ -27,12 +34,14 @@ public interface KnowledgeDocMapper extends BaseMapper<KnowledgeDocEntity> {
              WHERE user_id = #{userId}
                AND status NOT IN ('DELETING', 'DELETED')
                AND course_id IN
-               <foreach collection="courseIds" item="courseId" open="(" separator="," close=")">
+               <foreach collection="courseIndexVersions" index="courseId"
+                        item="indexVersion" open="(" separator="," close=")">
                  #{courseId}
                </foreach>
              GROUP BY course_id
             </script>
             """)
-    List<CourseDocStatsRow> selectCourseStats(@Param("userId") Long userId,
-                                              @Param("courseIds") Collection<Long> courseIds);
+    List<CourseDocStatsRow> selectCourseStats(
+            @Param("userId") Long userId,
+            @Param("courseIndexVersions") Map<Long, Integer> courseIndexVersions);
 }

@@ -20,12 +20,15 @@ import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DuplicateKeyException;
 
 /** TASK-402 文档元数据、状态机与乐观锁。 */
 class KnowledgeDocServiceTest {
@@ -37,6 +40,7 @@ class KnowledgeDocServiceTest {
     private KnowledgeDocMapper docMapper;
     private KnowledgeParentChunkMapper parentChunkMapper;
     private CourseService courseService;
+    private UserConfigService userConfigService;
     private KnowledgeDocService service;
 
     @BeforeEach
@@ -44,7 +48,10 @@ class KnowledgeDocServiceTest {
         docMapper = mock(KnowledgeDocMapper.class);
         parentChunkMapper = mock(KnowledgeParentChunkMapper.class);
         courseService = mock(CourseService.class);
-        service = new KnowledgeDocService(docMapper, parentChunkMapper, courseService);
+        userConfigService = mock(UserConfigService.class);
+        service = new KnowledgeDocService(docMapper, parentChunkMapper, courseService,
+                userConfigService, new ModelConfigRules(false, ""));
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(validConfig()));
     }
 
     @Test
@@ -63,11 +70,46 @@ class KnowledgeDocServiceTest {
     }
 
     @Test
+    @DisplayName("非 READY 文档即使残留旧快照，响应也必须为 null/0")
+    void hidesStaleSnapshotForNonReadyDocs() {
+        KnowledgeDocEntity parsing = doc(DocumentStatus.PARSING, 2);
+        parsing.setIndexedEmbeddingProvider("OPENAI_COMPATIBLE");
+        parsing.setIndexedEmbeddingModel("old-model");
+        parsing.setIndexedEmbeddingDim(1024);
+        parsing.setPageCount(38);
+        parsing.setChunkCount(112);
+        parsing.setReadyAt(LocalDateTime.now());
+
+        KnowledgeDocVO vo = service.toVO(parsing);
+
+        assertThat(vo.indexedEmbeddingModel()).isNull();
+        assertThat(vo.indexedEmbeddingDim()).isNull();
+        assertThat(vo.pageCount()).isZero();
+        assertThat(vo.chunkCount()).isZero();
+        assertThat(vo.readyAt()).isNull();
+        assertThat(vo.status()).isEqualTo("PARSING");
+    }
+
+    @Test
+    @DisplayName("READY 文档保留真实索引快照")
+    void exposesSnapshotForReadyDocs() {
+        KnowledgeDocEntity ready = doc(DocumentStatus.READY, 1);
+        ready.setReadyAt(LocalDateTime.now());
+        KnowledgeDocVO vo = service.toVO(ready);
+
+        assertThat(vo.indexedEmbeddingModel()).isEqualTo("BAAI/bge-m3");
+        assertThat(vo.indexedEmbeddingDim()).isEqualTo(1024);
+        assertThat(vo.pageCount()).isEqualTo(38);
+        assertThat(vo.chunkCount()).isEqualTo(112);
+        assertThat(vo.readyAt()).isNotNull();
+    }
+
+    @Test
     @DisplayName("非法 status 过滤值返回 VALIDATION_ERROR")
     void rejectsInvalidStatusFilter() {
         when(courseService.getActiveCourse(USER_ID, COURSE_ID)).thenReturn(course(IndexStatus.ACTIVE));
 
-        assertThatThrownBy(() -> service.listDocs(USER_ID, COURSE_ID, "DELETED"))
+        assertThatThrownBy(() -> service.listDocs(USER_ID, COURSE_ID, "ARCHIVED"))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(ErrorCode.VALIDATION_ERROR));
@@ -169,31 +211,48 @@ class KnowledgeDocServiceTest {
     }
 
     @Test
+    @DisplayName("READY 重建进入 PARSING 时显式清空索引快照")
+    void clearsIndexSnapshotOnReindex() {
+        when(docMapper.selectOne(any())).thenReturn(doc(DocumentStatus.READY, 1));
+        when(courseService.getActiveCourse(USER_ID, COURSE_ID)).thenReturn(course(IndexStatus.ACTIVE));
+        when(docMapper.update(any(), any())).thenReturn(1);
+
+        service.reindexReady(USER_ID, DOC_ID);
+
+        var wrapper = org.mockito.ArgumentCaptor.forClass(
+                com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(docMapper).update(any(), wrapper.capture());
+        String sqlSet = String.valueOf(wrapper.getValue().getSqlSet());
+        assertThat(sqlSet).contains("indexed_embedding_model = NULL")
+                .contains("indexed_embedding_dim = NULL")
+                .contains("page_count = 0")
+                .contains("chunk_count = 0")
+                .contains("ready_at = NULL");
+    }
+
+    @Test
     @DisplayName("建课索引 REBUILDING 时拒绝创建文档元数据")
     void rejectsCreateWhileCourseRebuilding() {
-        when(courseService.getActiveCourse(USER_ID, COURSE_ID))
-                .thenReturn(course(IndexStatus.REBUILDING));
+        CourseNamespaceEntity rebuilding = course(IndexStatus.REBUILDING);
 
         assertThatThrownBy(() -> service.createDocumentMetadata(
-                USER_ID, COURSE_ID, "a.pdf", ".pdf", 10, "sha", "tmp"))
+                rebuilding, "a.pdf", ".pdf", 10, "sha", "tmp"))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(ErrorCode.E_SYS_03));
         verify(docMapper, never()).insert(any(KnowledgeDocEntity.class));
     }
 
-    @Test
-    @DisplayName("同课程重复文件唯一键冲突映射为 DOC_DUPLICATE_SHA256")
-    void mapsDuplicateSha() {
-        when(courseService.getActiveCourse(USER_ID, COURSE_ID)).thenReturn(course(IndexStatus.ACTIVE));
-        when(docMapper.insert(any(KnowledgeDocEntity.class)))
-                .thenThrow(new DuplicateKeyException("uk_doc"));
-
-        assertThatThrownBy(() -> service.createDocumentMetadata(
-                USER_ID, COURSE_ID, "a.pdf", ".pdf", 10, "sha", "tmp"))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
-                        .isEqualTo(ErrorCode.DOC_DUPLICATE_SHA256));
+    private static UserConfigEntity validConfig() {
+        UserConfigEntity config = new UserConfigEntity();
+        config.setUserId(USER_ID);
+        config.setAccountStatus("ACTIVE");
+        config.setDefaultEmbeddingProvider("OPENAI_COMPATIBLE");
+        config.setEmbeddingBaseUrl("https://api.siliconflow.cn/v1");
+        config.setDefaultEmbeddingModel("BAAI/bge-m3");
+        config.setDefaultEmbeddingDim(1024);
+        config.setEmbeddingApiKeyCipher("v1:iv:cipher");
+        return config;
     }
 
     private static CourseNamespaceEntity course(IndexStatus status) {

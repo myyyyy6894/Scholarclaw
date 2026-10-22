@@ -1,4 +1,4 @@
-package com.scholarclaw.modules.course.event;
+package com.scholarclaw.common.event;
 
 /**
  * 课程 Embedding 模型切换事件（{@code 04} `API-COURSE-003`）。

@@ -20,17 +20,16 @@ import com.scholarclaw.modules.course.mapper.CourseNamespaceMapper;
 import com.scholarclaw.modules.course.service.CourseDocumentStatsProvider.CourseDocumentStats;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.modules.userconfig.service.UserCourseCountProvider;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -48,7 +47,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class CourseService implements UserCourseCountProvider {
 
-    private static final Logger log = LoggerFactory.getLogger(CourseService.class);
     private static final String DEFAULT_COURSE_NAME = "未分类课程";
     private static final String DEFAULT_DESCRIPTION = "系统自动初始化的默认未分类课件归档空间";
     private static final DateTimeFormatter TIMESTAMP_FORMAT =
@@ -58,6 +56,7 @@ public class CourseService implements UserCourseCountProvider {
     private final CourseMutationService courseMutationService;
     private final UserConfigService userConfigService;
     private final ModelConfigRules modelConfigRules;
+    private final ModelKeyBindingRules modelKeyBindingRules;
     private final PythonAiEngineClient pythonAiEngineClient;
     private final BaseUrlSecurityValidator baseUrlSecurityValidator;
     private final AesGcmCryptoService cryptoService;
@@ -67,6 +66,7 @@ public class CourseService implements UserCourseCountProvider {
                          CourseMutationService courseMutationService,
                          UserConfigService userConfigService,
                          ModelConfigRules modelConfigRules,
+                         ModelKeyBindingRules modelKeyBindingRules,
                          PythonAiEngineClient pythonAiEngineClient,
                          BaseUrlSecurityValidator baseUrlSecurityValidator,
                          AesGcmCryptoService cryptoService,
@@ -75,6 +75,7 @@ public class CourseService implements UserCourseCountProvider {
         this.courseMutationService = courseMutationService;
         this.userConfigService = userConfigService;
         this.modelConfigRules = modelConfigRules;
+        this.modelKeyBindingRules = modelKeyBindingRules;
         this.pythonAiEngineClient = pythonAiEngineClient;
         this.baseUrlSecurityValidator = baseUrlSecurityValidator;
         this.cryptoService = cryptoService;
@@ -93,8 +94,10 @@ public class CourseService implements UserCourseCountProvider {
             return List.of();
         }
         ZoneId zone = zoneFor(userId);
-        Map<Long, CourseDocumentStats> stats = statsFor(
-                userId, courses.stream().map(CourseNamespaceEntity::getCourseId).toList());
+        Map<Long, CourseDocumentStats> stats = statsFor(userId,
+                courses.stream().collect(Collectors.toMap(
+                        CourseNamespaceEntity::getCourseId,
+                        course -> course.getIndexVersion() == null ? 1 : course.getIndexVersion())));
         return courses.stream()
                 .map(course -> toVO(course,
                         stats.getOrDefault(course.getCourseId(), CourseDocumentStats.ZERO), zone))
@@ -135,10 +138,10 @@ public class CourseService implements UserCourseCountProvider {
         }
 
         UserConfigEntity config = requireActiveConfig(userId);
+        requireValidEmbeddingConfig(config);
         String provider;
         String model;
         if (request.usesUserDefault()) {
-            requireValidEmbeddingConfig(config);
             provider = config.getDefaultEmbeddingProvider();
             model = config.getDefaultEmbeddingModel();
         } else {
@@ -152,6 +155,11 @@ public class CourseService implements UserCourseCountProvider {
                 throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                         "embedding_provider 仅允许 OPENAI_COMPATIBLE/ZHIPU/OLLAMA。");
             }
+            // 已保存 Key 的目标绑定：provider + Origin + 模型名任一变化都必须在解密前拒绝
+            modelKeyBindingRules.requireSameTarget(
+                    config.getDefaultEmbeddingProvider(), config.getEmbeddingBaseUrl(),
+                    config.getDefaultEmbeddingModel(),
+                    provider, config.getEmbeddingBaseUrl(), model);
         }
         if (!hasText(config.getEmbeddingBaseUrl())) {
             throw new BusinessException(ErrorCode.E_SYS_01);
@@ -163,14 +171,11 @@ public class CourseService implements UserCourseCountProvider {
         int dim = probeEmbeddingDimension(userId, endpoint);
 
         int previousVersion = course.getIndexVersion();
-        int currentVersion = previousVersion + 1;
-        CourseDocumentStats stats = statsFor(userId, List.of(courseId))
-                .getOrDefault(courseId, CourseDocumentStats.ZERO);
-        String status = stats.total() > 0 ? IndexStatus.REBUILDING.name() : IndexStatus.ACTIVE.name();
-        courseMutationService.applyEmbeddingChange(userId, courseId, provider, model, dim,
-                previousVersion, currentVersion, status);
-        return new ChangeEmbeddingModelVO(courseId, previousVersion, currentVersion, status,
-                provider, model, dim, stats.total());
+        CourseMutationService.EmbeddingChangeResult result = courseMutationService
+                .applyEmbeddingChange(userId, courseId, provider, model, dim, previousVersion);
+        return new ChangeEmbeddingModelVO(courseId, previousVersion, result.course().getIndexVersion(),
+                result.course().getIndexStatus(), provider, model, dim,
+                result.reindexingDocCount());
     }
 
     /** `API-COURSE-004`：第一阶段软删，事件监听方负责文档/DDL/会话；物理清理由 GC 兜底。 */
@@ -228,6 +233,17 @@ public class CourseService implements UserCourseCountProvider {
         return course;
     }
 
+    /**
+     * 事务内锁定课程行（调用方必须已开启事务）；用于上传与课程状态变更的互斥。
+     */
+    public CourseNamespaceEntity getActiveCourseForUpdate(Long userId, Long courseId) {
+        CourseNamespaceEntity course = courseNamespaceMapper.selectActiveCourseForUpdate(userId, courseId);
+        if (course == null) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return course;
+    }
+
     private UserConfigEntity requireActiveConfig(Long userId) {
         UserConfigEntity config = userConfigService.findById(userId)
                 .orElseThrow(() -> new BusinessException(
@@ -272,10 +288,11 @@ public class CourseService implements UserCourseCountProvider {
     }
 
     private String resolveEmbeddingKey(UserConfigEntity config, String provider) {
+        // 白名单免密 Ollama：始终发送无 Key 请求，即使库里残留旧密文也不解密外发
+        if (modelConfigRules.isWhitelistedLocalOllama(provider, config.getEmbeddingBaseUrl())) {
+            return null;
+        }
         if (config.getEmbeddingApiKeyCipher() == null) {
-            if (modelConfigRules.isWhitelistedLocalOllama(provider, config.getEmbeddingBaseUrl())) {
-                return null;
-            }
             throw new BusinessException(ErrorCode.E_SYS_01);
         }
         try {
@@ -296,20 +313,18 @@ public class CourseService implements UserCourseCountProvider {
         return result.actualDim();
     }
 
-    private Map<Long, CourseDocumentStats> statsFor(Long userId, Collection<Long> courseIds) {
+    private Map<Long, CourseDocumentStats> statsFor(Long userId,
+                                                    Map<Long, Integer> courseIndexVersions) {
         CourseDocumentStatsProvider provider = statsProvider.getIfAvailable();
-        if (provider == null || courseIds.isEmpty()) {
+        if (provider == null) {
+            throw new IllegalStateException("课程文档统计端口未实现，无法返回真实统计。");
+        }
+        if (courseIndexVersions.isEmpty()) {
             return Map.of();
         }
-        try {
-            return Objects.requireNonNullElse(
-                    provider.statsByCourse(userId, courseIds), Map.of());
-        } catch (RuntimeException e) {
-            // 统计只是展示字段；读取失败不能让课程列表整体失败
-            log.warn("课程文档统计读取失败 userId={} courseCount={} error={}",
-                    userId, courseIds.size(), e.getClass().getSimpleName());
-            return Map.of();
-        }
+        // 统计读取失败必须显式失败（500），不得静默返回全 0 冒充真实数据
+        return Objects.requireNonNullElse(
+                provider.statsByCourse(userId, courseIndexVersions), Map.of());
     }
 
     private CourseNamespaceVO toVO(CourseNamespaceEntity entity, CourseDocumentStats stats, ZoneId zone) {

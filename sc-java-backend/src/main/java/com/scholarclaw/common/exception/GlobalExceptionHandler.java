@@ -36,7 +36,7 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<Result<Void>> handleBusinessException(BusinessException ex) {
+    public ResponseEntity<Result<Object>> handleBusinessException(BusinessException ex) {
         ErrorCode errorCode = ex.getErrorCode();
         HttpStatus status = resolveStatus(errorCode);
         if (status.is5xxServerError()) {
@@ -44,7 +44,8 @@ public class GlobalExceptionHandler {
         } else {
             log.warn("业务处理失败 code={} status={} message={}", errorCode.code(), status.value(), ex.getMessage());
         }
-        return ResponseEntity.status(status).body(Result.failure(errorCode, ex.getMessage()));
+        return ResponseEntity.status(status)
+                .body(Result.failure(errorCode, ex.getMessage(), ex.getData()));
     }
 
     /** JSR-380 请求体校验失败：{@code 04} §2.3.2 第 1 类。 */

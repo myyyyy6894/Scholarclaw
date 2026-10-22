@@ -41,7 +41,12 @@ public record Result<T>(String code, String message, T data, String traceId, Off
      * @param message 已脱敏的可读原因；不得包含 SQL、堆栈、内部主机名或明文凭据。
      */
     public static <T> Result<T> failure(ErrorCode errorCode, String message) {
-        return new Result<>(errorCode.code(), message, null,
+        return failure(errorCode, message, null);
+    }
+
+    /** 失败响应可携带结构化业务详情；{@code data} 仍位于同一五字段信封内。 */
+    public static <T> Result<T> failure(ErrorCode errorCode, String message, T data) {
+        return new Result<>(errorCode.code(), message, data,
                 TraceContext.currentOrGeneratedTraceId(), ScTimeZone.now());
     }
 

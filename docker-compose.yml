@@ -207,8 +207,10 @@ services:
       SC_LOCAL_MODEL_ALLOWED_ORIGINS: ${SC_LOCAL_MODEL_ALLOWED_ORIGINS:-}
       SC_IM_PUSH_ENABLED: ${SC_IM_PUSH_ENABLED:-false}
       SC_ONEBOT_ACCESS_TOKEN: ${SC_ONEBOT_ACCESS_TOKEN:-}
-      # 共享卷根目录（TASK-403）：容器内固定路径，可通过 .env 覆盖但通常不需要。
-      SC_STORAGE_ROOT: ${SC_STORAGE_ROOT:-/data/scholarclaw/storage}
+      # 共享卷根目录由应用固定为 /data/scholarclaw/storage（Java 与 Python 必须一致，禁止覆盖）。
+      # P4 门禁：手动重试/重建默认关闭，TASK-501/505 接入后开启。
+      SC_MANUAL_INGEST_ENABLED: ${SC_MANUAL_INGEST_ENABLED:-false}
+      SC_UPLOAD_RECOVERY_ENABLED: ${SC_UPLOAD_RECOVERY_ENABLED:-true}
     volumes:
       # 共享卷读写（Java 负责落盘与物理删除）
       - vol_shared_storage:/data/scholarclaw/storage

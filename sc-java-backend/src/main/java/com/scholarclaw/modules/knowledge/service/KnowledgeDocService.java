@@ -12,13 +12,15 @@ import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,34 +38,51 @@ public class KnowledgeDocService {
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
     private static final Set<String> LISTABLE_STATUSES = Set.of(
             DocumentStatus.UPLOADED.name(), DocumentStatus.PARSING.name(),
-            DocumentStatus.READY.name(), DocumentStatus.FAILED.name());
+            DocumentStatus.READY.name(), DocumentStatus.FAILED.name(),
+            DocumentStatus.DELETING.name(), DocumentStatus.DELETED.name());
+
+    /**
+     * 进入未就绪状态时必须清空旧索引快照。使用显式 SQL 而不是 `.set(field, null)`：
+     * MyBatis-Plus 实体更新策略默认忽略 null，只有 `setSql` 能保证数据库值真的被清空。
+     */
+    public static final String CLEAR_INDEX_SNAPSHOT_SQL =
+            "indexed_embedding_provider = NULL, indexed_embedding_model = NULL, "
+                    + "indexed_embedding_dim = NULL, page_count = 0, chunk_count = 0, ready_at = NULL";
 
     private final KnowledgeDocMapper docMapper;
     private final KnowledgeParentChunkMapper parentChunkMapper;
     private final CourseService courseService;
+    private final UserConfigService userConfigService;
+    private final ModelConfigRules modelConfigRules;
 
     public KnowledgeDocService(KnowledgeDocMapper docMapper,
                                KnowledgeParentChunkMapper parentChunkMapper,
-                               CourseService courseService) {
+                               CourseService courseService,
+                               UserConfigService userConfigService,
+                               ModelConfigRules modelConfigRules) {
         this.docMapper = docMapper;
         this.parentChunkMapper = parentChunkMapper;
         this.courseService = courseService;
+        this.userConfigService = userConfigService;
+        this.modelConfigRules = modelConfigRules;
     }
 
-    /** `API-DOC-001`：查询课程下未彻底删除的文档；可选按四种活动状态过滤。 */
+    /**
+     * `API-DOC-001`：查询课程下文档；默认返回 `status != 'DELETED'`（含 `DELETING` 过渡态），
+     * 可选按六态过滤；`DELETED` 只能通过显式 `status=DELETED` 查询。
+     */
     public List<KnowledgeDocVO> listDocs(Long userId, Long courseId, String status) {
         courseService.getActiveCourse(userId, courseId);
         var query = Wrappers.<KnowledgeDocEntity>lambdaQuery()
                 .eq(KnowledgeDocEntity::getUserId, userId)
                 .eq(KnowledgeDocEntity::getCourseId, courseId);
         if (status == null || status.isBlank()) {
-            query.notIn(KnowledgeDocEntity::getStatus,
-                    DocumentStatus.DELETING.name(), DocumentStatus.DELETED.name());
+            query.ne(KnowledgeDocEntity::getStatus, DocumentStatus.DELETED.name());
         } else {
             String normalized = status.trim().toUpperCase(Locale.ROOT);
             if (!LISTABLE_STATUSES.contains(normalized)) {
                 throw new BusinessException(ErrorCode.VALIDATION_ERROR,
-                        "status 仅允许 UPLOADED/PARSING/READY/FAILED。");
+                        "status 仅允许 UPLOADED/PARSING/READY/FAILED/DELETING/DELETED。");
             }
             query.eq(KnowledgeDocEntity::getStatus, normalized);
         }
@@ -73,23 +92,22 @@ public class KnowledgeDocService {
     }
 
     /**
-     * 插入文档元数据（上传流程在 TASK-403 调用）。
+     * 插入文档元数据（上传事务内调用）。
      *
-     * <p>`storage_rel_path` 可先传占位值，文件移动完成后用 {@link #updateStorageRelPath} 回填。
+     * @param course 已由调用方 `SELECT ... FOR UPDATE` 锁定的活动课程行
      */
     @Transactional(rollbackFor = Exception.class)
-    public KnowledgeDocEntity createDocumentMetadata(Long userId, Long courseId, String docName,
+    public KnowledgeDocEntity createDocumentMetadata(CourseNamespaceEntity course, String docName,
                                                      String fileExt, long fileSizeBytes,
                                                      String fileSha256, String storageRelPath) {
-        CourseNamespaceEntity course = courseService.getActiveCourse(userId, courseId);
         if (IndexStatus.REBUILDING.name().equals(course.getIndexStatus())) {
             throw new BusinessException(ErrorCode.E_SYS_03,
                     "当前课程索引正在重建中，请等待完成后再上传。");
         }
         LocalDateTime now = ScTimeZone.now().toLocalDateTime();
         KnowledgeDocEntity entity = new KnowledgeDocEntity();
-        entity.setUserId(userId);
-        entity.setCourseId(courseId);
+        entity.setUserId(course.getUserId());
+        entity.setCourseId(course.getCourseId());
         entity.setDocName(docName);
         entity.setFileExt(fileExt.toLowerCase(Locale.ROOT));
         entity.setFileSizeBytes(fileSizeBytes);
@@ -104,12 +122,19 @@ public class KnowledgeDocService {
         entity.setRetryCount(0);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
-        try {
-            docMapper.insert(entity);
-            return entity;
-        } catch (DuplicateKeyException e) {
-            throw new BusinessException(ErrorCode.DOC_DUPLICATE_SHA256);
-        }
+        docMapper.insert(entity);
+        return entity;
+    }
+
+    /** 同课程活动文档按 SHA-256 预检；返回已有文档用于 409 结构化详情。 */
+    public KnowledgeDocEntity findActiveShaDoc(Long userId, Long courseId, String fileSha256) {
+        return docMapper.selectOne(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getUserId, userId)
+                .eq(KnowledgeDocEntity::getCourseId, courseId)
+                .eq(KnowledgeDocEntity::getFileSha256, fileSha256)
+                .notIn(KnowledgeDocEntity::getStatus,
+                        DocumentStatus.DELETING.name(), DocumentStatus.DELETED.name())
+                .last("LIMIT 1"));
     }
 
     /** 文件移动完成后回填真实相对路径（仅更新本字段）。 */
@@ -135,7 +160,8 @@ public class KnowledgeDocService {
                 .eq(KnowledgeDocEntity::getParseVersion, parseVersion)
                 .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
                 .set(KnowledgeDocEntity::getStatus, DocumentStatus.PARSING.name())
-                .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())) == 1;
+                .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
+                .setSql(CLEAR_INDEX_SNAPSHOT_SQL)) == 1;
     }
 
     /**
@@ -173,12 +199,14 @@ public class KnowledgeDocService {
                 .set(KnowledgeDocEntity::getStatus, DocumentStatus.FAILED.name())
                 .set(KnowledgeDocEntity::getErrorCode, errorCode)
                 .set(KnowledgeDocEntity::getErrorMsg, errorMsg)
-                .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())) == 1;
+                .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
+                .setSql(CLEAR_INDEX_SNAPSHOT_SQL)) == 1;
     }
 
     /** `FAILED -> PARSING`：供 `API-DOC-003`/TASK-501 使用；MQ 发布由后续任务补齐。 */
     @Transactional(rollbackFor = Exception.class)
     public KnowledgeDocEntity retryFailed(Long userId, Long docId) {
+        requireEmbeddingConfig(userId);
         return transitionToParsing(userId, docId, DocumentStatus.FAILED,
                 "仅解析失败(FAILED)状态的课件可执行手动重试。");
     }
@@ -186,6 +214,7 @@ public class KnowledgeDocService {
     /** `READY -> PARSING`：供 `API-DOC-004`/TASK-501 使用。 */
     @Transactional(rollbackFor = Exception.class)
     public KnowledgeDocEntity reindexReady(Long userId, Long docId) {
+        requireEmbeddingConfig(userId);
         return transitionToParsing(userId, docId, DocumentStatus.READY,
                 "文档当前非就绪状态，请勿重复操作。");
     }
@@ -206,7 +235,7 @@ public class KnowledgeDocService {
                 .eq(KnowledgeDocEntity::getUserId, userId)
                 .ne(KnowledgeDocEntity::getStatus, DocumentStatus.DELETED.name())
                 .set(KnowledgeDocEntity::getStatus, DocumentStatus.DELETING.name())
-                .setSql("parse_version = parse_version + 1")
+                .setSql("parse_version = parse_version + 1, " + CLEAR_INDEX_SNAPSHOT_SQL)
                 .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
         if (affected != 1) {
             throw new BusinessException(ErrorCode.STATE_CONFLICT);
@@ -268,14 +297,26 @@ public class KnowledgeDocService {
                 .set(KnowledgeDocEntity::getErrorMsg, null)
                 .set(KnowledgeDocEntity::getEnqueuedAt, ScTimeZone.now().toLocalDateTime())
                 .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
-                .setSql("parse_version = parse_version + 1"));
+                .setSql("parse_version = parse_version + 1, " + CLEAR_INDEX_SNAPSHOT_SQL));
         if (affected != 1) {
             throw new BusinessException(ErrorCode.STATE_CONFLICT, message);
         }
         return requireOwnedDoc(userId, docId);
     }
 
+    private void requireEmbeddingConfig(Long userId) {
+        UserConfigEntity config = userConfigService.findById(userId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
+        if (!modelConfigRules.isEmbeddingConfigValid(config)) {
+            throw new BusinessException(ErrorCode.E_SYS_01,
+                    "⚠️ 尚未配置完整的向量模型（Embedding），请先前往【个人设置 -> 模型配置】完成配置。");
+        }
+    }
+
     private static KnowledgeDocVO toVO(KnowledgeDocEntity doc, ZoneId zone) {
+        // 只有 READY 才允许暴露索引快照；历史/异常中断数据即使残留旧值也必须对外隐藏
+        boolean ready = DocumentStatus.READY.name().equals(doc.getStatus());
         return new KnowledgeDocVO(
                 doc.getDocId(),
                 doc.getCourseId(),
@@ -285,15 +326,16 @@ public class KnowledgeDocService {
                 doc.getStatus(),
                 doc.getParseVersion() == null ? 1 : doc.getParseVersion(),
                 doc.getCourseIndexVersion() == null ? 1 : doc.getCourseIndexVersion(),
-                doc.getIndexedEmbeddingModel(),
-                doc.getIndexedEmbeddingDim(),
-                doc.getPageCount() == null ? 0 : doc.getPageCount(),
-                doc.getChunkCount() == null ? 0 : doc.getChunkCount(),
+                ready ? doc.getIndexedEmbeddingModel() : null,
+                ready ? doc.getIndexedEmbeddingDim() : null,
+                ready && doc.getPageCount() != null ? doc.getPageCount() : 0,
+                ready && doc.getChunkCount() != null ? doc.getChunkCount() : 0,
                 doc.getRetryCount() == null ? 0 : doc.getRetryCount(),
+                doc.getLastIngestJobId(),
                 doc.getErrorCode(),
                 doc.getErrorMsg(),
                 formatTimestamp(doc.getEnqueuedAt(), zone),
-                formatTimestamp(doc.getReadyAt(), zone),
+                ready ? formatTimestamp(doc.getReadyAt(), zone) : null,
                 formatTimestamp(doc.getCreatedAt(), zone),
                 formatTimestamp(doc.getUpdatedAt(), zone));
     }

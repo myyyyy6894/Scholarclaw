@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import type { BigIntId } from '@/api/types'
+import { useCourseStore } from '@/stores/course'
 import { browserStorage } from '@/utils/browser-storage'
 
 /**
@@ -47,6 +48,8 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     user.value = null
     browserStorage.remove(STORAGE_KEY)
+    // 所有会话清理路径（登出、401、注销）都统一清空课程上下文
+    useCourseStore().clear()
   }
 
   /** 供 API client 注入的取令牌入口。 */

@@ -1,6 +1,6 @@
 package com.scholarclaw.modules.ddl.listener;
 
-import com.scholarclaw.modules.course.event.CourseDeletingEvent;
+import com.scholarclaw.common.event.CourseDeletingEvent;
 import com.scholarclaw.modules.ddl.mapper.DdlTaskMapper;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;

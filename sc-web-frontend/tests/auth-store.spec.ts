@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth'
+import { useCourseStore } from '@/stores/course'
 import { browserStorage } from '@/utils/browser-storage'
 
 const STORAGE_KEY = 'sc.auth.session'
@@ -67,6 +68,17 @@ describe('useAuthStore', () => {
     expect(auth.isAuthenticated).toBe(false)
     expect(auth.user).toBeNull()
     expect(browserStorage.read(STORAGE_KEY)).toBeNull()
+  })
+
+  it('clearSession 同时清空课程上下文', () => {
+    const auth = useAuthStore()
+    const course = useCourseStore()
+    auth.setSession({ token: 't', user: null })
+    course.select('2001')
+
+    auth.clearSession()
+
+    expect(course.selectedCourseId).toBeNull()
   })
 
   it('存储内容损坏时按未登录处理，不抛异常', () => {

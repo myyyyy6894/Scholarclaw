@@ -4,8 +4,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-import com.scholarclaw.modules.course.event.CourseDeletingEvent;
-import com.scholarclaw.modules.course.event.CourseEmbeddingChangedEvent;
+import com.scholarclaw.common.event.CourseDeletingEvent;
+import com.scholarclaw.common.event.CourseEmbeddingChangedEvent;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
 import org.junit.jupiter.api.DisplayName;

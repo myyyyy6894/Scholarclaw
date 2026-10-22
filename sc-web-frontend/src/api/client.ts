@@ -30,6 +30,8 @@ export interface ApiRequestOptions {
   method?: HttpMethod
   /** 请求体；会被 JSON 序列化。注意其中的 ID 字段必须是字符串（`04` §2.6）。 */
   body?: unknown
+  /** multipart 上传体；设置后不会再设置 `Content-Type`（由浏览器生成 boundary）。 */
+  formData?: FormData
   signal?: AbortSignal
   extraHeaders?: Record<string, string>
 }
@@ -79,8 +81,10 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     headers.Authorization = `Bearer ${token}`
   }
 
-  let payload: string | undefined
-  if (options.body !== undefined) {
+  let payload: string | FormData | undefined
+  if (options.formData !== undefined) {
+    payload = options.formData
+  } else if (options.body !== undefined) {
     headers['Content-Type'] = 'application/json'
     payload = JSON.stringify(options.body)
   }

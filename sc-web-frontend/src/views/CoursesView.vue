@@ -55,6 +55,12 @@ const switchForm = ref<SwitchFormState>({
 })
 
 const hasCourses = computed(() => courses.value.length > 0)
+const summary = computed(() => ({
+  courses: courses.value.length,
+  ready: courses.value.reduce((total, item) => total + item.ready_doc_count, 0),
+  parsing: courses.value.reduce((total, item) => total + item.parsing_doc_count, 0),
+  failed: courses.value.reduce((total, item) => total + item.failed_doc_count, 0),
+}))
 
 onMounted(() => {
   void loadCourses()
@@ -124,7 +130,7 @@ async function submitSwitch(): Promise<void> {
     const result = await changeCourseEmbedding(course.course_id, request)
     switchForm.value.course = null
     notifySuccess(
-      `已切换到 ${result.embedding_model}（维度 ${result.embedding_dim}，索引版本 ${result.current_index_version}）`,
+      `已切换到 ${result.embedding_model}（维度 ${result.embedding_dim}，索引版本 ${result.current_index_version}）；重建任务尚未执行，待 TASK-501/505 接入`,
     )
     await loadCourses()
   } catch (error) {
@@ -163,6 +169,53 @@ async function onDelete(course: CourseNamespace): Promise<void> {
 
 <template>
   <div>
+    <section class="sc-hero">
+      <div class="sc-hero__copy">
+        <span class="sc-hero__eyebrow">COURSE WORKSPACE</span>
+        <h2>把每门课的知识，整理成可检索的脉络</h2>
+        <p>每门课程锁定一套 Embedding 模型与维度；索引版本、文档状态都来自后端真实数据。</p>
+      </div>
+      <div class="sc-hero__art" aria-hidden="true">
+        <svg viewBox="0 0 240 120" role="presentation">
+          <defs>
+            <linearGradient id="sc-hero-sky" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5" />
+              <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+            </linearGradient>
+          </defs>
+          <rect width="240" height="120" fill="url(#sc-hero-sky)" />
+          <circle cx="190" cy="30" r="14" fill="#ffd98a" />
+          <path d="M0 96 52 52l34 30 26-22 44 36 30-20 54 30v14H0z" fill="#ffffff" opacity="0.6" />
+          <path d="M0 108 46 78l32 18 30-12 40 24 34-14 58 22v4H0z" fill="#ffffff" opacity="0.85" />
+          <rect x="84" y="76" width="54" height="8" rx="4" fill="#4f8cff" opacity="0.7" />
+          <rect x="90" y="88" width="42" height="6" rx="3" fill="#7b5cff" opacity="0.5" />
+        </svg>
+      </div>
+    </section>
+
+    <section class="sc-stats">
+      <article class="sc-stat">
+        <span class="sc-stat__label">课程空间</span>
+        <strong>{{ summary.courses }}</strong>
+        <span class="sc-stat__hint">当前账号活动课程</span>
+      </article>
+      <article class="sc-stat">
+        <span class="sc-stat__label">就绪文档</span>
+        <strong>{{ summary.ready }}</strong>
+        <span class="sc-stat__hint">版本匹配的可用课件</span>
+      </article>
+      <article class="sc-stat">
+        <span class="sc-stat__label">解析中</span>
+        <strong>{{ summary.parsing }}</strong>
+        <span class="sc-stat__hint">待解析 + 解析中</span>
+      </article>
+      <article class="sc-stat sc-stat--danger">
+        <span class="sc-stat__label">失败文档</span>
+        <strong>{{ summary.failed }}</strong>
+        <span class="sc-stat__hint">需在后续任务中重试</span>
+      </article>
+    </section>
+
     <el-card class="sc-card-gap" shadow="never">
       <template #header>
         <div class="sc-course__header">
@@ -176,7 +229,7 @@ async function onDelete(course: CourseNamespace): Promise<void> {
         :closable="false"
         show-icon
         title="每门课程锁定一套 Embedding 模型与维度"
-        description="创建时会复制【个人设置】中已验证的默认 Embedding 配置；切换模型会重新探测并升级课程索引版本。"
+        description="创建时会复制【个人设置】中已验证的默认 Embedding 配置；切换模型会重新探测并升级课程索引版本，重建任务待 TASK-501/505 接入。"
       />
 
       <el-skeleton v-if="loading" class="sc-course__skeleton" :rows="4" animated />
@@ -190,7 +243,17 @@ async function onDelete(course: CourseNamespace): Promise<void> {
           <el-button type="primary" @click="loadCourses">重新加载</el-button>
         </template>
       </el-result>
-      <el-empty v-else-if="!hasCourses" description="还没有课程空间，先新建一门课程。" />
+      <el-empty v-else-if="!hasCourses" description="还没有课程空间，先新建一门课程。">
+        <template #image>
+          <svg class="sc-empty-art" viewBox="0 0 160 120" aria-hidden="true">
+            <circle cx="122" cy="28" r="16" fill="#ffe3a3" />
+            <path d="M8 96 50 58l28 24 22-18 52 32v12H8z" fill="#dbe8ff" />
+            <path d="M8 106 44 82l26 14 24-10 58 20v6H8z" fill="#b9d2ff" />
+            <rect x="58" y="70" width="44" height="10" rx="5" fill="#4f8cff" />
+          </svg>
+        </template>
+        <el-button type="primary" @click="openCreate">新建课程</el-button>
+      </el-empty>
       <el-table v-else :data="courses" row-key="course_id">
         <el-table-column prop="course_name" label="课程" min-width="160">
           <template #default="{ row }">
@@ -270,7 +333,7 @@ async function onDelete(course: CourseNamespace): Promise<void> {
         :closable="false"
         show-icon
         title="切换会递增课程索引版本"
-        description="若课程下已有课件，将进入重建流程；探测失败时原课程配置保持不变。"
+        description="切换只更新课程 Embedding 与索引版本，并把文档置为待重建；重建任务尚未执行，待 TASK-501/505 接入。探测失败时原课程配置保持不变。"
       />
       <el-form label-width="130px" class="sc-course__form">
         <el-form-item label="模型来源">
@@ -304,6 +367,97 @@ async function onDelete(course: CourseNamespace): Promise<void> {
 </template>
 
 <style scoped>
+.sc-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: var(--sc-page-gap);
+  padding: 30px 32px;
+  overflow: hidden;
+  border-radius: var(--sc-radius);
+  background: linear-gradient(120deg, #eaf2ff 0%, #f7faff 48%, #eef3ff 100%);
+  box-shadow: var(--sc-shadow-soft);
+}
+
+.sc-hero__copy {
+  max-width: 620px;
+}
+
+.sc-hero__eyebrow {
+  color: var(--sc-brand-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+}
+
+.sc-hero h2 {
+  margin: 10px 0 8px;
+  color: #16233d;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+}
+
+.sc-hero p {
+  color: var(--sc-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.sc-hero__art {
+  flex: 0 0 240px;
+  opacity: 0.9;
+}
+
+.sc-hero__art svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.sc-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sc-page-gap);
+  margin-bottom: var(--sc-page-gap);
+}
+
+.sc-stat {
+  padding: 18px 20px;
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius);
+  background: var(--sc-surface);
+  box-shadow: var(--sc-shadow-soft);
+}
+
+.sc-stat__label {
+  color: var(--sc-muted);
+  font-size: 13px;
+}
+
+.sc-stat strong {
+  display: block;
+  margin: 8px 0 4px;
+  color: var(--sc-text);
+  font-size: 28px;
+  font-weight: 650;
+}
+
+.sc-stat__hint {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.sc-stat--danger strong {
+  color: var(--sc-danger);
+}
+
+.sc-empty-art {
+  width: 150px;
+  height: auto;
+}
+
 .sc-course__header {
   display: flex;
   align-items: center;
@@ -325,5 +479,29 @@ async function onDelete(course: CourseNamespace): Promise<void> {
 
 .sc-course__form {
   margin-top: 16px;
+}
+
+@media (max-width: 1100px) {
+  .sc-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .sc-hero {
+    padding: 22px;
+  }
+
+  .sc-hero h2 {
+    font-size: 21px;
+  }
+
+  .sc-hero__art {
+    display: none;
+  }
+
+  .sc-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

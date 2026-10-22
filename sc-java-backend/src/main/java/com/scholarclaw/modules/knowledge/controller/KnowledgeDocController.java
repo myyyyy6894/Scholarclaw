@@ -23,7 +23,9 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * 课件文档查询接口（{@code 04} §4.4.1 `API-DOC-001`）。
  *
- * <p>上传/重试/重建/删除的 Web 接口分别由 TASK-403/501 落地；本任务先提供查询与状态机底座。
+ * <p>本控制器提供查询（TASK-402）与上传（TASK-403）接口；重试/重建/删除由
+ * {@link KnowledgeDocActionController} 提供，其中重试/重建在 TASK-501/505 生产者接入前
+ * 返回 `501 FEATURE_NOT_AVAILABLE`。
  */
 @RestController
 @RequestMapping("/api/v1/courses")

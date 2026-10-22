@@ -1,4 +1,4 @@
-package com.scholarclaw.modules.course.event;
+package com.scholarclaw.common.event;
 
 /**
  * 课程删除事件（{@code 04} `API-COURSE-004`）。

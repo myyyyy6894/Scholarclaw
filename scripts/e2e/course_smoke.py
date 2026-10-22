@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""TASK-401 课程空间冒烟（`04` §4.3 `API-COURSE-001~004`）。
+"""P4 API/状态机冒烟（`04` §4.3 `API-COURSE-001~004`、§4.4 `API-DOC-001~005`）。
+
+注意：本脚本用 SQL 直接构造 READY/FAILED 夹具，验证的是 P4 API 与状态机，
+不代表“上传→解析→READY”真实闭环（该闭环属 TASK-501/502/503/506）。
+
+账号策略：脚本注册的临时账号会保留（不自动删除），按 README 的手工 SQL 清理。
 
 前置：整栈已启动，且 Java/Python 已使用临时 env 加入 mock 模型白名单
 （见 `scripts/e2e/README.md` 的临时 env 流程）。脚本只使用假 Key，不读取/打印 `.env`。
@@ -111,7 +116,9 @@ def save_models(base_url: str, token: str, mock_base_url: str) -> tuple[int, dic
 def main() -> int:
     parser = argparse.ArgumentParser(description="TASK-401 课程空间 API 冒烟")
     parser.add_argument("--base-url", default="http://127.0.0.1")
-    parser.add_argument("--mock-base-url", default="http://sc-e2e-mock-model:9000/v1")
+    parser.add_argument("--mock-base-url", required=True,
+                        help="mock 模型地址，必须是已加入 Java/Python 白名单的私网 IP 字面量，"
+                             "如 http://172.20.0.8:9000/v1（不要使用 Docker 服务名）")
     args = parser.parse_args()
 
     suffix = str(int(time.time()))
@@ -167,10 +174,29 @@ def main() -> int:
     results.append(check("原始文件写入共享卷 raw/{uid}/{cid}/{doc_id}.pdf",
                          file_exists == "yes", file_exists))
 
+    # FIX-01：手工构造带旧快照的 PARSING 文档，API 必须隐藏旧快照
+    mysql_query(
+        "UPDATE t_knowledge_doc SET status='PARSING', parse_version=2, "
+        "indexed_embedding_provider='OPENAI_COMPATIBLE', indexed_embedding_model='old-model', "
+        f"indexed_embedding_dim=8, page_count=9, chunk_count=9, ready_at=NOW(3) "
+        f"WHERE doc_id={int(doc_id)};")
+    status, payload = call(args.base_url, "GET", f"/api/v1/courses/{course_id}/docs", token=token)
+    stale = next((d for d in (payload.get("data") or []) if d["doc_id"] == doc_id), {})
+    results.append(check("非 READY 文档不暴露旧索引快照", status == 200
+                         and stale.get("status") == "PARSING"
+                         and stale.get("indexed_embedding_model") is None
+                         and stale.get("indexed_embedding_dim") is None
+                         and stale.get("page_count") == 0
+                         and stale.get("chunk_count") == 0
+                         and stale.get("ready_at") is None,
+                         f"{status} {payload}"))
+    mysql_query(f"UPDATE t_knowledge_doc SET status='UPLOADED', parse_version=1 WHERE doc_id={int(doc_id)};")
+
     status, payload = upload_file(args.base_url, token, course_id,
                                   "passwd.pdf", pdf_bytes, "application/pdf")
-    results.append(check("同课程重复文件 409", status == 409
-                         and payload.get("code") == "DOC_DUPLICATE_SHA256",
+    results.append(check("同课程重复文件 409 且携带已有 doc_id", status == 409
+                         and payload.get("code") == "DOC_DUPLICATE_SHA256"
+                         and (payload.get("data") or {}).get("existing_doc_id") == doc_id,
                          f"{status} {payload}"))
     status, payload = upload_file(args.base_url, token, course_id,
                                   "fake.pdf", b"not a pdf", "application/pdf")
@@ -195,15 +221,60 @@ def main() -> int:
         f"VALUES ('pc_{doc_id}_v1_1', {int(doc_id)}, {int(user_id)}, {int(course_id)}, "
         "1, 1, 1, 1, '第5章', '事务处理', 4);")
 
+    # P4 门禁：MQ 生产者未接入前，重试/重建必须 501 且不改变数据库状态
+    status, payload = call(args.base_url, "POST", f"/api/v1/docs/{doc_id}/reindex", token=token)
+    results.append(check("重建接口在 P4 返回 501 门禁", status == 501
+                         and payload.get("code") == "FEATURE_NOT_AVAILABLE",
+                         f"{status} {payload}"))
+    status, payload = call(args.base_url, "POST", f"/api/v1/docs/{doc_id}/retry", token=token)
+    results.append(check("重试接口在 P4 返回 501 门禁", status == 501
+                         and payload.get("code") == "FEATURE_NOT_AVAILABLE",
+                         f"{status} {payload}"))
+    doc_after_gate = mysql_query(
+        f"SELECT status, parse_version FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
+    results.append(check("门禁拦截后文档仍为 READY 且版本未变", doc_after_gate == "READY\t1",
+                         repr(doc_after_gate)))
+
+    # FIX-05：DELETING 过渡态必须出现在默认列表中
+    status, payload = upload_file(args.base_url, token, course_id,
+                                  "second.pdf", pdf_bytes + b"% second\n",
+                                  "application/pdf")
+    second_doc_id = (payload.get("data") or {}).get("doc_id")
+    results.append(check("第二份课件上传 202", status == 202 and second_doc_id is not None,
+                         f"{status} {payload}"))
+    status, payload = call(args.base_url, "DELETE", f"/api/v1/docs/{second_doc_id}", token=token)
+    results.append(check("删除第二份课件返回 DELETING", status == 200
+                         and (payload.get("data") or {}).get("status") == "DELETING",
+                         f"{status} {payload}"))
     status, payload = call(args.base_url, "GET", f"/api/v1/courses/{course_id}/docs", token=token)
     docs = payload.get("data") or []
-    results.append(check("文档列表返回 READY 文档", status == 200 and len(docs) == 1
-                         and docs[0]["doc_id"] == doc_id and docs[0]["status"] == "READY",
+    results.append(check("默认列表仍显示 DELETING 文档",
+                         status == 200 and any(d["doc_id"] == second_doc_id
+                                               and d["status"] == "DELETING" for d in docs),
+                         f"{status} {payload}"))
+    status, payload = call(args.base_url, "GET",
+                           f"/api/v1/courses/{course_id}/docs?status=DELETING", token=token)
+    docs = payload.get("data") or []
+    results.append(check("status=DELETING 过滤可用", status == 200
+                         and len(docs) == 1 and docs[0]["doc_id"] == second_doc_id,
+                         f"{status} {payload}"))
+
+    status, payload = call(args.base_url, "GET", f"/api/v1/courses/{course_id}/docs", token=token)
+    docs = {d["doc_id"]: d for d in (payload.get("data") or [])}
+    results.append(check("文档列表返回 READY 与 DELETING 文档", status == 200 and len(docs) == 2
+                         and (docs.get(doc_id) or {}).get("status") == "READY"
+                         and (docs.get(second_doc_id) or {}).get("status") == "DELETING",
                          f"{status} {payload}"))
     status, payload = call(args.base_url, "GET", "/api/v1/courses", token=token)
     results.append(check("课程统计 ready_doc_count=1", status == 200
                          and payload["data"][0]["ready_doc_count"] == 1,
                          str(payload.get("data"))))
+    mysql_query(f"UPDATE t_course_namespace SET index_version=2 WHERE course_id={int(course_id)};")
+    status, payload = call(args.base_url, "GET", "/api/v1/courses", token=token)
+    results.append(check("旧索引版本 READY 文档不计入可用数", status == 200
+                         and payload["data"][0]["ready_doc_count"] == 0,
+                         str(payload.get("data"))))
+    mysql_query(f"UPDATE t_course_namespace SET index_version=1 WHERE course_id={int(course_id)};")
 
     # 真实数据库校验：删除课程时 DDL 任务解绑保留（course_id=NULL，course_name 保留）
     ddl_key = f"e2e-ddl-{suffix}"
@@ -223,21 +294,36 @@ def main() -> int:
                            body={"use_user_default": False,
                                  "embedding_provider": "OPENAI_COMPATIBLE",
                                  "embedding_model": "embed-mock-v2"})
+    results.append(check("旧 Key 绑定新模型名被 400 拒绝", status == 400
+                         and payload.get("code") == "VALIDATION_ERROR",
+                         f"{status} {payload}"))
+
+    status, payload = call(args.base_url, "PUT",
+                           f"/api/v1/courses/{course_id}/embedding-model", token=token,
+                           body={"use_user_default": True})
     switched = payload.get("data") or {}
-    expected_status = "REBUILDING" if (switched.get("reindexing_doc_count") or 0) > 0 else "ACTIVE"
-    results.append(check("切换模型成功并回填探测维度", status == 200
+    results.append(check("使用已保存默认模型切换成功", status == 200
                          and switched.get("embedding_dim") == 8
                          and switched.get("current_index_version") == 2
-                         and switched.get("index_status") == expected_status,
+                         and switched.get("index_status") == "REBUILDING"
+                         and switched.get("reindexing_doc_count") == 1,
                          f"{status} {payload}"))
 
     status, payload = call(args.base_url, "GET", f"/api/v1/courses/{course_id}/docs", token=token)
-    docs = payload.get("data") or []
+    docs = {d["doc_id"]: d for d in (payload.get("data") or [])}
+    first = docs.get(doc_id) or {}
     results.append(check("切换后文档转 PARSING（旧索引立即失效）",
-                         status == 200 and docs and docs[0]["status"] == "PARSING"
-                         and docs[0]["parse_version"] == 2
-                         and docs[0]["course_index_version"] == 2,
+                         status == 200 and first.get("status") == "PARSING"
+                         and first.get("parse_version") == 2
+                         and first.get("course_index_version") == 2,
                          f"{status} {payload}"))
+    results.append(check("切换后索引快照被清空",
+                         first.get("indexed_embedding_model") is None
+                         and first.get("indexed_embedding_dim") is None
+                         and first.get("page_count") == 0
+                         and first.get("chunk_count") == 0
+                         and first.get("ready_at") is None,
+                         str(first)))
     chunk_count = mysql_query(
         f"SELECT COUNT(*) FROM t_knowledge_parent_chunk WHERE doc_id = {int(doc_id)};")
     results.append(check("切换后旧父块已清空", chunk_count == "0", chunk_count))
@@ -268,11 +354,18 @@ def main() -> int:
         f"SELECT status, parse_version FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
     results.append(check("删除课程后文档转 DELETING 且版本递增",
                          doc_state == "DELETING\t3", repr(doc_state)))
+    status, payload = call(args.base_url, "DELETE", f"/api/v1/docs/{doc_id}", token=token)
+    results.append(check("文档删除接口幂等返回 DELETING", status == 200
+                         and (payload.get("data") or {}).get("status") == "DELETING",
+                         f"{status} {payload}"))
     mysql_query(f"DELETE FROM t_knowledge_doc WHERE doc_id = {int(doc_id)};")
+    mysql_query(f"DELETE FROM t_knowledge_doc WHERE doc_id = {int(second_doc_id)};")
     mysql_query(f"DELETE FROM t_knowledge_parent_chunk WHERE doc_id = {int(doc_id)};")
+    mysql_query(f"DELETE FROM t_knowledge_parent_chunk WHERE doc_id = {int(second_doc_id)};")
     docker_exec("sc-java-backend",
                 f"rm -f /data/scholarclaw/storage/raw/{int(user_id)}/{int(course_id)}/"
-                f"{int(doc_id)}.pdf")
+                f"{int(doc_id)}.pdf /data/scholarclaw/storage/raw/{int(user_id)}/"
+                f"{int(course_id)}/{int(second_doc_id)}.pdf")
     mysql_query(f"DELETE FROM t_ddl_task WHERE source_msg_id = '{ddl_key}';")
     status, payload = call(args.base_url, "GET", "/api/v1/courses", token=token)
     results.append(check("删除后列表为空", status == 200 and payload.get("data") == []))
@@ -281,7 +374,8 @@ def main() -> int:
                          and payload.get("code") == "RESOURCE_NOT_FOUND", f"{status} {payload}"))
 
     failed = results.count(False)
-    print(f"TASK-401 课程冒烟：{len(results) - failed}/{len(results)} 项通过；测试账号 {username}")
+    print(f"P4 API/状态机冒烟（非真实解析 E2E）：{len(results) - failed}/{len(results)} 项通过；"
+          f"测试账号 {username}（保留，未自动删除）")
     return 0 if failed == 0 else 1
 
 

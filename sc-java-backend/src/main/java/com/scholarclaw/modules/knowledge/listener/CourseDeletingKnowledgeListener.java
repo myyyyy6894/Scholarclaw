@@ -3,10 +3,11 @@ package com.scholarclaw.modules.knowledge.listener;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.enums.DocumentStatus;
-import com.scholarclaw.modules.course.event.CourseDeletingEvent;
+import com.scholarclaw.common.event.CourseDeletingEvent;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,7 +40,8 @@ public class CourseDeletingKnowledgeListener {
                         DocumentStatus.DELETING.name(), DocumentStatus.DELETED.name())
                 .set(KnowledgeDocEntity::getStatus, DocumentStatus.DELETING.name())
                 .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
-                .setSql("parse_version = parse_version + 1"));
+                .setSql("parse_version = parse_version + 1, "
+                        + KnowledgeDocService.CLEAR_INDEX_SNAPSHOT_SQL));
         parentChunkMapper.deleteByCourse(event.userId(), event.courseId());
     }
 }

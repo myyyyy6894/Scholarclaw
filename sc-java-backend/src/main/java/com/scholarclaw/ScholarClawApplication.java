@@ -2,6 +2,7 @@ package com.scholarclaw;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * ScholarClaw 业务与状态权威中心（Java 模块化单体）启动入口。
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * 分层与依赖方向定义见 {@code 02_系统架构文档} §4.1 / §4.3。
  */
 @SpringBootApplication
+@EnableScheduling
 public class ScholarClawApplication {
 
     public static void main(String[] args) {

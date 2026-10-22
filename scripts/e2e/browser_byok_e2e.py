@@ -7,7 +7,7 @@
 
 用法：
     python3 scripts/e2e/browser_byok_e2e.py
-    python3 scripts/e2e/browser_byok_e2e.py --mock-base-url http://sc-e2e-mock-model:9000/v1
+    python3 scripts/e2e/browser_byok_e2e.py --mock-base-url http://<mock-private-ip>:9000/v1
 
 不传 `--mock-base-url` 时只验证登录/注册、设置页渲染、空状态、偏好保存与登出；
 传了才执行探测/保存/掩码/刷新/销毁 Key（需要后端已把 mock origin 加入白名单）。
@@ -30,7 +30,7 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1")
     parser.add_argument("--username", default=f"e2e_browser_{int(time.time())}")
     parser.add_argument("--mock-base-url", default=None,
-                        help="已加入后端白名单的 mock 模型地址，如 http://sc-e2e-mock-model:9000/v1")
+                        help="已加入后端白名单的 mock 模型地址；必须使用私网 IP 字面量（Docker 服务名可能被 E-SYS-02 拒绝）")
     parser.add_argument("--chrome-channel", default="chrome")
     parser.add_argument("--headed", action="store_true")
     args = parser.parse_args()

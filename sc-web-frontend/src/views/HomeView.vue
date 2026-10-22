@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import { resolveApiBaseUrl } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { IMPLEMENTED_CAPABILITIES, UPCOMING_TASKS } from '@/views/home/home-tasks'
 
 /**
  * 工程骨架的落地页。
@@ -21,24 +22,8 @@ const primaryAction = computed(() =>
     : { label: '登录 / 注册', to: { name: 'login' } },
 )
 
-const implemented = [
-  'Vue 3 + TypeScript + Vite 工程与类型检查（vue-tsc）',
-  '质量门禁 npm run check：类型检查 + ESLint（类型感知规则）+ 单元测试',
-  '登录 / 注册页（API-AUTH-001/002）与个人设置页（API-USER-001~005）',
-  '路由守卫与全局 401 处理（会话失效自动回到登录页）',
-  'BYOK 模型配置表单：连通性探测、保存状态、密钥掩码展示',
-  '课程空间管理：列表、新建、切换 Embedding 模型、删除（TASK-401）',
-  '统一 API client：信封解包、错误分类、401 清理会话',
-  '登录态管理（Pinia）与浏览器存储封装（只存令牌，不存密钥）',
-  '全局错误提示出口（Element Plus ElMessage）',
-  '生产构建已由 sc-web-nginx 容器托管，并反代 /api 与 /webhooks（TASK-104）',
-]
-
-const upcoming = [
-  { task: 'TASK-404', title: '课程知识库管理视图（左侧栏 + 文档抽屉）' },
-  { task: 'TASK-605', title: 'RAG 溯源问答主工作区（SSE 流式 + 引用高亮）' },
-  { task: 'TASK-705', title: 'DDL 任务看板与待确认收件箱' },
-]
+const implemented = IMPLEMENTED_CAPABILITIES
+const upcoming = UPCOMING_TASKS
 </script>
 
 <template>

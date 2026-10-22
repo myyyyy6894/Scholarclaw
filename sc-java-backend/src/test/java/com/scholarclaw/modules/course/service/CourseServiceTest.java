@@ -29,6 +29,7 @@ import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
 import com.scholarclaw.modules.course.mapper.CourseNamespaceMapper;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -68,6 +69,7 @@ class CourseServiceTest {
                 mutationService,
                 userConfigService,
                 new ModelConfigRules(false, ""),
+                new ModelKeyBindingRules(),
                 aiClient,
                 mock(BaseUrlSecurityValidator.class),
                 cryptoService,
@@ -147,18 +149,74 @@ class CourseServiceTest {
         when(cryptoService.decrypt("v1:iv:cipher")).thenReturn("sk-embedding");
         when(aiClient.probeModel(eq(USER_ID), eq(ModelProbeType.EMBEDDING), eq(null), any(ModelEndpoint.class)))
                 .thenReturn(new PythonAiEngineClient.ProbeResult(false, true, 1536, 20));
+        CourseNamespaceEntity switched = activeCourse(IndexStatus.ACTIVE.name(), 2);
         when(mutationService.applyEmbeddingChange(eq(USER_ID), eq(COURSE_ID),
-                eq("OPENAI_COMPATIBLE"), eq("text-embedding-3-small"), eq(1536), eq(1), eq(2),
-                eq(IndexStatus.ACTIVE.name())))
-                .thenReturn(activeCourse(IndexStatus.ACTIVE.name(), 2));
+                eq("OPENAI_COMPATIBLE"), eq("BAAI/bge-m3"), eq(1536), eq(1)))
+                .thenReturn(new CourseMutationService.EmbeddingChangeResult(switched, 0));
 
         ChangeEmbeddingModelVO vo = service.changeEmbeddingModel(USER_ID, COURSE_ID,
-                new ChangeEmbeddingModelRequest(false, "OPENAI_COMPATIBLE", "text-embedding-3-small"));
+                new ChangeEmbeddingModelRequest(true, null, null));
 
         assertThat(vo.previousIndexVersion()).isEqualTo(1);
         assertThat(vo.currentIndexVersion()).isEqualTo(2);
         assertThat(vo.embeddingDim()).isEqualTo(1536);
         assertThat(vo.reindexingDocCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("显式指定与已保存目标完全一致的模型时允许复用旧 Key")
+    void allowsExplicitSameTarget() {
+        when(mapper.selectOne(any())).thenReturn(activeCourse(IndexStatus.ACTIVE.name(), 1));
+        UserConfigEntity config = validConfig();
+        config.setEmbeddingApiKeyCipher("v1:iv:cipher");
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config));
+        when(cryptoService.decrypt("v1:iv:cipher")).thenReturn("sk-embedding");
+        when(aiClient.probeModel(anyLong(), any(), any(), any()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(false, true, 1024, 20));
+        when(mutationService.applyEmbeddingChange(anyLong(), anyLong(), anyString(), anyString(),
+                anyInt(), anyInt()))
+                .thenReturn(new CourseMutationService.EmbeddingChangeResult(
+                        activeCourse(IndexStatus.ACTIVE.name(), 2), 0));
+
+        ChangeEmbeddingModelVO vo = service.changeEmbeddingModel(USER_ID, COURSE_ID,
+                new ChangeEmbeddingModelRequest(false, "OPENAI_COMPATIBLE", "BAAI/bge-m3"));
+
+        assertThat(vo.embeddingModel()).isEqualTo("BAAI/bge-m3");
+        verify(cryptoService).decrypt("v1:iv:cipher");
+    }
+
+    @Test
+    @DisplayName("仅大小写不同的模型名被拒绝，且不解密、不探测")
+    void rejectsCaseOnlyModelChange() {
+        when(mapper.selectOne(any())).thenReturn(activeCourse(IndexStatus.ACTIVE.name(), 1));
+        UserConfigEntity config = validConfig();
+        config.setEmbeddingApiKeyCipher("v1:iv:cipher");
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config));
+
+        assertThatThrownBy(() -> service.changeEmbeddingModel(USER_ID, COURSE_ID,
+                new ChangeEmbeddingModelRequest(false, "OPENAI_COMPATIBLE", "baai/BGE-M3")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.VALIDATION_ERROR));
+        verify(cryptoService, never()).decrypt(anyString());
+        verify(aiClient, never()).probeModel(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("provider 不同被拒绝，旧 Key 不进入探测请求")
+    void rejectsDifferentProviderWithoutDecrypting() {
+        when(mapper.selectOne(any())).thenReturn(activeCourse(IndexStatus.ACTIVE.name(), 1));
+        UserConfigEntity config = validConfig();
+        config.setEmbeddingApiKeyCipher("v1:iv:cipher");
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config));
+
+        assertThatThrownBy(() -> service.changeEmbeddingModel(USER_ID, COURSE_ID,
+                new ChangeEmbeddingModelRequest(false, "ZHIPU", "BAAI/bge-m3")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.VALIDATION_ERROR));
+        verify(cryptoService, never()).decrypt(anyString());
+        verify(aiClient, never()).probeModel(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -191,7 +249,7 @@ class CourseServiceTest {
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(ErrorCode.UPSTREAM_MODEL_ERROR));
         verify(mutationService, never()).applyEmbeddingChange(
-                anyLong(), anyLong(), anyString(), anyString(), anyInt(), anyInt(), anyInt(), anyString());
+                anyLong(), anyLong(), anyString(), anyString(), anyInt(), anyInt());
     }
 
     @Test

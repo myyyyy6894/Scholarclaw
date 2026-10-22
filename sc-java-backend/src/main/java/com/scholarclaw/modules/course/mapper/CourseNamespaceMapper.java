@@ -24,4 +24,20 @@ public interface CourseNamespaceMapper extends BaseMapper<CourseNamespaceEntity>
             LIMIT 1
             """)
     CourseNamespaceEntity selectActiveDefaultCourse(@Param("userId") Long userId);
+
+    /**
+     * 锁定当前用户的活动课程行（{@code SELECT ... FOR UPDATE}）。
+     *
+     * <p>上传、切换 Embedding、删除课程必须在同一事务内先锁该行，避免
+     * “校验通过后课程被并发删除/重建”的窗口；跨用户查询不会命中。
+     */
+    @Select("""
+            SELECT * FROM t_course_namespace
+            WHERE course_id = #{courseId}
+              AND user_id = #{userId}
+              AND is_deleting = 0
+            FOR UPDATE
+            """)
+    CourseNamespaceEntity selectActiveCourseForUpdate(@Param("userId") Long userId,
+                                                      @Param("courseId") Long courseId);
 }

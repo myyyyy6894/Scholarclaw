@@ -13,6 +13,9 @@ import java.util.Set;
  *
  * <p>矩阵之外的跳转一律拒绝；真正落库时仍使用带 {@code parse_version} 与状态条件的
  * 原子 UPDATE，状态机校验不是并发控制的替代品。
+ *
+ * <p>重复投递不建模为状态迁移：`PARSING` 文档再次入队只递增 {@code parse_version}
+ * （见 {@link KnowledgeDocService#retryFailed} 等版本更新路径），不允许 `PARSING -> PARSING`。
  */
 public final class DocumentStateMachine {
 
@@ -22,8 +25,7 @@ public final class DocumentStateMachine {
         ALLOWED.put(DocumentStatus.UPLOADED, EnumSet.of(
                 DocumentStatus.PARSING, DocumentStatus.FAILED, DocumentStatus.DELETING));
         ALLOWED.put(DocumentStatus.PARSING, EnumSet.of(
-                DocumentStatus.PARSING, DocumentStatus.READY,
-                DocumentStatus.FAILED, DocumentStatus.DELETING));
+                DocumentStatus.READY, DocumentStatus.FAILED, DocumentStatus.DELETING));
         ALLOWED.put(DocumentStatus.READY, EnumSet.of(
                 DocumentStatus.PARSING, DocumentStatus.DELETING));
         ALLOWED.put(DocumentStatus.FAILED, EnumSet.of(

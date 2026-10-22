@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0、P1、P2、P3 已验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21 验收通过）；P4 / TASK-401（课程空间）、TASK-402（文档状态机）、TASK-403（安全上传）已实现，状态 `IN_REVIEW` 待负责人验收。** P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
+**当前进度：P0、P1、P2、P3、P4 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22 验收通过）；下一阶段 P5 / TASK-501。** 注意：P4 的手动重试/重建接口在 TASK-501/505 接入前返回 `501`，上传后文档停留在 `UPLOADED`；仓库内冒烟脚本使用 SQL 夹具，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 
@@ -79,9 +79,7 @@ cd sc-python-ai
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
 ```
 
-**尚未验证：** `sc-python-ai` 的 ChromaDB 客户端（TASK-504）、RabbitMQ 消费者（TASK-502）与
-模型探测接口（TASK-302）均未落地。容器化与编排已由 TASK-104 完成（见 §3.4），
-容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
+**尚未验证：** `sc-python-ai` 的 ChromaDB 客户端（TASK-504）与 RabbitMQ 消费者（TASK-502）未落地；模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
 
 ### 3.3 Web 前端（已实测）
 
@@ -103,7 +101,7 @@ ESLint 启用了**类型感知规则**，其中 `no-floating-promises` / `no-mis
 
 **已验证：** 与真实后端联调（经 Nginx）：登录/注册、BYOK 探测与保存、密钥掩码、偏好更新、
 销毁 Key 均可正常走通；浏览器端到端交互用系统 Chrome 执行（Playwright 临时环境，未加入项目依赖）。
-页面路由：`/`（首页）、`/login`（登录/注册）、`/settings`（个人设置，需登录）。
+页面路由：`/`（首页）、`/login`（登录/注册）、`/courses`（课程空间）、`/knowledge`（课程知识库）、`/settings`（个人设置），除登录/注册外均需登录。
 生产态已由 Nginx 托管（见 §3.4）。
 
 ### 3.4 部署（Docker Compose，已实测）
@@ -212,7 +210,7 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 |---|---|---|---|
 | `sc.timezone` | `SC_TIMEZONE` | `Asia/Shanghai` | 用户时区与时间序列化基准。**必须显式固定**，严禁依赖宿主机/JVM 默认时区（见 `ENVIRONMENT.md` ENV-01） |
 | `sc.internal.token` | `SC_INTERNAL_SERVICE_TOKEN` | 空 | Java ↔ Python 内部调用鉴权令牌（请求头 `X-Internal-Token`）。**留空时 `InternalTokenAuthFilter` 对所有 `/internal/**` 一律拒绝（失败关闭）**，不会"跳过校验" |
-| `sc.storage`（Python） | `SC_STORAGE_RAW_PATH` | `/data/scholarclaw/storage/raw` | 共享卷只读挂载点；`sc-python-ai` 只读访问，绝不写入或删除源文件 |
+| `sc.storage`（Python） | `SC_STORAGE_RAW_PATH` | `/data/scholarclaw/storage/raw` | 共享卷只读挂载点；`sc-python-ai` 只读访问，绝不写入或删除源文件。Java 侧根目录固定为 `/data/scholarclaw/storage`，**不提供环境变量覆盖** |
 | `sc.log-level`（Python） | `SC_LOG_LEVEL` | `INFO` | 本服务日志级别 |
 | 模型出站超时（Python） | `SC_MODEL_CONNECT_TIMEOUT_SECONDS` / `SC_MODEL_READ_TIMEOUT_SECONDS` | `5` / `30` | 受控模型网关的出站超时 |
 | 模型探测超时（Java） | `SC_MODEL_CONNECT_TIMEOUT_MILLIS` / `SC_MODEL_READ_TIMEOUT_MILLIS` | `5000` / `10000` | Java → Python 模型探测客户端的连接/读取超时 |
@@ -250,4 +248,4 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 - 当前状态、需求追踪、未决事项台账：`TASK_TRACKER.md`。
 - 环境差异与风险：`ENVIRONMENT.md`。
 
-阶段路线：P0 仓库核验 → P1 工程骨架与容器底座 → P2 认证/BYOK → P3 Python 网关与模型探测 → P4 课程与知识库 → P5 异步解析与向量索引 → P6 RAG 与 SSE → P7 DDL 闭环 → P8 提醒/通知/OneBot → P9 清理补偿与 MVP 验收。
+阶段路线：P0 仓库核验 → P1 工程骨架与容器底座 → P2 认证/BYOK → P3 Python 网关与模型探测 → P4 课程与知识库（`DONE`）→ P5 异步解析与向量索引 → P6 RAG 与 SSE → P7 DDL 闭环 → P8 提醒/通知/OneBot → P9 清理补偿与 MVP 验收。

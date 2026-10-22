@@ -99,6 +99,8 @@ public enum ErrorCode {
             "🤔 收到你的消息，请确认需要执行哪项操作？回复【1】提取为 DDL 待办，回复【2】检索课程知识库回答，回复【3】忽略。"),
 
     // ---------- 5xx：下游与系统内部异常（04 §2.3.2 第 6 类）----------
+    FEATURE_NOT_AVAILABLE("FEATURE_NOT_AVAILABLE", HttpStatus.NOT_IMPLEMENTED, null,
+            "该能力尚未开放，待异步解析与重建任务接入后可用。"),
     UPSTREAM_MODEL_AUTH_ERROR("UPSTREAM_MODEL_AUTH_ERROR", HttpStatus.BAD_GATEWAY, null,
             "模型服务鉴权失败，请检查【BYOK 设置】中的 API Key 或模型名称是否正确。"),
     UPSTREAM_MODEL_RATE_LIMITED("UPSTREAM_MODEL_RATE_LIMITED", HttpStatus.BAD_GATEWAY, null,

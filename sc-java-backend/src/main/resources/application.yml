@@ -69,9 +69,20 @@ sc:
     migration:
       enabled: ${SC_DB_MIGRATION_ENABLED:true}
       locations: classpath:db/migration
-  # 共享卷根目录（TASK-403）：Java 负责 raw/tmp 的读写与物理删除；Python 只读挂载 raw。
+  # 共享卷根目录（TASK-403）：固定路径，Java 负责 raw/tmp 的读写与物理删除；Python 只读挂载 raw。
+  # 不提供环境变量覆盖：Java 与 Python 必须看到同一目录，覆盖会造成写入/读取路径失配。
   storage:
-    root: ${SC_STORAGE_ROOT:/data/scholarclaw/storage}
+    root: /data/scholarclaw/storage
+  knowledge:
+    # P4 门禁：TASK-501 的 RETRY_FAILED/REINDEX MQ 生产者落地前，手动重试/重建接口返回 501。
+    manual-ingest-enabled: ${SC_MANUAL_INGEST_ENABLED:false}
+    # 上传半成品与孤立文件恢复扫描（TASK-403 补偿）。
+    upload-recovery:
+      enabled: ${SC_UPLOAD_RECOVERY_ENABLED:true}
+      stale-minutes: 10
+      tmp-orphan-minutes: 60
+      initial-delay-ms: 300000
+      interval-ms: 900000
   # 用户时区默认值与产品基线一致（01 §FR-DDL-001）。
   # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
   # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。

@@ -6,7 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.common.filter.TraceContext;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -47,7 +50,10 @@ public class PythonAiEngineClient {
     public static final String PROBE_PATH = "/internal/ai/v1/model/probe";
     /** Python 侧内部向量清理路径（`04` §4.9.4）。 */
     public static final String VECTORS_PATH = "/internal/ai/v1/rag/vectors";
+    /** Python 侧内部 RAG 流式问答路径（`04` §4.9.3，TASK-604）。 */
+    public static final String RAG_QA_STREAM_PATH = "/internal/ai/v1/rag/qa-stream";
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
+    private static final int MAX_ERROR_BODY_BYTES = 64 * 1024;
 
     /** 内部调用连接超时上限：超过 5s 会挤压 Java 的 10s 读取预算（`04` §4.9.1）。 */
     static final long MAX_CONNECT_TIMEOUT_MILLIS = 5_000L;
@@ -104,6 +110,90 @@ public class PythonAiEngineClient {
     /** 发起内部 JSON DELETE（向量清理等幂等操作）。 */
     public JsonNode deleteJson(String path, Object body, Long userId, Duration readTimeout) {
         return sendJson("DELETE", path, body, userId, readTimeout);
+    }
+
+    /**
+     * 建立到 Python 的 SSE 长连接（{@code API-INT-AI-003}，TASK-604）。
+     *
+     * <p>调用方必须在独立线程中读取 :class:`SseStreamHandle`，并在取消/超时时调用
+     * :meth:`close` 立即断开下游，Python 会随之取消上游模型请求。
+     *
+     * @throws BusinessException Python 不可达、非 200 或返回错误信封（错误码已映射、文案已脱敏）
+     */
+    public SseStreamHandle openSseStream(String path, Object body, Long userId, Duration readTimeout) {
+        if (baseUrl.isBlank()) {
+            log.error("sc-python-ai 内部基址未配置，无法发起内部流式调用 path={}", path);
+            throw new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR, "AI 引擎地址未配置，请联系管理员。");
+        }
+        String traceId = TraceContext.currentOrGeneratedTraceId();
+        String payload;
+        try {
+            payload = objectMapper.writeValueAsString(body == null ? Map.of() : body);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "内部请求构造失败。");
+        }
+
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + normalizePath(path)))
+                .timeout(readTimeout)
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .header(INTERNAL_TOKEN_HEADER, internalToken)
+                .header(TraceContext.HEADER_NAME, traceId);
+        if (userId != null) {
+            builder.header(TraceContext.USER_ID_HEADER, String.valueOf(userId));
+        }
+        HttpRequest request = builder
+                .method("POST", HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                .build();
+
+        HttpResponse<InputStream> response;
+        try {
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        } catch (HttpTimeoutException e) {
+            log.warn("内部流式调用超时 path={} trace_id={}", path, traceId);
+            throw new BusinessException(ErrorCode.UPSTREAM_TIMEOUT, ErrorCode.UPSTREAM_TIMEOUT.defaultMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR, "内部调用被中断，请稍后重试。");
+        } catch (IOException e) {
+            log.warn("内部流式调用无法连接 path={} error={}", path, e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR,
+                    ErrorCode.UPSTREAM_MODEL_ERROR.defaultMessage());
+        }
+
+        if (response.statusCode() != 200) {
+            String errorBody = readErrorBody(response.body());
+            log.warn("内部流式调用失败 path={} status={}", path, response.statusCode());
+            throw streamFailure(response.statusCode(), errorBody);
+        }
+        return new SseLineStream(response.body());
+    }
+
+    private String readErrorBody(InputStream body) {
+        try (body) {
+            byte[] bytes = body.readNBytes(MAX_ERROR_BODY_BYTES);
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private BusinessException streamFailure(int status, String body) {
+        String code = "";
+        try {
+            code = objectMapper.readTree(body).path("code").asText("");
+        } catch (IOException ignored) {
+            // 非信封响应：按状态码兜底
+        }
+        ErrorCode mapped = ErrorCode.fromCode(code);
+        if (mapped == null) {
+            mapped = status >= 500 || status == 429
+                    ? ErrorCode.UPSTREAM_MODEL_ERROR : ErrorCode.INTERNAL_ERROR;
+        }
+        if (mapped == ErrorCode.AUTH_FORBIDDEN) {
+            mapped = ErrorCode.INTERNAL_ERROR;
+        }
+        return new BusinessException(mapped, mapped.defaultMessage());
     }
 
     private JsonNode sendJson(String method, String path, Object body, Long userId,
@@ -237,5 +327,66 @@ public class PythonAiEngineClient {
     /** 探测结果（`04` §4.9.1 响应 `data`）。 */
     public record ProbeResult(boolean chatReachable, boolean embeddingReachable,
                               Integer actualDim, int latencyMs) {
+    }
+
+    /** 一帧 SSE：`event` 名与原始 `data` JSON 文本。 */
+    public record SseFrame(String event, String data) {
+    }
+
+    /** SSE 长连接句柄；`next()` 在流结束时返回 {@code null}。 */
+    public interface SseStreamHandle extends AutoCloseable {
+        SseFrame next() throws IOException;
+
+        @Override
+        void close();
+    }
+
+    private static final class SseLineStream implements SseStreamHandle {
+        private final InputStream raw;
+        private final BufferedReader reader;
+
+        private SseLineStream(InputStream raw) {
+            this.raw = raw;
+            this.reader = new BufferedReader(new InputStreamReader(raw, StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public SseFrame next() throws IOException {
+            String event = null;
+            StringBuilder data = null;
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty()) {
+                    if (event != null || data != null) {
+                        return new SseFrame(event == null ? "message" : event,
+                                data == null ? "" : data.toString());
+                    }
+                    continue;
+                }
+                if (line.startsWith(":")) {
+                    continue;
+                }
+                if (line.startsWith("event:")) {
+                    event = line.substring("event:".length()).trim();
+                } else if (line.startsWith("data:")) {
+                    String part = line.substring("data:".length()).trim();
+                    if (data == null) {
+                        data = new StringBuilder(part);
+                    } else {
+                        data.append('\n').append(part);
+                    }
+                }
+            }
+            return null;
+        }
+
+        @Override
+        public void close() {
+            try {
+                raw.close();
+            } catch (IOException ignored) {
+                // 关闭失败不影响调用方收尾
+            }
+        }
     }
 }

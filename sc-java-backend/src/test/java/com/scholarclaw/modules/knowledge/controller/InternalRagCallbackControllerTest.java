@@ -13,11 +13,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.config.JacksonConfig;
 import com.scholarclaw.common.exception.GlobalExceptionHandler;
 import com.scholarclaw.modules.knowledge.dto.IngestResultVO;
+import com.scholarclaw.modules.knowledge.dto.ParentChunkBatchVO;
+import com.scholarclaw.modules.knowledge.dto.ParentChunkVO;
 import com.scholarclaw.modules.knowledge.dto.ParseContextVO;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestResultService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeParseContextService;
+import com.scholarclaw.modules.knowledge.service.ParentChunkService;
 import java.time.ZoneId;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +41,7 @@ class InternalRagCallbackControllerTest {
     private KnowledgeParseContextService parseContextService;
     private KnowledgeIngestResultService ingestResultService;
     private KnowledgeDocService docService;
+    private ParentChunkService parentChunkService;
     private MockMvc mockMvc;
 
     @BeforeEach
@@ -44,9 +49,10 @@ class InternalRagCallbackControllerTest {
         parseContextService = mock(KnowledgeParseContextService.class);
         ingestResultService = mock(KnowledgeIngestResultService.class);
         docService = mock(KnowledgeDocService.class);
+        parentChunkService = mock(ParentChunkService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new InternalRagCallbackController(parseContextService,
-                                ingestResultService, docService))
+                                ingestResultService, docService, parentChunkService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -153,5 +159,53 @@ class InternalRagCallbackControllerTest {
                 .andExpect(jsonPath("$.data.doc_id").value("50001"))
                 .andExpect(jsonPath("$.data.applied").value(true))
                 .andExpect(jsonPath("$.data.current_status").value("READY"));
+    }
+
+    @Test
+    @DisplayName("父块回查返回 snake_case 与字符串 doc_id")
+    void batchGetParentChunksReturnsAuthoritativePayload() throws Exception {
+        when(parentChunkService.batchGet(eq(USER_ID), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new ParentChunkBatchVO(List.of(new ParentChunkVO(
+                        "pc_50001_v1_1", DOC_ID, "a.pdf", 3, 4, "5.1", "权威内容"))));
+
+        mockMvc.perform(post("/internal/api/v1/rag/parent-chunks/batch-get")
+                        .header("X-User-Id", "10001")
+                        .contentType("application/json")
+                        .content("""
+                                {"user_id":"10001","course_id":"2001",
+                                 "expected_course_index_version":1,
+                                 "parent_chunk_ids":["pc_50001_v1_1"]}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.parent_chunks[0].parent_chunk_id")
+                        .value("pc_50001_v1_1"))
+                .andExpect(jsonPath("$.data.parent_chunks[0].doc_id").value("50001"))
+                .andExpect(jsonPath("$.data.parent_chunks[0].page_start").value(3))
+                .andExpect(jsonPath("$.data.parent_chunks[0].content").value("权威内容"));
+    }
+
+    @Test
+    @DisplayName("父块回查要求合法 X-User-Id 与 1~4 个候选 ID")
+    void batchGetParentChunksValidatesRequest() throws Exception {
+        mockMvc.perform(post("/internal/api/v1/rag/parent-chunks/batch-get")
+                        .contentType("application/json")
+                        .content("""
+                                {"user_id":"10001","course_id":"2001",
+                                 "expected_course_index_version":1,
+                                 "parent_chunk_ids":["pc_1"]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        mockMvc.perform(post("/internal/api/v1/rag/parent-chunks/batch-get")
+                        .header("X-User-Id", "10001")
+                        .contentType("application/json")
+                        .content("""
+                                {"user_id":"10001","course_id":"2001",
+                                 "expected_course_index_version":1,
+                                 "parent_chunk_ids":["p1","p2","p3","p4","p5"]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
     }
 }

@@ -41,6 +41,21 @@ export function canDelete(doc: KnowledgeDoc): boolean {
   return doc.status !== 'DELETING' && doc.status !== 'DELETED'
 }
 
+/** 仅 FAILED 可手动重试（`API-DOC-003` 状态门控）。 */
+export function canRetry(doc: KnowledgeDoc): boolean {
+  return doc.status === 'FAILED'
+}
+
+/** 仅 READY 可单文档重建（`API-DOC-004` 状态门控）。 */
+export function canReindex(doc: KnowledgeDoc): boolean {
+  return doc.status === 'READY'
+}
+
+/** 存在待解析/解析中文档时需要轮询刷新，让异步结果自动出现在页面上。 */
+export function hasPendingDocs(docs: KnowledgeDoc[]): boolean {
+  return docs.some((doc) => doc.status === 'UPLOADED' || doc.status === 'PARSING')
+}
+
 /** 只有 READY 才展示索引快照；非 READY 一律按 0 渲染，避免历史脏数据误导。 */
 export function snapshotPageCount(doc: KnowledgeDoc): number {
   return doc.status === 'READY' ? doc.page_count : 0

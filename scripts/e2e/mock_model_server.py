@@ -14,17 +14,25 @@
 from __future__ import annotations
 
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DIM = 8
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 10
+
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 接口
         length = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(length)
+        raw = self.rfile.read(length)
         if self.path.rstrip("/").endswith("/embeddings"):
-            payload = {"data": [{"embedding": [0.01] * DIM, "index": 0}]}
+            try:
+                inputs = json.loads(raw or b"{}").get("input", "")
+            except json.JSONDecodeError:
+                inputs = ""
+            count = len(inputs) if isinstance(inputs, list) else 1
+            payload = {"data": [{"embedding": [0.01] * DIM, "index": index}
+                                for index in range(count)]}
         else:
             payload = {"choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}]}
         body = json.dumps(payload).encode()
@@ -39,4 +47,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    HTTPServer(("0.0.0.0", 9000), Handler).serve_forever()
+    server = ThreadingHTTPServer(("0.0.0.0", 9000), Handler)
+    server.daemon_threads = True
+    server.serve_forever()

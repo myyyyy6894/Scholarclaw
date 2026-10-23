@@ -17,6 +17,7 @@ from app.services.ingest.models import ParseContext
 logger = get_logger(__name__)
 
 _PARSE_CONTEXT_PATH = "/internal/api/v1/docs/{doc_id}/parse-context"
+_RETRY_ATTEMPT_PATH = "/internal/api/v1/docs/{doc_id}/retry-attempt"
 _INGEST_RESULT_PATH = "/internal/api/v1/rag/ingest-result"
 
 
@@ -71,6 +72,24 @@ class ParseContextClient:
             "X-Trace-Id": trace_id,
             "X-User-Id": user_id,
         }
+
+    async def record_attempt(self, *, doc_id: str, parse_version: int, trace_id: str,
+                             user_id: str) -> bool:
+        """上报一次内部重试，保证 `retry_count` 真实反映重试次数；失败不阻断重试。"""
+        if not self._settings.java_backend_base_url:
+            return False
+        url = (self._settings.java_backend_base_url
+               + _RETRY_ATTEMPT_PATH.format(doc_id=doc_id))
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=2.0),
+                                         transport=self._transport) as client:
+                response = await client.post(
+                    url, params={"parse_version": parse_version},
+                    headers=self._headers(trace_id, user_id))
+            return response.status_code == 200
+        except httpx.HTTPError:
+            logger.warning("重试计数上报失败 doc_id=%s trace_id=%s", doc_id, trace_id)
+            return False
 
 
 class IngestResultClient:

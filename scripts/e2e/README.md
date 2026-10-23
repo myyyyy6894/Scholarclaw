@@ -105,7 +105,9 @@ python3 scripts/e2e/course_smoke.py --mock-base-url "http://$MOCK_IP:9000/v1"
 旧索引版本不计入可用统计、跨用户隔离、删除后 DDL 任务解绑保留、重复删除 404。
 
 **注意：** 脚本使用 SQL 直接构造 `READY` 夹具，验证的是 P4 API 与状态机，
-**不代表“上传→解析→READY”真实闭环**（该闭环属 TASK-501/502/503/506）。
+**不代表“上传→解析→READY”真实闭环**（真实闭环见 §4.2）。运行前必须在临时 env 中设置
+`SC_INGEST_CONSUMER_ENABLED=false`，否则后台消费者会与 SQL 夹具竞争同一文档状态；
+运行后清空 `rag.ingest.queue` 中残留的测试消息。
 
 脚本只使用假 Key；ID 用十进制字符串；验证后按上面的临时 env 流程恢复容器。
 
@@ -116,10 +118,32 @@ MOCK_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{
 /tmp/sc-e2e-venv/bin/python scripts/e2e/browser_p4_e2e.py --mock-base-url "http://$MOCK_IP:9000/v1"
 ```
 
-覆盖：登录、空课程状态、页面创建课程、上传合法 PDF、文档状态、`DELETING` 默认可见、
-课程切换、重试/重建占位提示、退出登录后课程上下文清空、0 console error。
+覆盖：登录、空课程状态、页面创建课程、上传文字版 PDF、真实解析到 READY、
+失败文档重试入口、READY 文档重建入口、`DELETING` 默认可见、
+课程切换、退出登录后课程上下文清空、0 console error。
 脚本会注册临时账号并保存 mock 模型配置；结束后删除测试文档与课程。
 截图默认写入 `/tmp/sc-p4-{knowledge,deleting,courses}.png`。
+
+### 4.2 P5 文档异步处理端到端（TASK-506）
+
+前置与 §4 相同，但必须**开启消费者**（`SC_INGEST_CONSUMER_ENABLED=true`，TASK-506 起为默认值），
+且 mock 容器运行中：
+
+```bash
+MOCK_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' sc-e2e-mock-model)
+python3 scripts/e2e/ingest_e2e.py --mock-base-url "http://$MOCK_IP:9000/v1"
+```
+
+覆盖：真实文字版 PDF 上传→MQ→解析→父块入库→Embedding→ChromaDB→READY；
+READY 页数/块数/向量数与课程统计；重复消息幂等；v2 重建期间迟到 v1 回调清理孤儿向量；
+扫描件 `E-RAG-01` 失败；消费者停机期间保持 `PARSING` 并在恢复后自动完成；
+mock 服务故障导致 `FAILED` 后手动重试恢复；PARSING 僵尸巡检补投与 `retry_count` 递增；
+删除文档/课程的向量与 Collection 清理；默认 Embedding 变更的“未确认拒绝 + 确认后批量迁移”。
+脚本只读 MySQL/ChromaDB 做断言（`mysql_query`/`chroma_count`），不修改业务数据。
+
+注意：脚本会停止/启动 `sc-python-ai` 与 `sc-e2e-mock-model` 两个容器，运行期间页面暂不可用。
+巡检用例需要临时 env 设置 `SC_ZOMBIE_SCAN_STALE_MINUTES=1` 与
+`SC_ZOMBIE_SCAN_INTERVAL_MS=5000`（见脚本文件头与 TASK_TRACKER 记录）。
 
 ## 5. 测试账号保留与清理（手动）
 

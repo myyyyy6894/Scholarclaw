@@ -44,6 +44,25 @@ async def test_embedding_batches_and_validates_dimension() -> None:
 
 
 @pytest.mark.asyncio
+async def test_embedding_batch_size_is_32() -> None:
+    batches: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = __import__("json").loads(request.content)
+        size = len(payload["input"])
+        batches.append(size)
+        return httpx.Response(200, json={"data": [
+            {"index": index, "embedding": [0.1, 0.2, 0.3]} for index in range(size)
+        ]})
+
+    service = EmbeddingService(_settings(), http_transport=httpx.MockTransport(handler))
+    vectors = await service.embed(_context(), [f"文本{index}" for index in range(40)])
+
+    assert batches == [32, 8]
+    assert len(vectors) == 40
+
+
+@pytest.mark.asyncio
 async def test_embedding_dimension_mismatch_is_rejected() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1]}]})

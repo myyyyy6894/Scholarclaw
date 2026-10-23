@@ -48,6 +48,7 @@ class _ContextClient:
         self.context = context
         self.error = error
         self.calls = 0
+        self.attempts = 0
 
     async def fetch(self, **_kwargs):
         self.calls += 1
@@ -55,6 +56,10 @@ class _ContextClient:
             error, self.error = self.error, None
             raise error
         return self.context
+
+    async def record_attempt(self, **_kwargs):
+        self.attempts += 1
+        return True
 
 
 class _Indexer:
@@ -160,6 +165,7 @@ async def test_consumer_retries_retryable_error(tmp_path: Path) -> None:
     await consumer.handle(_message())
 
     assert client.calls == 2
+    assert client.attempts == 1
     assert len(sink.ready_calls) == 1
 
 

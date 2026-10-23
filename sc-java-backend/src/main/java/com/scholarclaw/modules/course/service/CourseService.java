@@ -111,16 +111,15 @@ public class CourseService implements UserCourseCountProvider {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "“未分类课程”是系统默认课程保留名称，请更换课程名称。");
         }
-        UserConfigEntity config = requireActiveConfig(userId);
-        requireValidEmbeddingConfig(config);
         if (existsActiveCourseName(userId, courseName)) {
             throw new BusinessException(ErrorCode.COURSE_NAME_DUPLICATE);
         }
-
-        CourseNamespaceEntity entity = buildCourse(userId, courseName,
-                trimToNull(request.description()), 0, config);
         try {
-            CourseNamespaceEntity created = courseMutationService.create(entity);
+            // 与默认模型保存共用用户级行锁：锁内读取配置，避免并发保存新 Key 时不迁移本课程
+            CourseNamespaceEntity created = courseMutationService.createWithUserLock(userId, config -> {
+                requireValidEmbeddingConfig(config);
+                return buildCourse(userId, courseName, trimToNull(request.description()), 0, config);
+            });
             return toVO(created, CourseDocumentStats.ZERO, zoneFor(userId));
         } catch (DuplicateKeyException e) {
             // uk_course_user_active_name 并发兜底
@@ -178,9 +177,14 @@ public class CourseService implements UserCourseCountProvider {
                 result.reindexingDocCount());
     }
 
-    /** 解析回调后收敛课程索引状态（TASK-505）。 */
+    /** 解析回调/文档删除后收敛课程索引状态（TASK-505，TASK-506 复核修复）。 */
     public void refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
         courseMutationService.refreshIndexStatus(userId, courseId, indexVersion);
+    }
+
+    /** 失败文档重试/重建时把 `REBUILD_FAILED` 拉回 `REBUILDING`。 */
+    public void markRebuildingIfFailed(Long userId, Long courseId) {
+        courseMutationService.markRebuildingIfFailed(userId, courseId);
     }
 
     /** `API-COURSE-004`：第一阶段软删，事件监听方负责文档/DDL/会话；物理清理由 GC 兜底。 */
@@ -201,12 +205,12 @@ public class CourseService implements UserCourseCountProvider {
         if (existing != null) {
             return existing;
         }
-        UserConfigEntity config = requireActiveConfig(userId);
-        requireValidEmbeddingConfig(config);
-        CourseNamespaceEntity candidate = buildCourse(
-                userId, DEFAULT_COURSE_NAME, DEFAULT_DESCRIPTION, 1, config);
         try {
-            return courseMutationService.insertDefault(candidate);
+            // 不存在时才进入用户行锁：锁内重查并读取配置，与模型保存/普通建课互斥
+            return courseMutationService.getOrCreateDefaultWithUserLock(userId, config -> {
+                requireValidEmbeddingConfig(config);
+                return buildCourse(userId, DEFAULT_COURSE_NAME, DEFAULT_DESCRIPTION, 1, config);
+            });
         } catch (DuplicateKeyException e) {
             CourseNamespaceEntity winner = courseNamespaceMapper.selectActiveDefaultCourse(userId);
             if (winner != null) {

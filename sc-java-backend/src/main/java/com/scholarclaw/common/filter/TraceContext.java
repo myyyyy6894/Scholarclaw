@@ -71,6 +71,11 @@ public final class TraceContext {
         return MDC.get(MDC_TRACE_ID);
     }
 
+    /** 当前线程绑定的用户 ID（未认证时可能为占位符 {@code -}），供日志与测试断言。 */
+    public static String currentUserId() {
+        return MDC.get(MDC_USER_ID);
+    }
+
     /**
      * 构造对外响应时使用的追踪号：优先当前线程绑定的值；若当前不在任何入口上下文内
      * （例如直接从定时任务或单元测试构造响应），则按 {@code 02} §11 生成 {@code tr_cron_*}，

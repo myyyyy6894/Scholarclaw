@@ -10,12 +10,14 @@ import com.scholarclaw.common.event.CourseEmbeddingChangedEvent;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
 import com.scholarclaw.modules.course.mapper.CourseNamespaceMapper;
 import com.scholarclaw.modules.course.service.CourseDocumentStatsProvider.CourseDocumentStats;
+import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -30,13 +32,16 @@ public class CourseMutationService {
     private final CourseNamespaceMapper courseNamespaceMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectProvider<CourseDocumentStatsProvider> statsProvider;
+    private final UserConfigService userConfigService;
 
     public CourseMutationService(CourseNamespaceMapper courseNamespaceMapper,
                                  ApplicationEventPublisher eventPublisher,
-                                 ObjectProvider<CourseDocumentStatsProvider> statsProvider) {
+                                 ObjectProvider<CourseDocumentStatsProvider> statsProvider,
+                                 UserConfigService userConfigService) {
         this.courseNamespaceMapper = courseNamespaceMapper;
         this.eventPublisher = eventPublisher;
         this.statsProvider = statsProvider;
+        this.userConfigService = userConfigService;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -46,13 +51,45 @@ public class CourseMutationService {
     }
 
     /**
-     * 默认课程插入使用独立短事务：并发冲突时异常必须先把本事务回滚，
-     * 调用方才能在事务外重新查询胜出线程写入的行。
+     * 默认课程懒加载与模型保存共用用户级行锁（TASK-506 二轮复核）。
+     *
+     * <p>锁内重新查询默认课程并读取配置，避免在“保存新 Key 但不迁移”的并发窗口里创建
+     * 绑定旧模型的默认课程。
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-    public CourseNamespaceEntity insertDefault(CourseNamespaceEntity entity) {
+    @Transactional(rollbackFor = Exception.class)
+    public CourseNamespaceEntity getOrCreateDefaultWithUserLock(
+            Long userId, Function<UserConfigEntity, CourseNamespaceEntity> factory) {
+        userConfigService.lockForUpdate(userId);
+        CourseNamespaceEntity existing = courseNamespaceMapper.selectActiveDefaultCourse(userId);
+        if (existing != null) {
+            return existing;
+        }
+        UserConfigEntity config = userConfigService.findById(userId)
+                .orElseThrow(() -> new com.scholarclaw.common.exception.BusinessException(
+                        com.scholarclaw.common.exception.ErrorCode.AUTH_UNAUTHORIZED,
+                        "登录状态已失效，请重新登录。"));
+        CourseNamespaceEntity entity = factory.apply(config);
         courseNamespaceMapper.insert(entity);
-        return entity;
+        return courseNamespaceMapper.selectById(entity.getCourseId());
+    }
+
+    /**
+     * 建课与用户默认模型保存共用用户级行锁（TASK-506 复核修复）。
+     *
+     * <p>锁住 `t_user_config` 后再读取并复制 Embedding 三元组，保证不会在“保存新 Key 但不迁移”
+     * 的并发窗口里创建出绑定旧模型的课程。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CourseNamespaceEntity createWithUserLock(
+            Long userId, Function<UserConfigEntity, CourseNamespaceEntity> factory) {
+        userConfigService.lockForUpdate(userId);
+        UserConfigEntity config = userConfigService.findById(userId)
+                .orElseThrow(() -> new com.scholarclaw.common.exception.BusinessException(
+                        com.scholarclaw.common.exception.ErrorCode.AUTH_UNAUTHORIZED,
+                        "登录状态已失效，请重新登录。"));
+        CourseNamespaceEntity entity = factory.apply(config);
+        courseNamespaceMapper.insert(entity);
+        return courseNamespaceMapper.selectById(entity.getCourseId());
     }
 
     /**
@@ -113,21 +150,25 @@ public class CourseMutationService {
     }
 
     /**
-     * 解析回调后收敛课程索引状态（TASK-505）。
+     * 解析回调/删除后收敛课程索引状态（TASK-505，TASK-506 复核修复）。
      *
-     * <p>只在课程仍为 `REBUILDING` 且版本未变化时更新：仍有解析中文档则保持；
-     * 全部文档就绪 → `ACTIVE`；存在失败/未就绪 → `REBUILD_FAILED`。
-     * 使用条件更新而不是行锁，避免与课程切换的锁顺序冲突。
+     * <p>允许从 `REBUILDING` 或 `REBUILD_FAILED` 基于真实统计收敛：仍有解析中文档则回到
+     * `REBUILDING`；全部就绪或空课程 → `ACTIVE`；仍有失败 → `REBUILD_FAILED`。
+     * 版本条件避免旧回调把新课程误置。使用条件更新而不是行锁，避免与课程切换的锁顺序冲突。
      */
     @Transactional(rollbackFor = Exception.class)
     public void refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
-        CourseNamespaceEntity locked = courseNamespaceMapper.selectOne(
+        CourseNamespaceEntity current = courseNamespaceMapper.selectOne(
                 Wrappers.<CourseNamespaceEntity>lambdaQuery()
                         .eq(CourseNamespaceEntity::getCourseId, courseId)
                         .eq(CourseNamespaceEntity::getUserId, userId)
                         .eq(CourseNamespaceEntity::getIsDeleting, 0));
-        if (locked == null || !IndexStatus.REBUILDING.name().equals(locked.getIndexStatus())
-                || !Objects.equals(locked.getIndexVersion(), indexVersion)) {
+        if (current == null || !Objects.equals(current.getIndexVersion(), indexVersion)) {
+            return;
+        }
+        String currentStatus = current.getIndexStatus();
+        if (!IndexStatus.REBUILDING.name().equals(currentStatus)
+                && !IndexStatus.REBUILD_FAILED.name().equals(currentStatus)) {
             return;
         }
         CourseDocumentStatsProvider providerPort = statsProvider.getIfAvailable();
@@ -137,17 +178,32 @@ public class CourseMutationService {
         CourseDocumentStats stats = providerPort
                 .statsByCourse(userId, Map.of(courseId, indexVersion))
                 .getOrDefault(courseId, CourseDocumentStats.ZERO);
+        String status;
         if (stats.parsing() > 0) {
-            return;
+            status = IndexStatus.REBUILDING.name();
+        } else {
+            status = stats.total() == 0 || stats.ready() >= stats.total()
+                    ? IndexStatus.ACTIVE.name() : IndexStatus.REBUILD_FAILED.name();
         }
-        String status = stats.total() == 0 || stats.ready() >= stats.total()
-                ? IndexStatus.ACTIVE.name() : IndexStatus.REBUILD_FAILED.name();
         courseNamespaceMapper.update(null, Wrappers.<CourseNamespaceEntity>lambdaUpdate()
                 .eq(CourseNamespaceEntity::getCourseId, courseId)
                 .eq(CourseNamespaceEntity::getUserId, userId)
                 .eq(CourseNamespaceEntity::getIndexVersion, indexVersion)
-                .eq(CourseNamespaceEntity::getIndexStatus, IndexStatus.REBUILDING.name())
+                .in(CourseNamespaceEntity::getIndexStatus,
+                        IndexStatus.REBUILDING.name(), IndexStatus.REBUILD_FAILED.name())
                 .set(CourseNamespaceEntity::getIndexStatus, status)
+                .set(CourseNamespaceEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
+    }
+
+    /** 失败文档重新进入解析时把课程从 `REBUILD_FAILED` 拉回 `REBUILDING`，为后续收敛提供起点。 */
+    @Transactional(rollbackFor = Exception.class)
+    public void markRebuildingIfFailed(Long userId, Long courseId) {
+        courseNamespaceMapper.update(null, Wrappers.<CourseNamespaceEntity>lambdaUpdate()
+                .eq(CourseNamespaceEntity::getCourseId, courseId)
+                .eq(CourseNamespaceEntity::getUserId, userId)
+                .eq(CourseNamespaceEntity::getIsDeleting, 0)
+                .eq(CourseNamespaceEntity::getIndexStatus, IndexStatus.REBUILD_FAILED.name())
+                .set(CourseNamespaceEntity::getIndexStatus, IndexStatus.REBUILDING.name())
                 .set(CourseNamespaceEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
     }
 

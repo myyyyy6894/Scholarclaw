@@ -40,6 +40,7 @@ class PythonAiEngineClientTest {
     private HttpServer server;
     private String baseUrl;
     private final AtomicReference<Headers> capturedHeaders = new AtomicReference<>();
+    private final AtomicReference<String> capturedBody = new AtomicReference<>("");
     private final AtomicReference<String> responseBody = new AtomicReference<>("{}");
     private final AtomicReference<Integer> responseStatus = new AtomicReference<>(200);
     private final AtomicLong delayMillis = new AtomicLong(0);
@@ -50,7 +51,8 @@ class PythonAiEngineClientTest {
         // 根上下文：探测与未来内部接口共用同一套断言
         server.createContext("/", exchange -> {
             capturedHeaders.set(exchange.getRequestHeaders());
-            exchange.getRequestBody().readAllBytes();
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(),
+                    StandardCharsets.UTF_8));
             try {
                 long delay = delayMillis.get();
                 if (delay > 0) {
@@ -82,6 +84,21 @@ class PythonAiEngineClientTest {
 
     private static ModelEndpoint endpoint() {
         return new ModelEndpoint("DEEPSEEK", "https://api.deepseek.com/v1", "sk-test", "deepseek-chat");
+    }
+
+    @Test
+    @DisplayName("probeModel 发送非空 JSON 请求体，字段与内部契约一致")
+    void sendsNonEmptyProbeBody() {
+        responseBody.set("{\"code\":\"OK\",\"data\":{\"chat_reachable\":true}}");
+
+        client(baseUrl).probeModel(10001L, ModelProbeType.BOTH, endpoint(), endpoint());
+
+        assertThat(capturedBody.get()).isNotBlank();
+        assertThat(capturedBody.get())
+                .contains("\"user_id\":\"10001\"")
+                .contains("\"probe_type\":\"BOTH\"")
+                .contains("\"chat_config\"")
+                .contains("\"embedding_config\"");
     }
 
     @Test

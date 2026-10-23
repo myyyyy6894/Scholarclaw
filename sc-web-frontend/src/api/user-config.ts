@@ -72,6 +72,8 @@ export interface ModelConfigUpdateRequest {
   reuse_chat_api_key: boolean
   embedding_api_key?: string
   default_embedding_model: string
+  /** 已有课程存在且 Embedding 目标变化时必须为 true：后端会同步迁移课程并重建索引。 */
+  migrate_existing_courses?: boolean
 }
 
 export interface PreferencesUpdateRequest {

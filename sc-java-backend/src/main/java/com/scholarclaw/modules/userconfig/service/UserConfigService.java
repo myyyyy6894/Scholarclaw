@@ -71,6 +71,24 @@ public class UserConfigService {
     }
 
     /**
+     * 锁定当前用户配置行（TASK-506 复核修复）。
+     *
+     * <p>默认模型保存与建课共用同一把用户级行锁，避免“保存时统计到 0 门课程、探测/保存期间
+     * 另一请求用旧配置建课”导致课程绑定失效。调用方必须已开启事务。
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public UserConfigEntity lockForUpdate(Long userId) {
+        UserConfigEntity entity = userConfigMapper.selectOne(
+                Wrappers.<UserConfigEntity>lambdaQuery()
+                        .eq(UserConfigEntity::getUserId, userId)
+                        .last("FOR UPDATE"));
+        if (entity == null) {
+            throw new BusinessException(ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。");
+        }
+        return entity;
+    }
+
+    /**
      * 更新组 B 的模型配置（{@code 04} `API-USER-003`）。
      *
      * <p>**只 set 模型相关列**：`password_hash` / `account_status` / `username` 等组 A 字段

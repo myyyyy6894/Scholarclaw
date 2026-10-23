@@ -6,6 +6,7 @@ import com.scholarclaw.common.response.Result;
 import com.scholarclaw.modules.knowledge.dto.IngestResultRequest;
 import com.scholarclaw.modules.knowledge.dto.IngestResultVO;
 import com.scholarclaw.modules.knowledge.dto.ParseContextVO;
+import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestResultService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeParseContextService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,11 +33,14 @@ public class InternalRagCallbackController {
 
     private final KnowledgeParseContextService parseContextService;
     private final KnowledgeIngestResultService ingestResultService;
+    private final KnowledgeDocService docService;
 
     public InternalRagCallbackController(KnowledgeParseContextService parseContextService,
-                                         KnowledgeIngestResultService ingestResultService) {
+                                         KnowledgeIngestResultService ingestResultService,
+                                         KnowledgeDocService docService) {
         this.parseContextService = parseContextService;
         this.ingestResultService = ingestResultService;
+        this.docService = docService;
     }
 
     @GetMapping("/docs/{docId}/parse-context")
@@ -60,13 +64,35 @@ public class InternalRagCallbackController {
         return Result.ok("Ingest result processed", result);
     }
 
+    /**
+     * 消费者内部重试计数（TASK-506 复核修复）：Python 在退避重试前上报一次，
+     * 使 `retry_count` 真实反映重试次数，供巡检/排障使用。
+     */
+    @PostMapping("/docs/{docId}/retry-attempt")
+    public Result<Boolean> recordRetryAttempt(
+            @PathVariable("docId") String docId,
+            @RequestParam("parse_version") int parseVersion,
+            HttpServletRequest request) {
+        Long userId = requireUserId(request);
+        if (parseVersion < 1) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    "parse_version 必须 >= 1。");
+        }
+        boolean recorded = docService.recordRetryAttempt(userId,
+                parseLong(docId, "doc_id"), parseVersion);
+        return Result.ok("Retry attempt recorded", recorded);
+    }
+
     private static Long requireUserId(HttpServletRequest request) {
         String raw = request.getHeader(USER_ID_HEADER);
         if (raw == null || !raw.matches("\\d{1,19}")) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "内部请求必须携带合法的 X-User-Id。");
         }
-        return Long.valueOf(raw);
+        Long userId = Long.valueOf(raw);
+        // 内部令牌已由过滤器校验；这里把真实用户绑定到 MDC，保证 [user_id=...] 日志可检索
+        com.scholarclaw.common.filter.TraceContext.bindUserId(userId);
+        return userId;
     }
 
     private static Long parseLong(String raw, String field) {

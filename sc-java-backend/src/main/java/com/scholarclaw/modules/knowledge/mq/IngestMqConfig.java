@@ -44,6 +44,21 @@ public class IngestMqConfig {
         return QueueBuilder.durable(dlq).build();
     }
 
+    /** 死信二次处理仍失败时的持久化停放队列；刻意不绑定消费者。 */
+    @Bean
+    public Queue ingestParkingQueue(
+            @Value("${sc.mq.ingest.parking:rag.ingest.parking}") String parking) {
+        return QueueBuilder.durable(parking).build();
+    }
+
+    /** 向量清理最终失败时的持久化补偿队列；由 TASK-902 GC 消费/重放。 */
+    @Bean
+    public Queue vectorCompensationQueue(
+            @Value("${sc.mq.ingest.vector-compensation:rag.ingest.vector-compensation}")
+            String compensation) {
+        return QueueBuilder.durable(compensation).build();
+    }
+
     @Bean
     public Binding ingestBinding(Queue ingestQueue, DirectExchange ingestExchange,
                                  @Value("${sc.mq.ingest.queue:rag.ingest.queue}") String queue) {
@@ -55,6 +70,21 @@ public class IngestMqConfig {
                                            DirectExchange ingestExchange,
                                            @Value("${sc.mq.ingest.dlq:rag.ingest.dlq}") String dlq) {
         return BindingBuilder.bind(ingestDeadLetterQueue).to(ingestExchange).with(dlq);
+    }
+
+    @Bean
+    public Binding ingestParkingBinding(Queue ingestParkingQueue,
+                                        DirectExchange ingestExchange,
+                                        @Value("${sc.mq.ingest.parking:rag.ingest.parking}") String parking) {
+        return BindingBuilder.bind(ingestParkingQueue).to(ingestExchange).with(parking);
+    }
+
+    @Bean
+    public Binding vectorCompensationBinding(
+            Queue vectorCompensationQueue, DirectExchange ingestExchange,
+            @Value("${sc.mq.ingest.vector-compensation:rag.ingest.vector-compensation}")
+            String compensation) {
+        return BindingBuilder.bind(vectorCompensationQueue).to(ingestExchange).with(compensation);
     }
 
     /** 显式声明队列；生产启动时连接失败会由 Spring AMQP 记录并重试，不影响应用启动。 */

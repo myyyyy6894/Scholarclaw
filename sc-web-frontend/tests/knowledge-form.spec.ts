@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import type { KnowledgeDoc } from '@/api/knowledge'
 import {
   canDelete,
+  canReindex,
+  canRetry,
   documentStatusLabel,
+  hasPendingDocs,
   snapshotChunkCount,
   snapshotPageCount,
   snapshotReadyAt,
@@ -54,6 +57,21 @@ describe('knowledge document presentation', () => {
     expect(canDelete(doc('READY'))).toBe(true)
     expect(canDelete(doc('DELETING'))).toBe(false)
     expect(canDelete(doc('DELETED'))).toBe(false)
+  })
+
+  it('仅 FAILED 可重试、仅 READY 可重建', () => {
+    expect(canRetry(doc('FAILED'))).toBe(true)
+    expect(canRetry(doc('READY'))).toBe(false)
+    expect(canRetry(doc('PARSING'))).toBe(false)
+    expect(canReindex(doc('READY'))).toBe(true)
+    expect(canReindex(doc('FAILED'))).toBe(false)
+    expect(canReindex(doc('PARSING'))).toBe(false)
+  })
+
+  it('存在解析中文档时启用轮询', () => {
+    expect(hasPendingDocs([doc('READY'), doc('FAILED')])).toBe(false)
+    expect(hasPendingDocs([doc('READY'), doc('PARSING')])).toBe(true)
+    expect(hasPendingDocs([doc('UPLOADED')])).toBe(true)
   })
 
   it('快速切换课程时旧请求序号失效', () => {

@@ -81,7 +81,7 @@ class CourseServiceTest {
     void rejectsCreateWhenEmbeddingConfigInvalid() {
         UserConfigEntity config = validConfig();
         config.setDefaultEmbeddingDim(null);
-        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config));
+        stubCreateWithConfig(config);
 
         assertThatThrownBy(() -> service.createCourse(
                 USER_ID, new CreateCourseRequest("操作系统原理", null)))
@@ -95,13 +95,8 @@ class CourseServiceTest {
     @DisplayName("建课复制已验证的 Embedding 三元组，并强制 is_default=0")
     void createCopiesVerifiedEmbeddingTriplet() {
         UserConfigEntity config = validConfig();
-        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config));
         when(mapper.selectCount(any())).thenReturn(0L);
-        when(mutationService.create(any())).thenAnswer(invocation -> {
-            CourseNamespaceEntity entity = invocation.getArgument(0);
-            entity.setCourseId(COURSE_ID);
-            return entity;
-        });
+        stubCreateWithConfig(config);
 
         CourseNamespaceVO vo = service.createCourse(
                 USER_ID, new CreateCourseRequest("操作系统原理", " 2026 秋 "));
@@ -115,12 +110,22 @@ class CourseServiceTest {
         assertThat(vo.indexStatus()).isEqualTo(IndexStatus.ACTIVE.name());
     }
 
+    private void stubCreateWithConfig(UserConfigEntity config) {
+        when(mutationService.createWithUserLock(eq(USER_ID), any())).thenAnswer(invocation -> {
+            java.util.function.Function<UserConfigEntity, CourseNamespaceEntity> factory =
+                    invocation.getArgument(1);
+            CourseNamespaceEntity entity = factory.apply(config);
+            entity.setCourseId(COURSE_ID);
+            return entity;
+        });
+    }
+
     @Test
     @DisplayName("同名建课映射为 COURSE_NAME_DUPLICATE（含唯一键并发兜底）")
     void mapsDuplicateCourseName() {
-        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(validConfig()));
         when(mapper.selectCount(any())).thenReturn(0L);
-        when(mutationService.create(any())).thenThrow(new DuplicateKeyException("uk"));
+        when(mutationService.createWithUserLock(eq(USER_ID), any()))
+                .thenThrow(new DuplicateKeyException("uk"));
 
         assertThatThrownBy(() -> service.createCourse(
                 USER_ID, new CreateCourseRequest("操作系统原理", null)))
@@ -269,8 +274,8 @@ class CourseServiceTest {
         winner.setCourseId(3001L);
         winner.setIsDefault(1);
         when(mapper.selectActiveDefaultCourse(USER_ID)).thenReturn(null, winner);
-        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(validConfig()));
-        when(mutationService.insertDefault(any())).thenThrow(new DuplicateKeyException("uk_course_user_default"));
+        when(mutationService.getOrCreateDefaultWithUserLock(eq(USER_ID), any()))
+                .thenThrow(new DuplicateKeyException("uk_course_user_default"));
 
         CourseNamespaceEntity result = service.getOrCreateDefaultCourse(USER_ID);
 

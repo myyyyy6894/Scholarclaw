@@ -15,8 +15,8 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
  *   <li>API Key 只以"是否已配置 + 掩码"形式出现（掩码由 Java 解密后只取首尾字符生成）。</li>
  * </ul>
  *
- * <p>`existing_course_count` 只由 `API-USER-003` 返回；`API-USER-001` 传 null 时整字段省略，
- * 保证两个接口的字段集各自与契约一致。
+ * <p>`existing_course_count` 由 `API-USER-001` 与 `API-USER-003` 均返回；前端在修改默认
+ * Embedding 目标前据此弹窗确认是否迁移已有课程。内部查询场景传 null 时整字段省略。
  */
 public record UserConfigVO(
         @JsonSerialize(using = ToStringSerializer.class) Long userId,

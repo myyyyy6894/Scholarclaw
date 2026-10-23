@@ -170,7 +170,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         rabbitmq_password=_read(env, ENV_RABBITMQ_PASSWORD, ""),
         mq_ingest_queue=_read(env, ENV_MQ_INGEST_QUEUE, DEFAULT_MQ_INGEST_QUEUE),
         mq_ingest_dlq=_read(env, ENV_MQ_INGEST_DLQ, DEFAULT_MQ_INGEST_DLQ),
-        ingest_consumer_enabled=_parse_bool(env, ENV_INGEST_CONSUMER_ENABLED, False),
+        ingest_consumer_enabled=_parse_bool(env, ENV_INGEST_CONSUMER_ENABLED, True),
         ingest_max_pages=_parse_positive_int(env, ENV_INGEST_MAX_PAGES, DEFAULT_INGEST_MAX_PAGES),
     )
 

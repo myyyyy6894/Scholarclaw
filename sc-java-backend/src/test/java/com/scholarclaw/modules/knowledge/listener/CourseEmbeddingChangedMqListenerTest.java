@@ -32,20 +32,27 @@ class CourseEmbeddingChangedMqListenerTest {
     }
 
     @Test
-    @DisplayName("僵尸巡检只补投成功入队的文档")
-    void scannerCountsOnlyPublishedDocs() {
+    @DisplayName("巡检只补投成功入队或成功收敛的文档")
+    void scannerCountsOnlySuccessfulDocs() {
         KnowledgeDocService docService = mock(KnowledgeDocService.class);
         KnowledgeIngestService ingestService = mock(KnowledgeIngestService.class);
+        com.scholarclaw.modules.knowledge.service.KnowledgeFailureService failureService =
+                mock(com.scholarclaw.modules.knowledge.service.KnowledgeFailureService.class);
         KnowledgeDocEntity first = doc(50001L);
         KnowledgeDocEntity second = doc(50002L);
-        when(docService.findStaleUploaded(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(50)))
-                .thenReturn(List.of(first, second));
-        when(ingestService.enqueueInitial(10001L, 50001L)).thenReturn(true);
-        when(ingestService.enqueueInitial(10001L, 50002L)).thenReturn(false);
+        when(docService.findRetryExhausted(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(50))).thenReturn(List.of());
+        when(docService.findStaleTasks(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(50))).thenReturn(List.of(first, second));
+        when(ingestService.republishStale(org.mockito.ArgumentMatchers.eq(first),
+                org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(ingestService.republishStale(org.mockito.ArgumentMatchers.eq(second),
+                org.mockito.ArgumentMatchers.any())).thenReturn(false);
 
-        int published = new ZombieIngestScanner(docService, ingestService, true, 5, 50).scan();
+        int handled = new ZombieIngestScanner(docService, ingestService, failureService,
+                true, 15, 50).scan();
 
-        assertThat(published).isEqualTo(1);
+        assertThat(handled).isEqualTo(1);
     }
 
     private static KnowledgeDocEntity doc(Long docId) {

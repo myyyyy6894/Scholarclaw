@@ -42,6 +42,7 @@ class KnowledgeDocActionControllerTest {
     private KnowledgeDocService docService;
     private KnowledgeIngestService ingestService;
     private KnowledgeVectorCleanupService cleanupService;
+    private com.scholarclaw.modules.course.service.CourseService courseService;
     private MockMvc mockMvc;
 
     @BeforeEach
@@ -49,9 +50,10 @@ class KnowledgeDocActionControllerTest {
         docService = mock(KnowledgeDocService.class);
         ingestService = mock(KnowledgeIngestService.class);
         cleanupService = mock(KnowledgeVectorCleanupService.class);
+        courseService = mock(com.scholarclaw.modules.course.service.CourseService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new KnowledgeDocActionController(docService, ingestService,
-                                cleanupService, true))
+                                cleanupService, courseService, true))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -92,7 +94,7 @@ class KnowledgeDocActionControllerTest {
     void retryBlockedWhenManualIngestDisabled() throws Exception {
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new KnowledgeDocActionController(docService, ingestService,
-                                cleanupService, false))
+                                cleanupService, courseService, false))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -118,6 +120,8 @@ class KnowledgeDocActionControllerTest {
                 .andExpect(jsonPath("$.data.status").value("DELETING"));
         org.mockito.Mockito.verify(cleanupService)
                 .cleanupDocument(USER_ID, 2001L, DOC_ID, null);
+        org.mockito.Mockito.verify(courseService)
+                .refreshIndexStatus(USER_ID, 2001L, 1);
     }
 
     @Test

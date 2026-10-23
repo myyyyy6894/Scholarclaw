@@ -3,6 +3,7 @@ package com.scholarclaw.modules.userconfig.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -10,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
@@ -25,8 +27,11 @@ import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.common.security.BaseUrlSecurityValidator;
 import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.modules.userconfig.service.CourseEmbeddingMigrationPort;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.ModelConfigSaveService;
 import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
+import com.scholarclaw.modules.userconfig.service.UserCourseCountProvider;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -69,12 +74,25 @@ class UserConfigControllerTest {
 
     private UserConfigService userConfigService;
     private PythonAiEngineClient pythonAiEngineClient;
+    private CourseEmbeddingMigrationPort migrationPort;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         userConfigService = mock(UserConfigService.class);
         pythonAiEngineClient = mock(PythonAiEngineClient.class);
+        migrationPort = mock(CourseEmbeddingMigrationPort.class);
+        org.mockito.Mockito.lenient().when(userConfigService.lockForUpdate(anyLong()))
+                .thenAnswer(invocation -> userConfigService.findById(invocation.getArgument(0))
+                        .orElseGet(UserConfigEntity::new));
+        mockMvc = buildMvc(userId -> 0);
+
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                new ScUserPrincipal(USER_ID, "zhangsan_cs", "STUDENT", "jti",
+                        Instant.now().plusSeconds(60)), null, List.of()));
+    }
+
+    private MockMvc buildMvc(UserCourseCountProvider courseCountProvider) {
         var controller = new UserConfigController(
                 userConfigService,
                 CRYPTO,
@@ -82,17 +100,13 @@ class UserConfigControllerTest {
                 pythonAiEngineClient,
                 new ModelConfigRules(false, ""),
                 new ModelKeyBindingRules(),
-                userId -> 0);
-
-        mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                courseCountProvider,
+                new ModelConfigSaveService(userConfigService, migrationPort, courseCountProvider));
+        return MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
                 .build();
-
-        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
-                new ScUserPrincipal(USER_ID, "zhangsan_cs", "STUDENT", "jti",
-                        Instant.now().plusSeconds(60)), null, List.of()));
     }
 
     @AfterEach
@@ -325,9 +339,76 @@ class UserConfigControllerTest {
         return MAPPER.writeValueAsString(body);
     }
 
+    @Test
+    @DisplayName("GET /user/config 返回真实 existing_course_count")
+    void getConfigReturnsExistingCourseCount() throws Exception {
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity()));
+        mockMvc = buildMvc(userId -> 3);
+
+        mockMvc.perform(get("/api/v1/user/config"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.data.existing_course_count").value(3));
+    }
+
+    @Test
+    @DisplayName("已有课程时修改默认 Embedding 未确认迁移：400 且不探测、不落库")
+    void rejectsEmbeddingTargetChangeWithoutMigration() throws Exception {
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(entity()));
+        mockMvc = buildMvc(userId -> 2);
+
+        int status = mockMvc.perform(put("/api/v1/user/model-config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody("https://api.deepseek.com/v1", "deepseek-chat", false,
+                                "sk-chat", "https://api.siliconflow.cn/v1", "sk-embed",
+                                "BAAI/bge-m3-v2", false)))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(status).isEqualTo(400);
+        verify(pythonAiEngineClient, never()).probeModel(anyLong(), any(), any(), any());
+        verify(userConfigService, never()).updateByokModelConfig(anyLong(), any());
+        verify(migrationPort, never()).migrateExistingCourses(anyLong(), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("确认迁移后：保存与课程批量切换在同一事务服务内完成")
+    void migratesExistingCoursesWhenConfirmed() throws Exception {
+        UserConfigEntity current = entity();
+        UserConfigEntity updated = entity();
+        updated.setDefaultEmbeddingModel("BAAI/bge-m3-v2");
+        updated.setDefaultEmbeddingDim(1024);
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(current));
+        when(pythonAiEngineClient.probeModel(anyLong(), eq(ModelProbeType.BOTH), any(), any()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(true, true, 1024, 20));
+        when(userConfigService.updateByokModelConfig(anyLong(), any())).thenReturn(updated);
+        when(migrationPort.migrateExistingCourses(USER_ID, "OPENAI_COMPATIBLE",
+                "BAAI/bge-m3-v2", 1024)).thenReturn(2);
+        mockMvc = buildMvc(userId -> 2);
+
+        int status = mockMvc.perform(put("/api/v1/user/model-config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody("https://api.deepseek.com/v1", "deepseek-chat", false,
+                                "sk-chat", "https://api.siliconflow.cn/v1", "sk-embed",
+                                "BAAI/bge-m3-v2", true)))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(status).isEqualTo(200);
+        verify(migrationPort).migrateExistingCourses(USER_ID, "OPENAI_COMPATIBLE",
+                "BAAI/bge-m3-v2", 1024);
+    }
+
     private static String saveBody(String chatBaseUrl, String chatModel, boolean reuse,
                                    String chatKey, String embeddingBaseUrl,
                                    String embeddingKey, String embeddingModel) throws Exception {
+        return saveBody(chatBaseUrl, chatModel, reuse, chatKey, embeddingBaseUrl,
+                embeddingKey, embeddingModel, false);
+    }
+
+    private static String saveBody(String chatBaseUrl, String chatModel, boolean reuse,
+                                   String chatKey, String embeddingBaseUrl,
+                                   String embeddingKey, String embeddingModel,
+                                   boolean migrateExistingCourses) throws Exception {
         java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("chat_provider", "OPENAI_COMPATIBLE");
         body.put("chat_base_url", chatBaseUrl);
@@ -336,6 +417,7 @@ class UserConfigControllerTest {
         body.put("embedding_base_url", embeddingBaseUrl);
         body.put("reuse_chat_api_key", reuse);
         body.put("default_embedding_model", embeddingModel);
+        body.put("migrate_existing_courses", migrateExistingCourses);
         if (chatKey != null) {
             body.put("chat_api_key", chatKey);
         }

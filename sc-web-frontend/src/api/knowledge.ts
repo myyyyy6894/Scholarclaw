@@ -55,3 +55,17 @@ export function deleteDoc(docId: BigIntId): Promise<DeleteDocResult> {
     method: 'DELETE',
   })
 }
+
+/** 失败文档重新入队（`API-DOC-003`）。 */
+export function retryDoc(docId: BigIntId): Promise<KnowledgeDoc> {
+  return apiRequest<KnowledgeDoc>(`/v1/docs/${encodeURIComponent(docId)}/retry`, {
+    method: 'POST',
+  })
+}
+
+/** READY 文档重建索引（`API-DOC-004`）。 */
+export function reindexDoc(docId: BigIntId): Promise<KnowledgeDoc> {
+  return apiRequest<KnowledgeDoc>(`/v1/docs/${encodeURIComponent(docId)}/reindex`, {
+    method: 'POST',
+  })
+}

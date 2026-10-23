@@ -2,6 +2,7 @@ package com.scholarclaw.modules.knowledge.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.scholarclaw.common.config.ScTimeZone;
+import com.scholarclaw.common.event.DocumentVectorCleanupEvent;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
@@ -17,6 +18,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,17 +37,20 @@ public class KnowledgeIngestResultService {
 
     private final KnowledgeDocMapper docMapper;
     private final KnowledgeParentChunkMapper parentChunkMapper;
-    private final KnowledgeDocService docService;
     private final CourseService courseService;
+    private final KnowledgeFailureService failureService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public KnowledgeIngestResultService(KnowledgeDocMapper docMapper,
                                         KnowledgeParentChunkMapper parentChunkMapper,
-                                        KnowledgeDocService docService,
-                                        CourseService courseService) {
+                                        CourseService courseService,
+                                        KnowledgeFailureService failureService,
+                                        ApplicationEventPublisher eventPublisher) {
         this.docMapper = docMapper;
         this.parentChunkMapper = parentChunkMapper;
-        this.docService = docService;
         this.courseService = courseService;
+        this.failureService = failureService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -60,19 +65,29 @@ public class KnowledgeIngestResultService {
         if (!"READY".equals(status) && !"FAILED".equals(status)) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "status 仅允许 READY 或 FAILED。");
         }
+        if (request.parseVersion() > doc.getParseVersion()) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    "parse_version 不能大于文档当前版本。");
+        }
         if (!doc.getParseVersion().equals(request.parseVersion())
                 || !doc.getCourseIndexVersion().equals(request.courseIndexVersion())
                 || !"PARSING".equals(doc.getStatus())) {
-            return result(docId, false);
+            boolean cleanup = shouldCleanupStaleVectors(doc, request);
+            if (cleanup) {
+                // 事务内只登记事件；ChromaDB 删除在 AFTER_COMMIT 执行
+                eventPublisher.publishEvent(new DocumentVectorCleanupEvent(
+                        headerUserId, doc.getCourseId(), docId, request.parseVersion()));
+            }
+            return result(docId, false, cleanup);
         }
 
         if ("FAILED".equals(status)) {
-            boolean applied = docService.markFailed(docId, request.parseVersion(),
-                    normalizeErrorCode(request.errorCode()), normalizeErrorMsg(request.errorMsg()));
-            if (applied) {
-                refreshCourse(doc, request.courseIndexVersion());
-            }
-            return result(docId, applied);
+            KnowledgeFailureService.FailureOutcome outcome = failureService.fail(
+                    headerUserId, doc.getCourseId(), docId, request.parseVersion(),
+                    request.courseIndexVersion(), normalizeErrorCode(request.errorCode()),
+                    normalizeErrorMsg(request.errorMsg()));
+            return result(docId, outcome.applied(), outcome.staleCleanupTriggered(),
+                    outcome.currentStatus());
         }
 
         CourseNamespaceEntity course = courseService.getActiveCourse(headerUserId, doc.getCourseId());
@@ -97,7 +112,8 @@ public class KnowledgeIngestResultService {
                 .set(KnowledgeDocEntity::getErrorCode, null)
                 .set(KnowledgeDocEntity::getErrorMsg, null));
         if (affected != 1) {
-            return result(docId, false);
+            // 读取后、更新前可能已被并发重建/删除接管：必须重新读取再决定是否清理迟到版本
+            return handleNotApplied(headerUserId, docId, request);
         }
 
         parentChunkMapper.deleteByDoc(headerUserId, docId);
@@ -106,7 +122,33 @@ public class KnowledgeIngestResultService {
                     request.parseVersion(), item));
         }
         refreshCourse(doc, request.courseIndexVersion());
-        return result(docId, true);
+        return result(docId, true, false);
+    }
+
+    /**
+     * 条件更新/失败收敛未生效时重新读取权威状态，判断迟到版本是否仍需清理。
+     *
+     * <p>仅在“版本已过期、文档删除中/已删除、课程索引版本变化”时登记清理；
+     * 同版本已 READY/FAILED 的正常重复回调保持幂等，不删除当前有效向量。
+     */
+    private IngestResultVO handleNotApplied(Long userId, Long docId, IngestResultRequest request) {
+        KnowledgeFailureService.FailureOutcome outcome = failureService.inspectStale(
+                userId, docId, request.parseVersion(), request.courseIndexVersion());
+        return result(docId, false, outcome.staleCleanupTriggered(), outcome.currentStatus());
+    }
+
+    /**
+     * 只有“确实已被新任务/删除/课程版本接管”的回调才清理孤儿向量。
+     *
+     * <p>同版本、文档仍为 READY/FAILED 的重复回调必须保持幂等，绝不能删除当前有效向量。
+     */
+    private static boolean shouldCleanupStaleVectors(KnowledgeDocEntity doc,
+                                                     IngestResultRequest request) {
+        boolean deleting = "DELETING".equals(doc.getStatus()) || "DELETED".equals(doc.getStatus());
+        boolean staleVersion = request.parseVersion() < doc.getParseVersion();
+        boolean courseVersionChanged = !doc.getCourseIndexVersion()
+                .equals(request.courseIndexVersion());
+        return deleting || staleVersion || courseVersionChanged;
     }
 
     private void refreshCourse(KnowledgeDocEntity doc, int indexVersion) {
@@ -169,10 +211,15 @@ public class KnowledgeIngestResultService {
         return entity;
     }
 
-    private IngestResultVO result(Long docId, boolean applied) {
+    private IngestResultVO result(Long docId, boolean applied, boolean staleCleanupTriggered) {
         KnowledgeDocEntity current = docMapper.selectById(docId);
-        return new IngestResultVO(docId, applied,
-                current == null ? null : current.getStatus(), false);
+        return result(docId, applied, staleCleanupTriggered,
+                current == null ? null : current.getStatus());
+    }
+
+    private IngestResultVO result(Long docId, boolean applied, boolean staleCleanupTriggered,
+                                  String currentStatus) {
+        return new IngestResultVO(docId, applied, currentStatus, staleCleanupTriggered);
     }
 
     private static void requireIdentity(Long headerUserId, IngestResultRequest request) {

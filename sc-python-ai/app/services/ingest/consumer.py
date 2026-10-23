@@ -4,9 +4,8 @@
 `allow_proceed=false` 直接 ack 丢弃过期或重复消息；可重试错误按 `5s → 15s → 45s`
 重试 3 次后 `nack(requeue=false)` 进入 DLQ（DLQ 业务处理属 TASK-505）。
 
-**当前默认关闭**（`SC_INGEST_CONSUMER_ENABLED=false`）：结果回调端点属 TASK-503、
-ChromaDB 写入属 TASK-504，未接入前启动消费者会在解析后无法完成 READY 回调。
-解析管线本身已可按消息/上下文独立测试。
+**默认开启**（`SC_INGEST_CONSUMER_ENABLED=true`，TASK-506 完成联调）：
+TASK-503 回调与 TASK-504 向量写入均已接入；关闭该开关可临时停用解析消费。
 """
 
 from __future__ import annotations
@@ -173,6 +172,9 @@ class IngestConsumer:
                 delay = self._retry_delays[attempt]
                 logger.warning("解析任务可重试失败 code=%s retry_in=%.0fs trace_id=%s",
                                error.error_code.value, delay, trace_id)
+                await self._context_client.record_attempt(
+                    doc_id=payload["doc_id"], parse_version=payload["parse_version"],
+                    trace_id=trace_id, user_id=payload["user_id"])
                 await self._sleep(delay)
 
     async def _process(self, payload: dict[str, Any], trace_id: str) -> None:

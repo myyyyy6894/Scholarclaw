@@ -11,7 +11,7 @@ from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.gateway.ssrf_safe_model_gateway import RetryPolicy, SsrfSafeModelGateway
 from app.services.ingest.models import ParseContext
 
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 
 
 class EmbeddingService:

@@ -2,16 +2,18 @@
 
 规则（`02` §5.2.1、`04` §4.4.2）：
 - 单 PDF > 300 页：拒绝解析，错误码 `E-RAG-02`；
-- PDF 任一页清洗后字符密度 < 20：视为扫描件，错误码 `E-RAG-01`；
+- PDF 全文平均每页清洗后字符密度 < 20：视为扫描件，错误码 `E-RAG-01`
+  （允许文字版 PDF 含少量扉页/空白页）；
 - MD/TXT 必须 UTF-8 无损解码；空文本/损坏文件归类为 `VALIDATION_ERROR`；
-- 单页解析耗时 > 5s 视为需重试的瞬态超时。
+- PDF 在独立子进程逐页解析，单页超过 5s 直接终止并视为需重试的瞬态超时。
 """
 
 from __future__ import annotations
 
+import multiprocessing
 import re
-import time
 from pathlib import Path
+from queue import Empty as QueueEmpty
 from typing import Callable, Iterable
 
 from app.core.exceptions import (
@@ -26,6 +28,8 @@ from app.services.ingest.models import PageText
 MAX_PAGES_DEFAULT = 300
 MIN_CHARS_PER_PAGE = 20
 PAGE_PARSE_TIMEOUT_SECONDS = 5.0
+MAX_EXTRACTED_CHARS = 2_000_000
+_CHILD_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _MULTI_BLANK = re.compile(r"\n{3,}")
@@ -65,15 +69,30 @@ def parse_document(path: Path, extension: str, *, max_pages: int = MAX_PAGES_DEF
 
 
 def parse_pdf(path: Path, *, max_pages: int = MAX_PAGES_DEFAULT,
-              reader_factory: Callable[..., object] | None = None) -> list[PageText]:
-    factory = reader_factory or _default_pdf_reader
+              reader_factory: Callable[..., object] | None = None,
+              page_timeout: float = PAGE_PARSE_TIMEOUT_SECONDS,
+              worker_target: Callable[..., None] | None = None
+              ) -> list[PageText]:
+    """解析 PDF。
+
+    真实文件在**独立子进程**中解析：单页超过 `page_timeout` 时直接终止子进程，
+    而不是等 `extract_text()` 返回后再比较耗时——否则损坏/恶意 PDF 可以无限阻塞消费者。
+    注入 `reader_factory` 的单元测试路径保持同步执行，只为验证提取与分类逻辑。
+    """
+    if reader_factory is not None:
+        return _parse_pdf_inline(path, max_pages, reader_factory)
+    return _parse_pdf_isolated(str(path), max_pages, page_timeout,
+                               worker_target or _pdf_worker)
+
+
+def _parse_pdf_inline(path: Path, max_pages: int,
+                      factory: Callable[..., object]) -> list[PageText]:
     try:
         reader = factory(str(path))
         pages = reader.pages
         page_count = len(pages)
     except Exception as error:  # pypdf 的异常族较宽，统一归类为损坏文件
         raise CorruptedDocumentError() from error
-
     if page_count <= 0:
         raise EmptyDocumentError("PDF 没有可解析的页面。")
     if page_count > max_pages:
@@ -82,17 +101,104 @@ def parse_pdf(path: Path, *, max_pages: int = MAX_PAGES_DEFAULT,
 
     result: list[PageText] = []
     for index, page in enumerate(pages, start=1):
-        started = time.monotonic()
         try:
             text = clean_text(page.extract_text() or "")
         except Exception as error:
             raise CorruptedDocumentError() from error
-        if time.monotonic() - started > PAGE_PARSE_TIMEOUT_SECONDS:
-            raise RetryableAiError(AiErrorCode.INTERNAL_ERROR, "单页解析超时，请稍后重试。")
-        if len(text) < MIN_CHARS_PER_PAGE:
-            raise ScanPdfOcrNotEnabledError()
         result.append(PageText(page_number=index, text=text))
-    return result
+    return _validated_pages(result)
+
+
+def _parse_pdf_isolated(path: str, max_pages: int, page_timeout: float,
+                        worker_target: Callable[..., None]) -> list[PageText]:
+    # 生产使用 spawn，避免从 asyncio 工作线程 fork 出多线程进程；测试注入 target 时用
+    # fork 便于直接引用测试函数（单线程测试环境）。
+    method = "fork" if worker_target is not _pdf_worker else "spawn"
+    context = multiprocessing.get_context(method)
+    progress: multiprocessing.Queue = context.Queue()
+    process = context.Process(target=worker_target,
+                              args=(path, max_pages, progress), daemon=True)
+    process.start()
+    pages: list[PageText] = []
+    total_chars = 0
+    try:
+        while True:
+            try:
+                item = progress.get(timeout=page_timeout)
+            except QueueEmpty:
+                if not process.is_alive() and pages:
+                    raise CorruptedDocumentError("PDF 解析进程异常退出。") from None
+                raise RetryableAiError(
+                    AiErrorCode.INTERNAL_ERROR,
+                    f"PDF 单页解析超过 {page_timeout:.0f} 秒，已终止。") from None
+            kind = item[0]
+            if kind == "done":
+                break
+            if kind == "error":
+                raise _worker_error(item[1], item[2])
+            page_number, text = item[1], item[2]
+            total_chars += len(text)
+            if total_chars > MAX_EXTRACTED_CHARS:
+                raise NonRetryableAiError(
+                    AiErrorCode.VALIDATION_ERROR, "PDF 提取文本量超出安全上限。")
+            pages.append(PageText(page_number=page_number, text=text))
+    finally:
+        if process.is_alive():
+            process.terminate()
+        process.join(timeout=2.0)
+        progress.close()
+        progress.join_thread()
+    return _validated_pages(pages)
+
+
+def _pdf_worker(path: str, max_pages: int, progress) -> None:  # noqa: ANN001
+    """子进程入口：逐页上报文本，父进程据此执行硬超时。"""
+    try:
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_AS,
+                           (_CHILD_MEMORY_LIMIT_BYTES, _CHILD_MEMORY_LIMIT_BYTES))
+    except Exception:  # 非 Linux 或受限环境不阻断解析
+        pass
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(path, strict=False)
+        page_count = len(reader.pages)
+        if page_count <= 0:
+            progress.put(("error", "EMPTY", "PDF 没有可解析的页面。"))
+            return
+        if page_count > max_pages:
+            progress.put(("error", "OVER_LIMIT",
+                          f"PDF 共 {page_count} 页，超过单文档 {max_pages} 页上限。"))
+            return
+        for index, page in enumerate(reader.pages, start=1):
+            text = clean_text(page.extract_text() or "")
+            progress.put(("page", index, text))
+        progress.put(("done",))
+    except Exception as error:  # 子进程内异常统一回传给父进程分类
+        progress.put(("error", "CORRUPTED", str(error)))
+
+
+def _worker_error(kind: str, message: str) -> Exception:
+    if kind == "EMPTY":
+        return EmptyDocumentError(message)
+    if kind == "OVER_LIMIT":
+        return IngestRetryExhaustedError(message)
+    return CorruptedDocumentError()
+
+
+def _validated_pages(pages: list[PageText]) -> list[PageText]:
+    if not pages:
+        raise EmptyDocumentError("PDF 没有可解析的页面。")
+    total = sum(len(page.text) for page in pages)
+    if total == 0:
+        # 有页面但完全没有文字层：按扫描件处理（OCR 在 v1.1 开放），而不是“空文件”
+        raise ScanPdfOcrNotEnabledError()
+    # 按全文平均字符密度判定扫描件：允许文字版 PDF 含少量扉页/空白页
+    if total / len(pages) < MIN_CHARS_PER_PAGE:
+        raise ScanPdfOcrNotEnabledError()
+    return pages
 
 
 def parse_plain_text(path: Path) -> list[PageText]:
@@ -119,9 +225,3 @@ def iter_paragraphs(pages: Iterable[PageText]) -> Iterable[tuple[int, str]]:
             paragraph = block.strip("\n").strip()
             if paragraph:
                 yield page.page_number, paragraph
-
-
-def _default_pdf_reader(path: str) -> object:
-    from pypdf import PdfReader
-
-    return PdfReader(path, strict=False)

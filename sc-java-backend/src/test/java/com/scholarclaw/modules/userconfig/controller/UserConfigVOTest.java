@@ -97,15 +97,18 @@ class UserConfigVOTest {
     }
 
     @Test
-    @DisplayName("existing_course_count 只在保存响应中出现，GET 视图整字段省略")
-    void existingCourseCountIsOnlyPresentOnSaveResponse() throws Exception {
+    @DisplayName("existing_course_count：GET 与保存响应都返回，内部 null 查询时省略")
+    void existingCourseCountIsPresentOnGetAndSave() throws Exception {
         String getJson = mapper().writeValueAsString(
-                UserConfigController.toVO(entity(), CRYPTO, RULES));
+                UserConfigController.toVO(entity(), CRYPTO, RULES, 2));
         String saveJson = mapper().writeValueAsString(
                 UserConfigController.toVO(entity(), CRYPTO, RULES, 0));
+        String internalJson = mapper().writeValueAsString(
+                UserConfigController.toVO(entity(), CRYPTO, RULES));
 
-        assertThat(getJson).doesNotContain("existing_course_count");
+        assertThat(getJson).contains("\"existing_course_count\":2");
         assertThat(saveJson).contains("\"existing_course_count\":0");
+        assertThat(internalJson).doesNotContain("existing_course_count");
     }
 
     @Test

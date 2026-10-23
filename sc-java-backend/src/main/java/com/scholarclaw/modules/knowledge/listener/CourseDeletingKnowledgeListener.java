@@ -16,7 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
  * 课程删除时的文档第一阶段隔离（{@code 04} `API-COURSE-004`）。
  *
  * <p>与 `course` 软删在同一本地事务内：活动文档置 `DELETING`、`parse_version + 1`
- * （拦截在途回调），并立即清空该课程父块。物理文件与向量清理由 TASK-901/902 的 GC 完成。
+ * （拦截在途回调），并立即清空该课程父块。ChromaDB 向量由
+ * {@link CourseDeletingVectorCleanupListener} 在事务提交后清理；物理文件仍属 TASK-901/902。
  */
 @Component
 public class CourseDeletingKnowledgeListener {

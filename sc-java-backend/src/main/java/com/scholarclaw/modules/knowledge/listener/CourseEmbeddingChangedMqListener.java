@@ -33,7 +33,7 @@ public class CourseEmbeddingChangedMqListener {
     public void onCourseEmbeddingChanged(CourseEmbeddingChangedEvent event) {
         int published = ingestService.publishReindexForCourse(
                 event.userId(), event.courseId(), event.currentIndexVersion());
-        // 旧 Collection 不再被检索使用；删除失败由 GC 兜底
+        // 旧 Collection 不再被检索使用；清理服务立即执行，瞬态失败重试一次并写补偿队列，GC 仅最终兜底
         vectorCleanupService.cleanupCourse(event.userId(), event.courseId(),
                 event.previousIndexVersion());
         log.info("课程切换后发布 REINDEX courseId={} version={} published={}",

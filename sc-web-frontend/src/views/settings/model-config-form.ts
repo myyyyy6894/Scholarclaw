@@ -128,7 +128,10 @@ export function toProbeRequest(form: ModelConfigFormState, probeType: SingleProb
  * 空 Key 字段**整个省略**而不是传空串：后端以 `null/缺失` 表示"保留原密文"，
  * 传空串会被当成"把 Key 改成空字符串"。
  */
-export function toSaveRequest(form: ModelConfigFormState): ModelConfigUpdateRequest {
+export function toSaveRequest(
+  form: ModelConfigFormState,
+  migrateExistingCourses = false,
+): ModelConfigUpdateRequest {
   const chatKey = normalizeSecret(form.chatApiKey)
   const embeddingKey = normalizeSecret(form.embeddingApiKey)
   const request: ModelConfigUpdateRequest = {
@@ -139,6 +142,7 @@ export function toSaveRequest(form: ModelConfigFormState): ModelConfigUpdateRequ
     embedding_base_url: form.embeddingBaseUrl.trim(),
     reuse_chat_api_key: form.reuseChatApiKey,
     default_embedding_model: form.embeddingModel.trim(),
+    migrate_existing_courses: migrateExistingCourses,
   }
   if (chatKey !== undefined) {
     request.chat_api_key = chatKey
@@ -149,8 +153,26 @@ export function toSaveRequest(form: ModelConfigFormState): ModelConfigUpdateRequ
   return request
 }
 
-/** 密钥状态展示：只回掩码，绝不回明文。 */
-export function keyStatusLabel(hasKey: boolean, masked: string | null): string {
+/**
+ * 默认 Embedding 目标（provider + Base URL + 模型名）是否变化。
+ *
+ * 目标变化会改变已保存 Key 的绑定，旧课程无法继续解密使用；存在已有课程时必须先迁移。
+ */
+export function embeddingTargetChanged(
+  form: ModelConfigFormState,
+  config: UserConfig | null | undefined,
+): boolean {
+  if (config == null) {
+    return false
+  }
+  return (
+    form.embeddingProvider !== (config.default_embedding_provider ?? '')
+    || form.embeddingBaseUrl.trim() !== (config.embedding_base_url ?? '').trim()
+    || form.embeddingModel.trim() !== (config.default_embedding_model ?? '').trim()
+  )
+}
+
+/** 密钥状态展示：只回掩码，绝不回明文。 */export function keyStatusLabel(hasKey: boolean, masked: string | null): string {
   if (!hasKey) {
     return '未配置'
   }

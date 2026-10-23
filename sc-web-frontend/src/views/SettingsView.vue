@@ -21,6 +21,7 @@ import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import {
   createModelForm,
+  embeddingTargetChanged,
   isModelConfigured,
   isProbeOutcomeSuccessful,
   keyStatusLabel,
@@ -181,15 +182,26 @@ async function saveModel(): Promise<void> {
   savingModel.value = true
   savedHint.value = ''
   try {
-    const updated = await saveModelConfig(toSaveRequest(modelForm.value))
+    const courseCount = config.value?.existing_course_count ?? 0
+    let migrate = false
+    if (courseCount > 0 && embeddingTargetChanged(modelForm.value, config.value)) {
+      try {
+        await ElMessageBox.confirm(
+          `修改默认向量模型会影响已有 ${courseCount} 门课程：系统将同时切换这些课程的模型并重建索引。`
+            + '重建期间课程文档暂停检索，是否继续？',
+          '迁移已有课程',
+          { type: 'warning', confirmButtonText: '迁移并保存', cancelButtonText: '取消' },
+        )
+        migrate = true
+      } catch {
+        savingModel.value = false
+        return
+      }
+    }
+    const updated = await saveModelConfig(toSaveRequest(modelForm.value, migrate))
     applyConfig(updated, { resetSecrets: true })
     savedHint.value = `已保存 · 实测向量维度 ${updated.default_embedding_dim ?? '—'}`
-    notifySuccess('模型配置已保存')
-    if ((updated.existing_course_count ?? 0) > 0) {
-      notifyWarning(
-        `已有 ${updated.existing_course_count ?? 0} 门课程仍使用旧模型；如需切换，请在课程管理中单独操作。`,
-      )
-    }
+    notifySuccess(migrate ? '模型配置已保存，已有课程已提交重建' : '模型配置已保存')
   } catch (error) {
     notifyError(error)
   } finally {

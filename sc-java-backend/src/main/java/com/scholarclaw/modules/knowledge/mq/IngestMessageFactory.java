@@ -29,6 +29,14 @@ public final class IngestMessageFactory {
      * @throws IllegalStateException 文档尚未落盘、缺少 SHA-256 等不可入队状态
      */
     public static IngestMessage from(KnowledgeDocEntity doc, IngestJobType type, String jobId) {
+        return from(doc, type, jobId,
+                doc.getParseVersion() == null ? 1 : doc.getParseVersion(),
+                doc.getRetryCount() == null ? 0 : doc.getRetryCount());
+    }
+
+    /** 巡检补投使用：消息里的版本/重试次数以原子认领后的新值为准。 */
+    public static IngestMessage from(KnowledgeDocEntity doc, IngestJobType type, String jobId,
+                                     int parseVersion, int retryCount) {
         if (doc == null || doc.getDocId() == null || doc.getUserId() == null
                 || doc.getCourseId() == null) {
             throw new IllegalStateException("文档身份信息不完整，不能构造解析任务");
@@ -48,11 +56,11 @@ public final class IngestMessageFactory {
                 String.valueOf(doc.getCourseId()),
                 doc.getCourseIndexVersion() == null ? 1 : doc.getCourseIndexVersion(),
                 String.valueOf(doc.getDocId()),
-                doc.getParseVersion() == null ? 1 : doc.getParseVersion(),
+                parseVersion,
                 doc.getDocName(),
                 storagePath,
                 doc.getFileSha256(),
-                doc.getRetryCount() == null ? 0 : doc.getRetryCount(),
+                retryCount,
                 ScTimeZone.now().format(TIMESTAMP));
     }
 }

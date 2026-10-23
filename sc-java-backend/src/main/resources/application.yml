@@ -35,6 +35,11 @@ spring:
     username: ${SC_RABBITMQ_USER:scholarclaw}
     password: ${SC_RABBITMQ_PASSWORD:}
     connection-timeout: 5s
+    # TASK-506 复核：只有 broker ACK 且未 mandatory return 才算入队成功
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
     # 关闭 Spring Boot 自动声明，改由 IngestMqConfig 条件化创建 RabbitAdmin：
     # 单元测试上下文不连接真实 broker，生产启动时才声明队列。
     dynamic: false
@@ -85,8 +90,8 @@ sc:
   storage:
     root: /data/scholarclaw/storage
   knowledge:
-    # 手动重试/重建：TASK-501 已提供 MQ 生产者，接口可开启；消费者 TASK-502 未接入前
-    # 文档会停留在 PARSING，UI 仍保持隐藏（TASK-506 联调后再开放入口）。
+    # 手动重试/重建：TASK-506 起消费者默认开启，入口按文档状态开放；
+    # 本开关仍可用于临时关闭生产端。
     manual-ingest-enabled: ${SC_MANUAL_INGEST_ENABLED:true}
     # 上传半成品与孤立文件恢复扫描（TASK-403 补偿）。
     upload-recovery:
@@ -95,13 +100,14 @@ sc:
       tmp-orphan-minutes: 60
       initial-delay-ms: 300000
       interval-ms: 900000
-    # 僵尸任务巡检（TASK-501）：UPLOADED 且未成功入队超过阈值的文档补投 INITIAL_INGEST。
+    # 僵尸任务巡检（TASK-501/506）：扫描超时滞留的 UPLOADED/PARSING，递增版本/重试次数并补投；
+    # retry_count 耗尽后收敛为 FAILED。
     zombie-scan:
       enabled: ${SC_ZOMBIE_SCAN_ENABLED:true}
-      stale-minutes: 5
+      stale-minutes: ${SC_ZOMBIE_SCAN_STALE_MINUTES:15}
       batch-size: 50
-      initial-delay-ms: 60000
-      interval-ms: 300000
+      initial-delay-ms: ${SC_ZOMBIE_SCAN_INITIAL_DELAY_MS:60000}
+      interval-ms: ${SC_ZOMBIE_SCAN_INTERVAL_MS:300000}
   mq:
     ingest:
       # TASK-501 生产者总开关；关闭时不连接 RabbitMQ、不产生消息（测试/只读环境使用）。
@@ -109,6 +115,11 @@ sc:
       exchange: ${SC_MQ_INGEST_EXCHANGE:rag.ingest.exchange}
       queue: ${SC_MQ_INGEST_QUEUE:rag.ingest.queue}
       dlq: ${SC_MQ_INGEST_DLQ:rag.ingest.dlq}
+      # 死信二次处理仍失败时的持久化停放队列（不绑定消费者）
+      parking: ${SC_MQ_INGEST_PARKING:rag.ingest.parking}
+      # 向量清理最终失败的持久化补偿队列（由 TASK-902 GC 重放）
+      vector-compensation: ${SC_MQ_INGEST_VECTOR_COMPENSATION:rag.ingest.vector-compensation}
+      confirm-timeout-ms: ${SC_MQ_INGEST_CONFIRM_TIMEOUT_MS:5000}
   # 用户时区默认值与产品基线一致（01 §FR-DDL-001）。
   # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
   # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。

@@ -7,10 +7,14 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.scholarclaw.common.enums.IndexStatus;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
 import com.scholarclaw.modules.course.mapper.CourseNamespaceMapper;
 import java.util.Map;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,6 +27,14 @@ class CourseMutationServiceTest {
     private CourseDocumentStatsProvider provider;
     private CourseMutationService service;
 
+    @BeforeAll
+    static void initTableInfo() {
+        // Lambda 条件依赖 MyBatis-Plus 的实体元数据缓存；纯单测没有 Spring 上下文，需显式初始化
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+                CourseNamespaceEntity.class);
+    }
+
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
@@ -31,20 +43,21 @@ class CourseMutationServiceTest {
         ObjectProvider<CourseDocumentStatsProvider> providerHolder = mock(ObjectProvider.class);
         when(providerHolder.getIfAvailable()).thenReturn(provider);
         service = new CourseMutationService(mapper, mock(ApplicationEventPublisher.class),
-                providerHolder);
+                providerHolder, mock(com.scholarclaw.modules.userconfig.service.UserConfigService.class));
     }
 
     @Test
-    @DisplayName("仍有解析中文档时保持 REBUILDING")
+    @DisplayName("仍有解析中文档时保持/回到 REBUILDING")
     void keepsRebuildingWhileParsing() {
         when(mapper.selectOne(any())).thenReturn(course(2));
+        when(mapper.update(any(), any())).thenReturn(1);
         when(provider.statsByCourse(10001L, Map.of(2001L, 2)))
                 .thenReturn(Map.of(2001L, new CourseDocumentStatsProvider.CourseDocumentStats(
                         0, 2, 0, 2)));
 
         service.refreshIndexStatus(10001L, 2001L, 2);
 
-        verify(mapper, never()).update(any(), any());
+        verify(mapper).update(any(), any());
     }
 
     @Test
@@ -68,6 +81,22 @@ class CourseMutationServiceTest {
         when(provider.statsByCourse(10001L, Map.of(2001L, 2)))
                 .thenReturn(Map.of(2001L, new CourseDocumentStatsProvider.CourseDocumentStats(
                         1, 0, 1, 2)));
+        when(mapper.update(any(), any())).thenReturn(1);
+
+        service.refreshIndexStatus(10001L, 2001L, 2);
+
+        verify(mapper).update(any(), any());
+    }
+
+    @Test
+    @DisplayName("REBUILD_FAILED 在失败文档全部重试成功后收敛 ACTIVE")
+    void recoversFromRebuildFailed() {
+        CourseNamespaceEntity failed = course(2);
+        failed.setIndexStatus(IndexStatus.REBUILD_FAILED.name());
+        when(mapper.selectOne(any())).thenReturn(failed);
+        when(provider.statsByCourse(10001L, Map.of(2001L, 2)))
+                .thenReturn(Map.of(2001L, new CourseDocumentStatsProvider.CourseDocumentStats(
+                        2, 0, 0, 2)));
         when(mapper.update(any(), any())).thenReturn(1);
 
         service.refreshIndexStatus(10001L, 2001L, 2);

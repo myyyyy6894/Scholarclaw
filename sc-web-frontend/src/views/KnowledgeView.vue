@@ -5,17 +5,20 @@ import { ElMessageBox } from 'element-plus'
 
 import { listCourses } from '@/api/course'
 import type { CourseNamespace } from '@/api/course'
-import { deleteDoc, listDocs, uploadDoc } from '@/api/knowledge'
+import { deleteDoc, listDocs, reindexDoc, retryDoc, uploadDoc } from '@/api/knowledge'
 import type { KnowledgeDoc, ListableDocumentStatus } from '@/api/knowledge'
 import { useCourseStore } from '@/stores/course'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import { indexStatusLabel } from '@/views/course/course-form'
 import {
   canDelete,
+  canReindex,
+  canRetry,
   documentStatusLabel,
   LatestRequest,
   documentStatusTagType,
   formatFileSize,
+  hasPendingDocs,
   snapshotChunkCount,
   snapshotPageCount,
   snapshotReadyAt,
@@ -43,6 +46,8 @@ const actionDocId = ref<string | null>(null)
 const loadError = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const compact = ref(false)
+const POLL_INTERVAL_MS = 4000
+let pollTimer: number | null = null
 
 const compactQuery =
   typeof window === 'undefined' ? null : window.matchMedia('(max-width: 640px)')
@@ -84,7 +89,29 @@ onMounted(() => {
 
 onUnmounted(() => {
   compactQuery?.removeEventListener('change', syncCompact)
+  stopPolling()
 })
+
+/** 有待解析/解析中文档时定时刷新，异步结果无需用户手动点“刷新”。 */
+function syncPolling(): void {
+  if (hasPendingDocs(docs.value)) {
+    if (pollTimer === null) {
+      pollTimer = window.setInterval(() => {
+        void loadDocs()
+        void loadCourses()
+      }, POLL_INTERVAL_MS)
+    }
+  } else {
+    stopPolling()
+  }
+}
+
+function stopPolling(): void {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
 
 async function bootstrap(): Promise<void> {
   await loadCourses()
@@ -118,6 +145,7 @@ async function loadDocs(): Promise<void> {
   const requestSeq = docsRequests.start()
   if (courseId === null) {
     docs.value = []
+    stopPolling()
     return
   }
   loadingDocs.value = true
@@ -131,12 +159,14 @@ async function loadDocs(): Promise<void> {
       return
     }
     docs.value = result
+    syncPolling()
   } catch (error) {
     if (!docsRequests.isCurrent(requestSeq) || courseId !== selectedCourseId.value) {
       return
     }
     docs.value = []
     notifyError(error)
+    syncPolling()
   } finally {
     if (docsRequests.isCurrent(requestSeq)) {
       loadingDocs.value = false
@@ -200,7 +230,7 @@ async function onFileSelected(event: Event): Promise<void> {
 async function onDelete(doc: KnowledgeDoc): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确定删除课件《${doc.doc_name}》？文档会立即从检索集中移除并标记为删除中；物理文件与向量清理由后续 GC 任务完成。`,
+      `确定删除课件《${doc.doc_name}》？文档会立即从检索集中移除并标记为删除中；向量索引会立即提交清理，物理文件由后续 GC 删除。`,
       '删除课件',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     )
@@ -210,7 +240,35 @@ async function onDelete(doc: KnowledgeDoc): Promise<void> {
   actionDocId.value = doc.doc_id
   try {
     await deleteDoc(doc.doc_id)
-    notifySuccess('已标记为 DELETING，物理文件与向量等待 TASK-901/902 GC 清理')
+    notifySuccess('已标记为 DELETING；向量清理已提交，物理文件等待后续 GC')
+    await loadDocs()
+    await loadCourses()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    actionDocId.value = null
+  }
+}
+
+async function onRetry(doc: KnowledgeDoc): Promise<void> {
+  actionDocId.value = doc.doc_id
+  try {
+    const updated = await retryDoc(doc.doc_id)
+    notifySuccess(`《${updated.doc_name}》已重新进入解析队列`)
+    await loadDocs()
+    await loadCourses()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    actionDocId.value = null
+  }
+}
+
+async function onReindex(doc: KnowledgeDoc): Promise<void> {
+  actionDocId.value = doc.doc_id
+  try {
+    const updated = await reindexDoc(doc.doc_id)
+    notifySuccess(`《${updated.doc_name}》已重新进入向量重建队列`)
     await loadDocs()
     await loadCourses()
   } catch (error) {
@@ -222,8 +280,7 @@ async function onDelete(doc: KnowledgeDoc): Promise<void> {
 
 function formatTime(value: string | null): string {
   return value === null ? '—' : new Date(value).toLocaleString()
-}
-</script>
+}</script>
 
 <template>
   <div>
@@ -232,8 +289,8 @@ function formatTime(value: string | null): string {
         <span class="sc-kb-hero__eyebrow">COURSE KNOWLEDGE</span>
         <h2>{{ currentCourse?.course_name ?? '课程知识库' }}</h2>
         <p>
-          左侧选中的课程会作为后续 RAG 问答的默认课程。上传成功后文件先进入“待解析”；
-          上传成功后立即发布解析任务；实际解析与索引由 TASK-502 消费者接入后推进。手动重试/重建入口待 TASK-506 联调后开放。
+          左侧选中的课程会作为后续 RAG 问答的默认课程。上传成功后文件进入解析队列，
+          解析、父块入库与向量索引完成后状态变为“就绪”；失败文档可手动重试，就绪文档可重建索引。
         </p>
       </div>
       <div v-if="courseSummary !== null" class="sc-kb-metrics">
@@ -447,8 +504,26 @@ function formatTime(value: string | null): string {
                   <span v-else class="sc-knowledge__muted">—</span>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="120" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }">
+                  <el-button
+                    v-if="canRetry(row)"
+                    text
+                    type="primary"
+                    :loading="actionDocId === row.doc_id"
+                    @click="onRetry(row)"
+                  >
+                    重试
+                  </el-button>
+                  <el-button
+                    v-if="canReindex(row)"
+                    text
+                    type="primary"
+                    :loading="actionDocId === row.doc_id"
+                    @click="onReindex(row)"
+                  >
+                    重建
+                  </el-button>
                   <el-button
                     v-if="canDelete(row)"
                     text

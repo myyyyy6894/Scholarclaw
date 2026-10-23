@@ -178,6 +178,58 @@ public class KnowledgeDocService {
         return docMapper.update(null, update) == 1;
     }
 
+    /** 僵尸巡检补投前先原子认领：状态/版本/重试次数一次更新，避免并发重复投递。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean claimStaleForRetry(Long docId, int expectedParseVersion, String ingestJobId,
+                                      LocalDateTime staleBefore) {
+        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
+        return docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
+                .eq(KnowledgeDocEntity::getDocId, docId)
+                .eq(KnowledgeDocEntity::getParseVersion, expectedParseVersion)
+                .in(KnowledgeDocEntity::getStatus,
+                        DocumentStatus.UPLOADED.name(), DocumentStatus.PARSING.name())
+                .lt(KnowledgeDocEntity::getRetryCount, 3)
+                .lt(KnowledgeDocEntity::getUpdatedAt, staleBefore)
+                .set(KnowledgeDocEntity::getStatus, DocumentStatus.PARSING.name())
+                .set(KnowledgeDocEntity::getLastIngestJobId, ingestJobId)
+                .set(KnowledgeDocEntity::getEnqueuedAt, null)
+                .set(KnowledgeDocEntity::getUpdatedAt, now)
+                .setSql("parse_version = parse_version + 1, retry_count = retry_count + 1, "
+                        + CLEAR_INDEX_SNAPSHOT_SQL)) == 1;
+    }
+
+    /** `UPLOADED -> PARSING` 的入队认领：先推进状态，broker 确认后再回填 `enqueued_at`。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean claimParsing(Long docId, int parseVersion, String ingestJobId) {
+        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
+        return docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
+                .eq(KnowledgeDocEntity::getDocId, docId)
+                .eq(KnowledgeDocEntity::getParseVersion, parseVersion)
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
+                .set(KnowledgeDocEntity::getStatus, DocumentStatus.PARSING.name())
+                .set(KnowledgeDocEntity::getLastIngestJobId, ingestJobId)
+                .set(KnowledgeDocEntity::getEnqueuedAt, null)
+                .set(KnowledgeDocEntity::getUpdatedAt, now)
+                .setSql(CLEAR_INDEX_SNAPSHOT_SQL)) == 1;
+    }
+
+    /** 消费者内部重试计数：只在当前解析版本、PARSING、属于该用户且未达上限时递增。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean recordRetryAttempt(Long userId, Long docId, int parseVersion) {
+        if (userId == null || docId == null || parseVersion < 1) {
+            return false;
+        }
+        return docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
+                .eq(KnowledgeDocEntity::getDocId, docId)
+                .eq(KnowledgeDocEntity::getUserId, userId)
+                .eq(KnowledgeDocEntity::getParseVersion, parseVersion)
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.PARSING.name())
+                .lt(KnowledgeDocEntity::getRetryCount, 3)
+                .setSql("retry_count = retry_count + 1")
+                .set(KnowledgeDocEntity::getUpdatedAt,
+                        ScTimeZone.now().toLocalDateTime())) == 1;
+    }
+
     /** 回填 `PARSING` 文档的任务 ID 与入队时间（重试/重建/课程切换后的补投使用）。 */
     @Transactional(rollbackFor = Exception.class)
     public boolean recordEnqueued(Long docId, int parseVersion, String ingestJobId) {
@@ -191,12 +243,24 @@ public class KnowledgeDocService {
                 .set(KnowledgeDocEntity::getUpdatedAt, now)) == 1;
     }
 
-    /** `UPLOADED` 且尚未成功入队的僵尸文档（`ZombieIngestScanner` 补投）。 */
-    public List<KnowledgeDocEntity> findStaleUploaded(LocalDateTime updatedBefore, int limit) {
+    /** 超时且仍可重试的 `UPLOADED/PARSING` 文档（僵尸巡检原子认领）。 */
+    public List<KnowledgeDocEntity> findStaleTasks(LocalDateTime updatedBefore, int limit) {
         return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
-                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
+                .in(KnowledgeDocEntity::getStatus,
+                        DocumentStatus.UPLOADED.name(), DocumentStatus.PARSING.name())
                 .ne(KnowledgeDocEntity::getStorageRelPath, "pending")
-                .isNull(KnowledgeDocEntity::getEnqueuedAt)
+                .lt(KnowledgeDocEntity::getRetryCount, 3)
+                .lt(KnowledgeDocEntity::getUpdatedAt, updatedBefore)
+                .orderByAsc(KnowledgeDocEntity::getUpdatedAt)
+                .last("LIMIT " + Math.max(1, Math.min(limit, 200))));
+    }
+
+    /** 超时且重试次数已耗尽的文档，必须由巡检收敛为 FAILED。 */
+    public List<KnowledgeDocEntity> findRetryExhausted(LocalDateTime updatedBefore, int limit) {
+        return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .in(KnowledgeDocEntity::getStatus,
+                        DocumentStatus.UPLOADED.name(), DocumentStatus.PARSING.name())
+                .ge(KnowledgeDocEntity::getRetryCount, 3)
                 .lt(KnowledgeDocEntity::getUpdatedAt, updatedBefore)
                 .orderByAsc(KnowledgeDocEntity::getUpdatedAt)
                 .last("LIMIT " + Math.max(1, Math.min(limit, 200))));
@@ -324,6 +388,15 @@ public class KnowledgeDocService {
         return doc;
     }
 
+    /**
+     * 当前读文档（`SELECT ... FOR UPDATE`）。调用方必须已开启事务。
+     *
+     * <p>用于乐观锁失败后的迟到版本判断：REPEATABLE-READ 下普通查询会返回旧快照。
+     */
+    public KnowledgeDocEntity findOwnedDocForUpdate(Long userId, Long docId) {
+        return docMapper.selectByIdForUpdate(docId, userId);
+    }
+
     /** 上传补偿：仅删除仍是 UPLOADED 的未完成元数据，绝不误删已进入解析的文档。 */
     @Transactional(rollbackFor = Exception.class)
     public void deleteUncommittedMetadata(Long userId, Long docId) {
@@ -355,7 +428,7 @@ public class KnowledgeDocService {
                 .set(KnowledgeDocEntity::getRetryCount, 0)
                 .set(KnowledgeDocEntity::getErrorCode, null)
                 .set(KnowledgeDocEntity::getErrorMsg, null)
-                .set(KnowledgeDocEntity::getEnqueuedAt, ScTimeZone.now().toLocalDateTime())
+                .set(KnowledgeDocEntity::getEnqueuedAt, null)
                 .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
                 .setSql("parse_version = parse_version + 1, " + CLEAR_INDEX_SNAPSHOT_SQL);
         if (ingestJobId == null) {

@@ -69,6 +69,9 @@ public class PythonAiEngineClient {
         this.defaultReadTimeout = Duration.ofMillis(readTimeoutMillis);
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
+                // 内部服务只支持 HTTP/1.1：JDK 默认的 h2c Upgrade 会被 uvicorn 判为
+                // 不支持的升级并丢失请求体，导致内部回调/探测被误判为参数缺失。
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofMillis(clampConnectTimeoutMillis(connectTimeoutMillis)))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .proxy(ProxySelector.of(null))

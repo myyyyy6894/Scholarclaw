@@ -1,5 +1,6 @@
 package com.scholarclaw.modules.knowledge.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -13,6 +14,7 @@ import com.scholarclaw.common.config.JacksonConfig;
 import com.scholarclaw.common.exception.GlobalExceptionHandler;
 import com.scholarclaw.modules.knowledge.dto.IngestResultVO;
 import com.scholarclaw.modules.knowledge.dto.ParseContextVO;
+import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestResultService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeParseContextService;
 import java.time.ZoneId;
@@ -34,18 +36,68 @@ class InternalRagCallbackControllerTest {
 
     private KnowledgeParseContextService parseContextService;
     private KnowledgeIngestResultService ingestResultService;
+    private KnowledgeDocService docService;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         parseContextService = mock(KnowledgeParseContextService.class);
         ingestResultService = mock(KnowledgeIngestResultService.class);
+        docService = mock(KnowledgeDocService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
-                        new InternalRagCallbackController(parseContextService, ingestResultService))
+                        new InternalRagCallbackController(parseContextService,
+                                ingestResultService, docService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
                 .build();
+    }
+
+    @Test
+    @DisplayName("内部接口校验身份后绑定真实 user_id 到日志上下文")
+    void bindsInternalUserIdToMdc() throws Exception {
+        when(parseContextService.resolve(USER_ID, DOC_ID, 1, 1)).thenReturn(new ParseContextVO(
+                true, null, USER_ID, 2001L, DOC_ID, "a.pdf", ".pdf",
+                "raw/10001/2001/50001.pdf", 1, 1, null));
+        com.scholarclaw.common.filter.TraceContext.clear();
+        try {
+            mockMvc.perform(get("/internal/api/v1/docs/50001/parse-context")
+                            .param("parse_version", "1")
+                            .param("course_index_version", "1")
+                            .header("X-User-Id", "10001"))
+                    .andExpect(status().isOk());
+            assertThat(com.scholarclaw.common.filter.TraceContext.currentUserId())
+                    .isEqualTo("10001");
+        } finally {
+            com.scholarclaw.common.filter.TraceContext.clear();
+        }
+    }
+
+    @Test
+    @DisplayName("内部重试计数按用户隔离，并要求合法 X-User-Id 与 parse_version")
+    void recordsRetryAttempt() throws Exception {
+        when(docService.recordRetryAttempt(USER_ID, DOC_ID, 2)).thenReturn(true);
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/internal/api/v1/docs/50001/retry-attempt")
+                        .param("parse_version", "2")
+                        .header("X-User-Id", "10001"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.data").value(true));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/internal/api/v1/docs/50001/retry-attempt")
+                        .param("parse_version", "2"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isBadRequest());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/internal/api/v1/docs/50001/retry-attempt")
+                        .param("parse_version", "0")
+                        .header("X-User-Id", "10001"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isBadRequest());
     }
 
     @Test

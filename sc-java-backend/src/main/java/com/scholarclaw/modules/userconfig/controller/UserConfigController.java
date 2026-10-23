@@ -16,6 +16,7 @@ import com.scholarclaw.modules.userconfig.dto.PreferencesRequest;
 import com.scholarclaw.modules.userconfig.dto.UserConfigVO;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
+import com.scholarclaw.modules.userconfig.service.ModelConfigSaveService;
 import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.modules.userconfig.service.UserCourseCountProvider;
@@ -71,6 +72,7 @@ public class UserConfigController {
     private final ModelConfigRules modelConfigRules;
     private final ModelKeyBindingRules modelKeyBindingRules;
     private final UserCourseCountProvider userCourseCountProvider;
+    private final ModelConfigSaveService modelConfigSaveService;
 
     public UserConfigController(UserConfigService userConfigService,
                                 AesGcmCryptoService cryptoService,
@@ -78,7 +80,8 @@ public class UserConfigController {
                                 PythonAiEngineClient pythonAiEngineClient,
                                 ModelConfigRules modelConfigRules,
                                 ModelKeyBindingRules modelKeyBindingRules,
-                                UserCourseCountProvider userCourseCountProvider) {
+                                UserCourseCountProvider userCourseCountProvider,
+                                ModelConfigSaveService modelConfigSaveService) {
         this.userConfigService = userConfigService;
         this.cryptoService = cryptoService;
         this.baseUrlSecurityValidator = baseUrlSecurityValidator;
@@ -86,12 +89,15 @@ public class UserConfigController {
         this.modelConfigRules = modelConfigRules;
         this.modelKeyBindingRules = modelKeyBindingRules;
         this.userCourseCountProvider = userCourseCountProvider;
+        this.modelConfigSaveService = modelConfigSaveService;
     }
 
     /** `API-USER-001`：查询当前用户配置与脱敏密钥视图。 */
     @GetMapping("/config")
     public Result<UserConfigVO> getCurrentUserConfig() {
-        return Result.ok("操作成功", toVO(currentEntity(), cryptoService, modelConfigRules));
+        Long userId = SecurityContextUtils.requireCurrentUserId();
+        return Result.ok("操作成功", toVO(currentEntity(), cryptoService, modelConfigRules,
+                userCourseCountProvider.countActiveCourses(userId)));
     }
 
     /** `API-USER-002`：模型连通性与真实维度探测（无副作用，不写库）。 */
@@ -167,6 +173,14 @@ public class UserConfigController {
     public Result<UserConfigVO> saveModelConfig(@Valid @RequestBody ModelConfigUpdateRequest request) {
         Long userId = SecurityContextUtils.requireCurrentUserId();
         UserConfigEntity current = currentEntity();
+        java.time.LocalDateTime expectedUpdatedAt = current.getUpdatedAt();
+        boolean targetChanged = embeddingTargetChanged(current, request);
+        long existingCourses = userCourseCountProvider.countActiveCourses(userId);
+        if (targetChanged && existingCourses > 0 && !request.migrateExistingCourses()) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    "修改默认向量模型会影响已有 " + existingCourses
+                            + " 门课程；请确认迁移已有课程后再保存。");
+        }
 
         baseUrlSecurityValidator.validate(request.chatBaseUrl());
         baseUrlSecurityValidator.validate(request.embeddingBaseUrl());
@@ -242,14 +256,33 @@ public class UserConfigController {
             embeddingCipher = providedEmbeddingKey != null ? cryptoService.encrypt(providedEmbeddingKey) : null;
         }
 
-        UserConfigEntity updated = userConfigService.updateByokModelConfig(userId,
+        UserConfigEntity updated = modelConfigSaveService.saveAndMaybeMigrate(userId,
                 new UserConfigService.ByokModelUpdate(
                         request.chatProvider(), request.chatBaseUrl(), request.chatModel(), chatCipher,
                         request.defaultEmbeddingProvider(), request.embeddingBaseUrl(),
-                        request.defaultEmbeddingModel(), outcome.actualDim(), embeddingCipher));
-        return Result.ok("模型配置已保存",
+                        request.defaultEmbeddingModel(), outcome.actualDim(), embeddingCipher),
+                request.migrateExistingCourses(),
+                request.defaultEmbeddingModel(), outcome.actualDim(),
+                expectedUpdatedAt);
+        String message = targetChanged && request.migrateExistingCourses()
+                ? "模型配置已保存，已有课程已提交重建" : "模型配置已保存";
+        return Result.ok(message,
                 toVO(updated, cryptoService, modelConfigRules,
                         userCourseCountProvider.countActiveCourses(userId)));
+    }
+
+    /** Embedding 目标（provider + 规范化到字符串级的 Base URL + 模型名）是否发生变化。 */
+    private static boolean embeddingTargetChanged(UserConfigEntity current,
+                                                  ModelConfigUpdateRequest request) {
+        return !equalsTrimmed(current.getDefaultEmbeddingProvider(),
+                        request.defaultEmbeddingProvider())
+                || !equalsTrimmed(current.getEmbeddingBaseUrl(), request.embeddingBaseUrl())
+                || !equalsTrimmed(current.getDefaultEmbeddingModel(),
+                        request.defaultEmbeddingModel());
+    }
+
+    private static boolean equalsTrimmed(String left, String right) {
+        return left == null ? right == null : left.trim().equals(right == null ? null : right.trim());
     }
 
     /** `API-USER-004`：更新个人偏好与 IM 绑定（组 B 偏好列）。 */

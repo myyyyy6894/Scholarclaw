@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0、P1、P2、P3、P4 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22 验收通过）；P5 / TASK-501~505（任务生产、解析消费者、上下文与回调、ChromaDB 索引、DLQ/重建）已实现，状态 `IN_REVIEW`。** TASK-501 起上传/重试/重建/课程切换会向 `rag.ingest.queue` 发布 `MQ-INGEST-001` 消息；`/parse-context`、`/ingest-result`、向量索引、DLQ 与课程状态收敛已落地；Python 消费者默认关闭（TASK-506 联调后开启）。仓库内冒烟脚本仍使用 SQL 夹具构造 READY，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
+**当前进度：P0、P1、P2、P3、P4、P5 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22、P5 于 2026-10-23 验收通过）；下一阶段 P6 / TASK-601。** P5 覆盖上传/重试/重建/课程切换的 MQ 生产、Python 解析消费者、`/parse-context` 与 `/ingest-result`、ChromaDB 索引、DLQ/重试/巡检、默认 Embedding 迁移与真实 MySQL RR 竞态联调；Python 消费者默认开启。**P5 边界：** 站内通知属 TASK-802（P8），物理文件删除与 `DELETED` 终态属 TASK-901/902（P9），均未计入 P5 完成能力。真实文字版 PDF 已通过 `scripts/e2e/ingest_e2e.py` 完成完整闭环；`browser_p4_e2e.py` 覆盖重试/重建与迁移弹窗。仓库内 P4 冒烟脚本仍使用 SQL 夹具构造 READY，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 
@@ -79,7 +79,7 @@ cd sc-python-ai
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
 ```
 
-**尚未验证：** ChromaDB 客户端已在 TASK-504 落地并通过真实容器验证；RabbitMQ 生产端、解析消费者、Java 回调与向量索引已分别在 TASK-501~504 落地，DLQ 与课程状态收敛已在 TASK-505 落地；消费者默认关闭，等待 TASK-506 联调。模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
+**尚未验证：** ChromaDB 客户端已在 TASK-504 落地并通过真实容器验证；RabbitMQ 生产端、解析消费者、Java 回调与向量索引已分别在 TASK-501~504 落地，DLQ 与课程状态收敛已在 TASK-505 落地；TASK-506 已用真实 PDF 验证完整闭环，消费者默认开启。模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
 
 ### 3.3 Web 前端（已实测）
 
@@ -222,7 +222,7 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 | 文档解析 MQ（Java） | `SC_MQ_INGEST_ENABLED` | `true` | TASK-501 生产端总开关；关闭时不连接 RabbitMQ |
 | 文档解析队列（Java） | `SC_MQ_INGEST_EXCHANGE` / `SC_MQ_INGEST_QUEUE` / `SC_MQ_INGEST_DLQ` | `rag.ingest.exchange` / `rag.ingest.queue` / `rag.ingest.dlq` | `MQ-INGEST-001` 队列与死信声明 |
 | 僵尸任务巡检（Java） | `SC_ZOMBIE_SCAN_ENABLED` | `true` | 补投 `UPLOADED` 且未入队的解析任务 |
-| 解析消费者（Python） | `SC_INGEST_CONSUMER_ENABLED` | `false` | TASK-502 消费者开关；TASK-503/504 接入前保持关闭 |
+| 解析消费者（Python） | `SC_INGEST_CONSUMER_ENABLED` | `true` | TASK-502 消费者开关；TASK-506 联调通过后默认开启，可显式关闭 |
 | 页数上限（Python） | `SC_INGEST_MAX_PAGES` | `300` | 解析阶段拒绝超限 PDF（`E-RAG-02`） |
 | 依赖探针超时（Java） | `SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS` | `1500` | TCP 可达性探针超时（Redis/RabbitMQ 两项；MySQL 已改为连接池级探针） |
 | JWT 有效期（Java） | `SC_JWT_TTL_SECONDS` | `604800` | 访问令牌有效期（秒），默认 7 天，与 `04` §2.7.2 一致 |

@@ -43,5 +43,11 @@ public record ModelConfigUpdateRequest(
 
         @NotBlank(message = "default_embedding_model 不能为空")
         @Size(min = 1, max = 128, message = "default_embedding_model 长度必须为 1~128")
-        String defaultEmbeddingModel) {
+        String defaultEmbeddingModel,
+
+        /**
+         * 已有课程存在且 Embedding 目标变化时，必须显式确认迁移；否则后端拒绝覆盖旧 Key，
+         * 避免旧课程因 Key 目标绑定失效而无法继续解析。
+         */
+        boolean migrateExistingCourses) {
 }

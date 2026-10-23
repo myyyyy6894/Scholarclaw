@@ -44,4 +44,18 @@ public interface KnowledgeDocMapper extends BaseMapper<KnowledgeDocEntity> {
     List<CourseDocStatsRow> selectCourseStats(
             @Param("userId") Long userId,
             @Param("courseIndexVersions") Map<Long, Integer> courseIndexVersions);
+
+    /**
+     * 当前读（不加缓存/快照）：用于乐观锁失败后判断文档是否已被并发版本接管。
+     *
+     * <p>MySQL 默认 REPEATABLE-READ 下普通 SELECT 会继续读事务开始时的快照，
+     * 只有锁定读才能看到并发已提交的新版本。
+     */
+    @Select("""
+            SELECT * FROM t_knowledge_doc
+             WHERE doc_id = #{docId} AND user_id = #{userId}
+             FOR UPDATE
+            """)
+    KnowledgeDocEntity selectByIdForUpdate(@Param("docId") Long docId,
+                                           @Param("userId") Long userId);
 }

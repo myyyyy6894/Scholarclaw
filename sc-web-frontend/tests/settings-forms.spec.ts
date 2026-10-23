@@ -8,6 +8,7 @@ import {
   isProbeOutcomeSuccessful,
   keyStatusLabel,
   ModelFormValidationError,
+  embeddingTargetChanged,
   toProbeRequest,
   toSaveRequest,
   validateModelForm,
@@ -142,6 +143,22 @@ describe('model config form', () => {
     form.reuseChatApiKey = true
 
     expect(() => toProbeRequest(form, 'EMBEDDING')).toThrow(ModelFormValidationError)
+  })
+
+  it('默认 Embedding 目标变化识别：provider/Base URL/模型名任一变化', () => {
+    const form = createModelForm(CONFIG)
+    expect(embeddingTargetChanged(form, CONFIG)).toBe(false)
+    form.embeddingModel = 'BAAI/bge-m3-v2'
+    expect(embeddingTargetChanged(form, CONFIG)).toBe(true)
+    form.embeddingModel = CONFIG.default_embedding_model ?? ''
+    form.embeddingBaseUrl = 'https://other.example.com/v1'
+    expect(embeddingTargetChanged(form, CONFIG)).toBe(true)
+  })
+
+  it('确认迁移时保存请求携带 migrate_existing_courses=true', () => {
+    const request = toSaveRequest(createModelForm(CONFIG), true)
+
+    expect(request.migrate_existing_courses).toBe(true)
   })
 
   it('保存时空 Key 整个省略，避免被后端当成"改成空字符串"', () => {

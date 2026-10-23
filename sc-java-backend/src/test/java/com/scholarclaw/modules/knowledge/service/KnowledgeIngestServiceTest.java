@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.mq.IngestJobPublisher;
 import java.util.List;
@@ -26,37 +28,42 @@ class KnowledgeIngestServiceTest {
 
     private KnowledgeDocService docService;
     private IngestJobPublisher publisher;
+    private CourseService courseService;
     private KnowledgeIngestService service;
 
     @BeforeEach
     void setUp() {
         docService = mock(KnowledgeDocService.class);
         publisher = mock(IngestJobPublisher.class);
+        courseService = mock(CourseService.class);
         when(publisher.isEnabled()).thenReturn(true);
-        service = new KnowledgeIngestService(docService, publisher);
+        service = new KnowledgeIngestService(docService, publisher, courseService);
     }
 
     @Test
-    @DisplayName("INITIAL_INGEST 发布成功后才推进 PARSING")
-    void marksParsingOnlyAfterPublish() {
+    @DisplayName("INITIAL_INGEST 先认领 PARSING，broker 确认后回填 enqueued_at")
+    void claimsParsingBeforePublish() {
         when(docService.requireOwnedDoc(USER_ID, DOC_ID)).thenReturn(doc("UPLOADED"));
+        when(docService.claimParsing(eq(DOC_ID), eq(1), any(String.class))).thenReturn(true);
         when(publisher.publish(any())).thenReturn(true);
 
         assertThat(service.enqueueInitial(USER_ID, DOC_ID)).isTrue();
 
-        verify(docService).markParsing(org.mockito.ArgumentMatchers.eq(DOC_ID),
-                org.mockito.ArgumentMatchers.eq(1), any(String.class));
+        verify(docService).claimParsing(eq(DOC_ID), eq(1), any(String.class));
+        verify(docService).recordEnqueued(eq(DOC_ID), eq(1), any(String.class));
     }
 
     @Test
-    @DisplayName("INITIAL_INGEST 发布失败时保留 UPLOADED，等待巡检补投")
-    void keepsUploadedWhenPublishFails() {
+    @DisplayName("发布未获确认时保留 PARSING + enqueued_at=NULL，等待巡检补投")
+    void keepsParsingRecoverableWhenPublishFails() {
         when(docService.requireOwnedDoc(USER_ID, DOC_ID)).thenReturn(doc("UPLOADED"));
+        when(docService.claimParsing(eq(DOC_ID), eq(1), any(String.class))).thenReturn(true);
         when(publisher.publish(any())).thenReturn(false);
 
         assertThat(service.enqueueInitial(USER_ID, DOC_ID)).isFalse();
 
-        verify(docService, never()).markParsing(any(), anyInt(), any());
+        verify(docService).claimParsing(eq(DOC_ID), eq(1), any(String.class));
+        verify(docService, never()).recordEnqueued(any(), anyInt(), any());
     }
 
     @Test
@@ -88,8 +95,7 @@ class KnowledgeIngestServiceTest {
         verify(docService).recordEnqueued(org.mockito.ArgumentMatchers.eq(DOC_ID),
                 org.mockito.ArgumentMatchers.eq(1), any(String.class));
         verify(docService).recordEnqueued(org.mockito.ArgumentMatchers.eq(50002L),
-                org.mockito.ArgumentMatchers.eq(1), any(String.class));
-    }
+                org.mockito.ArgumentMatchers.eq(1), any(String.class));    }
 
     private static KnowledgeDocEntity doc(String status) {
         KnowledgeDocEntity doc = new KnowledgeDocEntity();

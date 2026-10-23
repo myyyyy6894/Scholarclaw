@@ -34,7 +34,7 @@ class KnowledgeParseContextServiceTest {
     private static final long DOC_ID = 50001L;
 
     private KnowledgeDocMapper docMapper;
-    private KnowledgeDocService docService;
+    private KnowledgeFailureService failureService;
     private CourseService courseService;
     private UserConfigService userConfigService;
     private AesGcmCryptoService cryptoService;
@@ -43,13 +43,13 @@ class KnowledgeParseContextServiceTest {
     @BeforeEach
     void setUp() {
         docMapper = mock(KnowledgeDocMapper.class);
-        docService = mock(KnowledgeDocService.class);
+        failureService = mock(KnowledgeFailureService.class);
         courseService = mock(CourseService.class);
         userConfigService = mock(UserConfigService.class);
         cryptoService = mock(AesGcmCryptoService.class);
-        service = new KnowledgeParseContextService(docMapper, docService, courseService,
+        service = new KnowledgeParseContextService(docMapper, courseService,
                 userConfigService, new ModelConfigRules(false, ""),
-                new ModelKeyBindingRules(), cryptoService);
+                new ModelKeyBindingRules(), cryptoService, failureService);
     }
 
     @Test
@@ -101,8 +101,8 @@ class KnowledgeParseContextServiceTest {
 
         assertThat(context.allowProceed()).isFalse();
         assertThat(context.abortReason()).isEqualTo("EMBEDDING_CONFIG_MISSING");
-        verify(docService).markFailed(eq(DOC_ID), eq(1), eq("EMBEDDING_CONFIG_MISSING"),
-                any(String.class));
+        verify(failureService).fail(eq(USER_ID), eq(COURSE_ID), eq(DOC_ID), eq(1), eq(1),
+                eq("EMBEDDING_CONFIG_MISSING"), any(String.class));
     }
 
     @Test
@@ -114,7 +114,7 @@ class KnowledgeParseContextServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(ErrorCode.RESOURCE_NOT_FOUND));
-        verify(docService, never()).markFailed(any(), anyInt(), any(), any());
+        verify(failureService, never()).fail(any(), any(), any(), anyInt(), anyInt(), any(), any());
     }
 
     private static KnowledgeDocEntity doc(String status) {

@@ -23,6 +23,17 @@ def test_parent_and_child_chunks_keep_ids_and_pages() -> None:
     assert result.chunk_count == len(result.children)
 
 
+def test_adjacent_children_keep_overlap_and_length_bound() -> None:
+    page = PageText(1, "事务隔离级别与并发控制。" * 200)
+
+    result = chunk_document([page], doc_id="50001", parse_version=1)
+
+    assert len(result.children) >= 2
+    for previous, current in zip(result.children, result.children[1:]):
+        assert previous.content[-40:] == current.content[:40]
+    assert all(len(child.content) <= 350 for child in result.children)
+
+
 def test_paragraphs_do_not_cross_page_for_children() -> None:
     pages = [PageText(1, "第一页内容。" * 50), PageText(2, "第二页内容。" * 50)]
 

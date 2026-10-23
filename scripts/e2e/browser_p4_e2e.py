@@ -7,8 +7,9 @@
      `SC_ALLOW_LOCAL_MODEL_BASE_URL=true` 与 `SC_LOCAL_MODEL_ALLOWED_ORIGINS`；
   3. 通过 `--mock-base-url` 传入同一地址（不要使用 Docker 服务名）。
 
-覆盖：注册/登录、空课程状态、创建课程、上传 PDF、文档状态、DELETING 默认可见、
-课程切换、重试/重建占位提示、退出登录后课程上下文清空、0 console error。
+覆盖：注册/登录、空课程状态、创建课程、上传文字版 PDF、真实解析到 READY、
+文档失败后重试入口、READY 后重建入口、默认 Embedding 变更的迁移确认弹窗、
+DELETING 默认可见、课程切换、退出登录后课程上下文清空、0 console error。
 脚本只使用假 Key，不读取/打印 `.env`。
 
 账号策略：脚本会注册临时账号并保留（不自动删除），只清理本次创建的文档与课程；
@@ -26,9 +27,10 @@ import urllib.request
 
 from playwright.sync_api import sync_playwright
 
+from ingest_e2e import build_pdf, scanned_pdf
+
 FAKE_KEY = "sk-p4-browser-not-a-real-key"
 PASSWORD = "E2e-P4-Pass-123"
-PDF_BYTES = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n"
 
 
 def call(base_url: str, method: str, path: str, *, token: str | None = None,
@@ -90,7 +92,12 @@ def main() -> int:
     course_b = f"P4 浏览器课程 B {int(time.time())}"
     pdf_path = "/tmp/sc-p4-browser-upload.pdf"
     with open(pdf_path, "wb") as handle:
-        handle.write(PDF_BYTES)
+        handle.write(build_pdf([
+            "Operating system chapter one: process scheduling and context switching.",
+            "Chapter two covers virtual memory and page replacement policies."]))
+    scan_path = "/tmp/sc-p4-browser-scan.pdf"
+    with open(scan_path, "wb") as handle:
+        handle.write(scanned_pdf())
 
     results: list[bool] = []
     console_errors: list[str] = []
@@ -126,21 +133,28 @@ def main() -> int:
         page.wait_for_url("**/knowledge", timeout=10000)
         page.get_by_role("button", name=course_a, exact=False).first.click()
         page.locator("input[type=file]").set_input_files(pdf_path)
-        page.locator(".el-table__row").first.wait_for(timeout=15000)
-        row_text = page.locator(".el-table__row").first.inner_text()
-        results.append(check("上传合法 PDF 后进入解析状态",
-                             "解析中" in row_text or "待解析" in row_text, row_text))
+        ready_row = page.locator(".el-table__row", has_text="sc-p4-browser-upload.pdf").first
+        ready_row.wait_for(timeout=15000)
+        ready_row.get_by_text("就绪").wait_for(timeout=90000)
+        results.append(check("上传文字版 PDF 后由消费者完成真实解析并 READY", True))
+
+        ready_row.get_by_role("button", name="重建", exact=True).click()
+        page.get_by_text("已重新进入向量重建队列", exact=False).first.wait_for(timeout=15000)
+        results.append(check("READY 文档展示重试/重建入口并可触发重建", True))
+        ready_row.get_by_text("就绪").wait_for(timeout=90000)
+
+        page.locator("input[type=file]").set_input_files(scan_path)
+        scan_row = page.locator(".el-table__row", has_text="sc-p4-browser-scan.pdf").first
+        scan_row.wait_for(timeout=15000)
+        scan_row.get_by_text("失败").wait_for(timeout=90000)
+        scan_row.get_by_role("button", name="重试", exact=True).click()
+        page.get_by_text("已重新进入解析队列", exact=False).first.wait_for(timeout=15000)
+        results.append(check("失败文档展示重试入口并可重新入队", True))
 
         page.wait_for_timeout(2600)
         page.screenshot(path=f"{args.screenshot_dir}/sc-p4-knowledge.png", full_page=True)
-        body = page.locator("body").inner_text()
-        results.append(check("页面明确重试/重建入口待联调",
-                             "TASK-506" in body or "尚未开放" in body))
-        results.append(check("页面无重试/重建按钮",
-                             page.get_by_role("button", name="重试", exact=True).count() == 0
-                             and page.get_by_role("button", name="重建", exact=True).count() == 0))
 
-        page.get_by_role("button", name="删除", exact=True).first.click()
+        scan_row.get_by_role("button", name="删除", exact=True).click()
         page.locator(".el-message-box").get_by_role("button", name="删除").click()
         page.get_by_text("删除中").first.wait_for(timeout=15000)
         results.append(check("删除后 DELETING 默认可见", True))
@@ -153,10 +167,10 @@ def main() -> int:
         row = page.locator(".el-table__row", has_text=course_a).first
         row.get_by_role("button", name="切换模型").click()
         dialog = page.locator(".el-dialog", has_text="切换课程 Embedding 模型")
-        dialog.get_by_text("TASK-502", exact=False).wait_for(timeout=10000)
+        dialog.get_by_text("重建期间文档暂停检索", exact=False).wait_for(timeout=10000)
         dialog.get_by_role("button", name="确认切换").click()
         page.get_by_text("已提交重建请求", exact=False).first.wait_for(timeout=15000)
-        results.append(check("课程切换成功且明示重建由 TASK-502 执行", True))
+        results.append(check("课程切换成功且明示重建期间暂停检索", True))
         page.wait_for_timeout(2600)
         page.screenshot(path=f"{args.screenshot_dir}/sc-p4-courses.png", full_page=True)
 
@@ -176,6 +190,22 @@ def main() -> int:
         active = page.locator(".sc-knowledge__course--active").first.inner_text()
         results.append(check("退出登录后课程上下文已清空（不再保留 A）",
                              course_a not in active, active))
+
+        # 默认 Embedding 变更：存在已建课程时必须在保存前弹窗确认迁移
+        page.goto(f"{args.base_url}/settings", wait_until="networkidle")
+        page.locator('input[name="sc-embedding-model-name"]').fill("embed-mock-v2")
+        page.locator('input[name="sc-embedding-api-key"]').fill(FAKE_KEY)
+        page.get_by_role("button", name="保存模型配置").click()
+        migrate_dialog = page.locator(".el-message-box", has_text="迁移已有课程")
+        migrate_dialog.wait_for(timeout=15000)
+        results.append(check("保存前弹窗提示迁移已有课程", True))
+        migrate_dialog.get_by_role("button", name="取消").click()
+        page.wait_for_timeout(800)
+        page.get_by_role("button", name="保存模型配置").click()
+        migrate_dialog.wait_for(timeout=15000)
+        migrate_dialog.get_by_role("button", name="迁移并保存").click()
+        page.get_by_text("已有课程已提交重建", exact=False).first.wait_for(timeout=30000)
+        results.append(check("确认后保存并提交课程重建", True))
 
         results.append(check("浏览器 console 无 error", not console_errors,
                              "; ".join(console_errors[:3])))

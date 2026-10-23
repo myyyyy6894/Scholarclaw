@@ -29,27 +29,27 @@ public class KnowledgeParseContextService {
     private static final String EMBEDDING_MISSING = "EMBEDDING_CONFIG_MISSING";
 
     private final KnowledgeDocMapper docMapper;
-    private final KnowledgeDocService docService;
     private final CourseService courseService;
     private final UserConfigService userConfigService;
     private final ModelConfigRules modelConfigRules;
     private final ModelKeyBindingRules modelKeyBindingRules;
     private final AesGcmCryptoService cryptoService;
+    private final KnowledgeFailureService failureService;
 
     public KnowledgeParseContextService(KnowledgeDocMapper docMapper,
-                                        KnowledgeDocService docService,
                                         CourseService courseService,
                                         UserConfigService userConfigService,
                                         ModelConfigRules modelConfigRules,
                                         ModelKeyBindingRules modelKeyBindingRules,
-                                        AesGcmCryptoService cryptoService) {
+                                        AesGcmCryptoService cryptoService,
+                                        KnowledgeFailureService failureService) {
         this.docMapper = docMapper;
-        this.docService = docService;
         this.courseService = courseService;
         this.userConfigService = userConfigService;
         this.modelConfigRules = modelConfigRules;
         this.modelKeyBindingRules = modelKeyBindingRules;
         this.cryptoService = cryptoService;
+        this.failureService = failureService;
     }
 
     public ParseContextVO resolve(Long headerUserId, Long docId,
@@ -72,7 +72,8 @@ public class KnowledgeParseContextService {
         CourseNamespaceEntity course = courseService.getActiveCourse(doc.getUserId(), doc.getCourseId());
         ParseContextVO.EmbeddingConfigVO embedding = resolveEmbedding(doc, course);
         if (embedding == null) {
-            docService.markFailed(doc.getDocId(), parseVersion, EMBEDDING_MISSING,
+            failureService.fail(doc.getUserId(), doc.getCourseId(), doc.getDocId(),
+                    parseVersion, courseIndexVersion, EMBEDDING_MISSING,
                     "Embedding 配置缺失或与已保存 Key 不匹配，请重新保存模型配置后重试。");
             log.warn("解析上下文拒绝：Embedding 配置不可用 docId={} userId={}",
                     doc.getDocId(), doc.getUserId());

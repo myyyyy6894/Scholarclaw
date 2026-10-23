@@ -9,8 +9,9 @@
 
 **已经接入**：内部令牌鉴权、`/internal/ai/v1/health`、`/internal/ai/v1/model/probe`（TASK-302/303）、
 文档解析管线与 RabbitMQ 消费者（TASK-502；TASK-506 起默认开启）、
-`/internal/ai/v1/rag/vectors` 向量清理（TASK-504）、Java 解析回调（TASK-503）。
-**尚未接入**：`/agent/route-and-extract`（TASK-706）、`/rag/qa-stream` 与检索链路（TASK-601~604）。
+`/internal/ai/v1/rag/vectors` 向量清理（TASK-504）、Java 解析回调（TASK-503）、
+`DenseVectorRetriever` 稠密检索组件（TASK-601）。
+**尚未接入**：`/agent/route-and-extract`（TASK-706）、`/rag/qa-stream` 端点（TASK-604）。
 """
 
 from __future__ import annotations

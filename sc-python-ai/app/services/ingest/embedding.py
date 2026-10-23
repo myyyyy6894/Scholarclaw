@@ -1,6 +1,9 @@
-"""Embedding 生成（TASK-504）：复用受控模型网关，批量向量化子块。
+"""Embedding 生成（TASK-504 / TASK-601）：复用受控模型网关。
 
-API Key 只来自 `/parse-context` 的内存配置，不出现在日志、异常或持久化中。
+* 文档子块批量向量化（TASK-504）；
+* RAG 查询向量化（TASK-601）：使用课程绑定的 Embedding 模型，与写入索引时保持同一模型。
+
+API Key 只来自 `/parse-context` 的内存配置或本次内部请求体，不出现在日志、异常或持久化中。
 """
 
 from __future__ import annotations
@@ -25,16 +28,34 @@ class EmbeddingService:
         if not context.embedding_provider or not context.embedding_base_url \
                 or not context.embedding_model:
             raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "Embedding 配置不完整。")
-        expected_dim = context.embedding_dim or 0
         endpoint = ModelEndpoint(context.embedding_provider, context.embedding_base_url,
                                  context.embedding_api_key, context.embedding_model)
+        return await self.embed_texts(endpoint, texts,
+                                      expected_dim=context.embedding_dim or 0)
+
+    async def embed_query(self, endpoint: ModelEndpoint, text: str, *,
+                          expected_dim: int | None = None) -> list[float]:
+        """把用户问题编码为查询向量；模型配置必须与课程索引一致。"""
+        if not endpoint.provider or not endpoint.base_url or not endpoint.model_name:
+            raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "Embedding 配置不完整。")
+        if not text.strip():
+            raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "检索问题不能为空。")
+        vectors = await self.embed_texts(endpoint, [text], expected_dim=expected_dim or 0)
+        return vectors[0]
+
+    async def embed_texts(self, endpoint: ModelEndpoint, texts: list[str], *,
+                          expected_dim: int = 0) -> list[list[float]]:
+        if not texts:
+            return []
+        if not endpoint.provider or not endpoint.base_url or not endpoint.model_name:
+            raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "Embedding 配置不完整。")
         vectors: list[list[float]] = []
         async with SsrfSafeModelGateway(
                 self._settings, http_transport=self._http_transport) as gateway:
             for start in range(0, len(texts), BATCH_SIZE):
                 batch = texts[start:start + BATCH_SIZE]
                 payload = await gateway.post_json(
-                    endpoint, "embeddings", {"model": context.embedding_model, "input": batch},
+                    endpoint, "embeddings", {"model": endpoint.model_name, "input": batch},
                     retry=RetryPolicy.standard())
                 vectors.extend(_parse_embeddings(payload, len(batch), expected_dim))
         return vectors

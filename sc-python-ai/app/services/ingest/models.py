@@ -42,6 +42,18 @@ class ParseResult:
 
 
 @dataclass(frozen=True)
+class ChildVectorMatch:
+    """ChromaDB 命中结果；`similarity` 已由余弦距离换算为余弦相似度。"""
+
+    chunk_id: str
+    parent_chunk_id: str
+    doc_id: str
+    page_num: int | None
+    content: str
+    similarity: float
+
+
+@dataclass(frozen=True)
 class ParseContext:
     """Java `/parse-context` 返回的权威任务上下文。"""
 

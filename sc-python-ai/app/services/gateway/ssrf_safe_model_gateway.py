@@ -20,8 +20,9 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -174,6 +175,130 @@ class SsrfSafeModelGateway:
                 raise UpstreamModelError() from exc
             return self._parse_json(raw)
 
+    async def stream_chat(
+        self,
+        endpoint: ModelEndpoint,
+        payload: Mapping[str, Any],
+        *,
+        path: str = "chat/completions",
+        retry: RetryPolicy | None = None,
+        sleep: SleepFunction = asyncio.sleep,
+    ) -> AsyncIterator[str]:
+        """向 OpenAI 兼容接口发起流式 Chat 请求，逐段产出正文增量。
+
+        * 与 :meth:`post_json` 使用同一套 SSRF 校验、重定向拒绝与错误分类；
+        * 只有状态码阶段（429/502/503/504）可重试，一旦开始产出不再重试；
+        * 原始响应累计上限 2 MiB；上游 `data:` 帧必须是合法 JSON；
+        * 只读取 `choices[].delta.content`，忽略心跳/注释与非正文事件。
+        """
+        if self._client is None:
+            raise RuntimeError("SsrfSafeModelGateway 必须在 async with 内使用")
+
+        policy = retry if retry is not None else RetryPolicy.no_retry()
+        base_url = endpoint.base_url.rstrip("/")
+        url = f"{base_url}/{path.lstrip('/')}"
+        await ssrf_guard.validate_outbound_url_async(
+            base_url,
+            allow_local=self._settings.allow_local_model_base_url,
+            allowed_origins=self._settings.local_model_allowed_origins,
+        )
+
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if endpoint.api_key:
+            headers["Authorization"] = f"Bearer {endpoint.api_key}"
+
+        attempt = 0
+        while True:
+            attempt += 1
+            logger.info(
+                "模型网关流式出站 url=%s provider=%s model=%s attempt=%s",
+                transport_module.safe_url_for_log(url),
+                endpoint.provider,
+                endpoint.model_name,
+                attempt,
+            )
+            retry_delay: float | None = None
+            try:
+                async with self._client.stream(
+                    "POST", url, json=payload, headers=headers
+                ) as response:
+                    status = response.status_code
+                    if 300 <= status < 400:
+                        raise BaseUrlRejectedError()
+                    if status != 200:
+                        if status < 300:
+                            raise transport_module.non_200_success_error()
+                        failure = transport_module.classify_upstream_failure(status)
+                        if (
+                            status in transport_module.RETRYABLE_UPSTREAM_STATUS
+                            and attempt <= len(policy.delays)
+                        ):
+                            retry_delay = policy.delays[attempt - 1]
+                        else:
+                            raise failure
+                    else:
+                        async for delta in self._iter_sse_deltas(response):
+                            yield delta
+                        return
+            except httpx.TimeoutException as exc:
+                raise UpstreamTimeoutError() from exc
+            except httpx.HTTPError as exc:
+                raise UpstreamModelError() from exc
+            if retry_delay is None:  # 防御：非重试分支必须已抛出
+                raise UpstreamModelError()
+            await sleep(retry_delay)
+
+    async def _iter_sse_deltas(self, response: httpx.Response) -> AsyncIterator[str]:
+        """解析 OpenAI 兼容 SSE；按原始字节计数，超限立即中止。"""
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        buffer = ""
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > self._max_response_bytes:
+                raise _response_too_large()
+            buffer += decoder.decode(chunk)
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                delta = self._parse_sse_line(line)
+                if delta is _STREAM_DONE:
+                    return
+                if delta is not None:
+                    yield delta
+        buffer += decoder.decode(b"", final=True)
+        if buffer:
+            delta = self._parse_sse_line(buffer)
+            if delta is not None and delta is not _STREAM_DONE:
+                yield delta
+
+    @staticmethod
+    def _parse_sse_line(raw_line: str) -> str | None | object:
+        line = raw_line.strip()
+        if not line or line.startswith(":") or not line.startswith("data:"):
+            return None
+        data = line[len("data:"):].strip()
+        if not data:
+            return None
+        if data == "[DONE]":
+            return _STREAM_DONE
+        try:
+            event = json.loads(data)
+        except ValueError as exc:
+            raise NonRetryableAiError(
+                AiErrorCode.UPSTREAM_MODEL_ERROR, "上游流式响应不是合法 JSON。"
+            ) from exc
+        if not isinstance(event, dict):
+            return None
+        if isinstance(event.get("error"), dict):
+            raise UpstreamModelError()
+        choices = event.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        choice = choices[0]
+        delta = choice.get("delta") if isinstance(choice, dict) else None
+        content = delta.get("content") if isinstance(delta, dict) else None
+        return content if isinstance(content, str) and content else None
+
     async def _read_limited(self, response: httpx.Response) -> bytes:
         declared = response.headers.get("content-length")
         if declared is not None:
@@ -209,6 +334,10 @@ class SsrfSafeModelGateway:
                 AiErrorCode.UPSTREAM_MODEL_ERROR, "上游返回结构不可识别。"
             )
         return payload
+
+
+#: SSE 结束标记；与正文 `str` 区分。
+_STREAM_DONE = object()
 
 
 def _response_too_large() -> NonRetryableAiError:

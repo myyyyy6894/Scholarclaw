@@ -145,6 +145,22 @@ mock 服务故障导致 `FAILED` 后手动重试恢复；PARSING 僵尸巡检补
 巡检用例需要临时 env 设置 `SC_ZOMBIE_SCAN_STALE_MINUTES=1` 与
 `SC_ZOMBIE_SCAN_INTERVAL_MS=5000`（见脚本文件头与 TASK_TRACKER 记录）。
 
+### 4.3 P6 RAG Web 工作台（TASK-605，无需后端）
+
+脚本通过 Playwright 路由拦截模拟课程、会话历史与 SSE 响应，只验证前端渲染与状态区分：
+
+```bash
+# 先启动前端 dev server
+npm --prefix sc-web-frontend run dev -- --host 127.0.0.1 --port 5173
+
+python3 -m venv /tmp/sc-e2e-venv
+/tmp/sc-e2e-venv/bin/pip install playwright==1.51.0
+/tmp/sc-e2e-venv/bin/python scripts/e2e/rag_web_e2e.py --base-url http://127.0.0.1:5173
+```
+
+覆盖：课程选择、历史消息、流式 token、引用文件名/页码/相似度、耗时指标、
+清空会话、错误帧与正常完成可区分、0 console error。脚本使用假令牌与假数据，不读取 `.env`。
+
 ## 5. 测试账号保留与清理（手动）
 
 所有 E2E 脚本都**只创建临时账号，不自动删除账号**，原因：

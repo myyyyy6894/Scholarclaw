@@ -128,6 +128,84 @@ function buildUrl(path: string): string {
   return `${resolveApiBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+/**
+ * 发起流式请求（SSE），返回原始 `Response` 供调用方逐帧解析。
+ *
+ * 与 :func:`apiRequest` 共用同一套令牌注入、401 处理与错误信封解包；区别只在于
+ * 成功时不解包 JSON，而是把 `ReadableStream` 交给上层。用于 `API-RAG-001`。
+ */
+export async function apiStream(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<Response> {
+  const method = options.method ?? 'POST'
+  const headers: Record<string, string> = {
+    Accept: 'text/event-stream',
+    ...(options.extraHeaders ?? {}),
+  }
+  const token = tokenProvider()
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  let payload: string | undefined
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    payload = JSON.stringify(options.body)
+  }
+
+  let response: Response
+  try {
+    response = await fetch(buildUrl(path), {
+      method,
+      headers,
+      body: payload,
+      signal: options.signal ?? null,
+    })
+  } catch (error) {
+    throw new ApiError({
+      code: CLIENT_ERROR_CODES.NETWORK,
+      message: '无法连接到服务端，请检查网络后重试。',
+      cause: error,
+    })
+  }
+
+  if (response.status === 401) {
+    unauthorizedHandler()
+  }
+
+  if (!response.ok) {
+    try {
+      const envelope = await parseEnvelope<unknown>(response)
+      throw new ApiError({
+        code: envelope.code,
+        message: envelope.message,
+        traceId: envelope.trace_id,
+        httpStatus: response.status,
+      })
+    } catch (error) {
+      if (error instanceof ApiError) {
+        throw error
+      }
+      throw new ApiError({
+        code: CLIENT_ERROR_CODES.MALFORMED_RESPONSE,
+        message: '服务端返回了无法解析的响应，请稍后重试。',
+        httpStatus: response.status,
+        cause: error,
+      })
+    }
+  }
+
+  const contentType = response.headers.get('Content-Type') ?? ''
+  if (!contentType.toLowerCase().startsWith('text/event-stream')) {
+    throw new ApiError({
+      code: CLIENT_ERROR_CODES.MALFORMED_RESPONSE,
+      message: '服务端未返回流式响应，已停止处理。',
+      httpStatus: response.status,
+    })
+  }
+  return response
+}
+
 async function parseEnvelope<T>(response: Response): Promise<ApiResult<T>> {
   let parsed: unknown
   try {

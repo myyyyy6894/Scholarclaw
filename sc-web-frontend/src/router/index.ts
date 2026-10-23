@@ -7,6 +7,7 @@ import HomeView from '@/views/HomeView.vue'
 import KnowledgeView from '@/views/KnowledgeView.vue'
 import LoginView from '@/views/LoginView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
+import RagView from '@/views/RagView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 
 /**
@@ -16,7 +17,7 @@ import SettingsView from '@/views/SettingsView.vue'
  * |---|---|
  * | 登录、注册与个人设置（BYOK） | TASK-205（已落地） |
  * | 课程知识库管理（左侧栏 + 文档抽屉） | TASK-404 |
- * | RAG 溯源问答主工作区（中间 Tab 1） | TASK-605 |
+ * | RAG 溯源问答主工作区（`/rag`） | TASK-605（已落地） |
  * | DDL 任务看板与待确认收件箱（中间 Tab 2） | TASK-705 |
  *
  * 需要登录的路由声明 `meta.requiresAuth = true`；登录页声明 `meta.guestOnly = true`，
@@ -51,6 +52,12 @@ const routes: RouteRecordRaw[] = [
         name: 'knowledge',
         component: KnowledgeView,
         meta: { title: '课程知识库', requiresAuth: true },
+      },
+      {
+        path: 'rag',
+        name: 'rag',
+        component: RagView,
+        meta: { title: '课程问答', requiresAuth: true },
       },
       {
         path: 'settings',

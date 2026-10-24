@@ -1,0 +1,348 @@
+{
+  "dataset_version": "1.0",
+  "mode": "deterministic-hash-embedding (NOT a real provider baseline)",
+  "config": {
+    "embedding": "deterministic-hash-n-gram-v1",
+    "dim": 256,
+    "threshold": 0.35,
+    "top_k": 10,
+    "top_parents": 4
+  },
+  "positives": {
+    "total": 32,
+    "hit_raw": 32,
+    "hit_usable": 26,
+    "hit_raw_rate": 1.0,
+    "hit_usable_rate": 0.8125
+  },
+  "negatives": {
+    "total": 8,
+    "rejected": 7,
+    "rate": 0.875
+  },
+  "by_category": {
+    "answerable": {
+      "total": 32,
+      "matched": 26,
+      "rate": 0.8125,
+      "hit_raw_rate": 1.0
+    }
+  },
+  "negative_by_category": {
+    "cross_course": {
+      "total": 2,
+      "matched": 2,
+      "rate": 1.0
+    },
+    "low_relevance": {
+      "total": 2,
+      "matched": 2,
+      "rate": 1.0
+    },
+    "no_answer": {
+      "total": 4,
+      "matched": 3,
+      "rate": 0.75
+    }
+  },
+  "synthetic_isolation": {
+    "total": 40,
+    "clean": 40,
+    "rate": 1.0,
+    "note": "仅在各自合成 Collection 内检查文档名，不是跨用户/跨课程授权测试"
+  },
+  "citation_verifier_contract": {
+    "checked": 26,
+    "invalid_injected": 52,
+    "invalid_stripped": 52,
+    "valid_retained": 26,
+    "contract_ok": true,
+    "note": "合成标签契约检查，不代表真实模型回答的引用零虚构率"
+  },
+  "latency_ms": {
+    "p50": 2.3,
+    "p95": 2.51,
+    "max": 4.46
+  },
+  "failures": {
+    "positive_miss_raw": [],
+    "positive_miss_usable": [
+      {
+        "id": "D03",
+        "category": "answerable",
+        "query": "事务持久性在系统故障时意味着什么？",
+        "rejected": true,
+        "top_similarity": 0.296062171459198,
+        "returned": [],
+        "raw_returned": [
+          {
+            "doc_name": "第5章_事务处理.md",
+            "page": 1
+          },
+          {
+            "doc_name": "第5章_事务处理.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第6章_索引与查询优化.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第6章_索引与查询优化.md",
+            "page": 1
+          }
+        ],
+        "hit_raw": true,
+        "hit_usable": false,
+        "reference": {
+          "doc_name": "第5章_事务处理.md",
+          "page_start": 1,
+          "page_end": 1
+        }
+      },
+      {
+        "id": "D09",
+        "category": "answerable",
+        "query": "SQL 标准定义了哪四种隔离级别？",
+        "rejected": true,
+        "top_similarity": 0.2786295413970947,
+        "returned": [],
+        "raw_returned": [
+          {
+            "doc_name": "第5章_事务处理.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第6章_索引与查询优化.md",
+            "page": 1
+          },
+          {
+            "doc_name": "第5章_事务处理.md",
+            "page": 1
+          },
+          {
+            "doc_name": "第6章_索引与查询优化.md",
+            "page": 2
+          }
+        ],
+        "hit_raw": true,
+        "hit_usable": false,
+        "reference": {
+          "doc_name": "第5章_事务处理.md",
+          "page_start": 3,
+          "page_end": 3
+        }
+      },
+      {
+        "id": "O07",
+        "category": "answerable",
+        "query": "什么是抢占式调度？",
+        "rejected": true,
+        "top_similarity": 0.26540231704711914,
+        "returned": [],
+        "raw_returned": [
+          {
+            "doc_name": "第3章_进程与线程.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 2
+          },
+          {
+            "doc_name": "第3章_进程与线程.md",
+            "page": 2
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 1
+          }
+        ],
+        "hit_raw": true,
+        "hit_usable": false,
+        "reference": {
+          "doc_name": "第3章_进程与线程.md",
+          "page_start": 3,
+          "page_end": 3
+        }
+      },
+      {
+        "id": "O09",
+        "category": "answerable",
+        "query": "页表的作用是什么？",
+        "rejected": true,
+        "top_similarity": 0.31282275915145874,
+        "returned": [],
+        "raw_returned": [
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 1
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 2
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第3章_进程与线程.md",
+            "page": 2
+          }
+        ],
+        "hit_raw": true,
+        "hit_usable": false,
+        "reference": {
+          "doc_name": "第4章_内存管理.md",
+          "page_start": 1,
+          "page_end": 1
+        }
+      },
+      {
+        "id": "O10",
+        "category": "answerable",
+        "query": "TLB 命中有什么好处？",
+        "rejected": true,
+        "top_similarity": 0.25997745990753174,
+        "returned": [],
+        "raw_returned": [
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 1
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第3章_进程与线程.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 2
+          }
+        ],
+        "hit_raw": true,
+        "hit_usable": false,
+        "reference": {
+          "doc_name": "第4章_内存管理.md",
+          "page_start": 1,
+          "page_end": 1
+        }
+      },
+      {
+        "id": "O16",
+        "category": "answerable",
+        "query": "什么是 Belady 异常？",
+        "rejected": true,
+        "top_similarity": 0.3103426694869995,
+        "returned": [],
+        "raw_returned": [
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 1
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 2
+          },
+          {
+            "doc_name": "第3章_进程与线程.md",
+            "page": 3
+          }
+        ],
+        "hit_raw": true,
+        "hit_usable": false,
+        "reference": {
+          "doc_name": "第4章_内存管理.md",
+          "page_start": 3,
+          "page_end": 3
+        }
+      }
+    ],
+    "negative_not_rejected": [
+      {
+        "id": "N04",
+        "category": "no_answer",
+        "query": "Transformer 自注意力的计算复杂度是多少？",
+        "rejected": false,
+        "top_similarity": 0.4083511233329773,
+        "returned": [
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 2
+          },
+          {
+            "doc_name": "第3章_进程与线程.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 1
+          }
+        ],
+        "raw_returned": [
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 2
+          },
+          {
+            "doc_name": "第3章_进程与线程.md",
+            "page": 3
+          },
+          {
+            "doc_name": "第4章_内存管理.md",
+            "page": 1
+          }
+        ]
+      }
+    ]
+  },
+  "environment": {
+    "python": "3.13.13",
+    "chromadb": "0.5.23",
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+    "git_commit": "b435be5be8656811f2891fda09ac4ad8109e3f5e",
+    "git_worktree": "DIRTY_WORKTREE",
+    "source_sha256": {
+      "app/services/rag/citation_verifier.py": "d75ebe0289c5bd1c7fff91cbdb1fbd0150c060c6afe79d3637c0bb0d6e16cd79",
+      "app/services/rag/qa_pipeline.py": "6edd24d625a92b30e6f19517ba948abd9a1de43af194923a6d2d764f93786573",
+      "app/services/rag/dense_retriever.py": "01d634b2e6e27a86d770b68a3df468b5a6218d04b0a798b107faa7ec16857679",
+      "app/services/ingest/vector_store.py": "81faff5a014c0e6231849e432bc3b6c375d4763a5b017e04799da9aa6eb1b729",
+      "tests/eval_retrieval.py": "8dd8906654c02ce0514e7340ea2e3108934d08e5891e2f48f7f5cb3d4c422236"
+    },
+    "generated_at": "2026-10-24T13:24:22",
+    "command": "tests/eval_retrieval.py --report tests/eval_reports/rag_baseline_20261024.md --json tests/eval_reports/rag_baseline_latest.json"
+  },
+  "not_measured": [
+    "答案采分点覆盖与忠实度（需要真实 Chat 模型人工/盲评）",
+    "LLM 判定“课件无答案”的拒答准确率（本脚本只测阈值门控）",
+    "真实 Embedding 供应商的检索质量",
+    "v1.1 BM25/RRF/Reranker 指标"
+  ],
+  "dataset_path": "/home/muyi/study/ScholarClaw/sc-python-ai/tests/fixtures/rag_golden_dataset.json",
+  "dataset_sha256": "c0a12a546a3963c44b53849171e2e1a85f44fad3a340333191e96a0b618006da",
+  "dataset_kind": "synthetic-link-smoke",
+  "annotation": {
+    "annotator_id": null,
+    "annotated_at": null,
+    "reviewed_by": null,
+    "review_status": "NOT_ANNOTATED",
+    "annotation_spec": "真实评测时需两人独立标注：query→期望页码→采分点；第三人仲裁分歧；标注规范、仲裁记录与 PDF 快照一并入库。",
+    "note": "当前为合成替身语料，无真实课程 PDF、无人工标注，不得作为 P6 质量准出证据。"
+  }
+}

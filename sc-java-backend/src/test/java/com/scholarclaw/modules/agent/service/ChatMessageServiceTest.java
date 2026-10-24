@@ -13,6 +13,8 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.scholarclaw.modules.agent.dto.CitationItemVO;
 import com.scholarclaw.modules.agent.entity.ChatMessageEntity;
 import com.scholarclaw.modules.agent.mapper.ChatMessageMapper;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -64,7 +66,7 @@ class ChatMessageServiceTest {
         }).when(mapper).insert(any(ChatMessageEntity.class));
 
         Long id = service.appendAssistant(USER_ID, COURSE_ID, "答案",
-                List.of(new CitationItemVO("pc_1", 50001L, "a.pdf", 1, 2, "5.1", "内容")),
+                List.of(new CitationItemVO("pc_1", 50001L, "a.pdf", 1, 2, "5.1", "内容", 0.9)),
                 true, "tr_0123456789ab", 185, 1120);
 
         assertThat(id).isEqualTo(90002L);
@@ -123,6 +125,19 @@ class ChatMessageServiceTest {
         assertThat(page.nextCursor()).isNull();
         assertThat(page.items()).extracting(item -> item.messageId())
                 .containsExactly(90001L, 90002L);
+    }
+
+    @Test
+    @DisplayName("历史消息 createdAt 输出带应用时区偏移")
+    void pageCreatedAtUsesOffset() {
+        ChatMessageEntity row = row(90001L, "USER", "问");
+        row.setCreatedAt(LocalDateTime.of(2026, 10, 24, 10, 0, 0));
+        when(mapper.selectPage(USER_ID, COURSE_ID, null, 21)).thenReturn(List.of(row));
+
+        var page = service.page(USER_ID, COURSE_ID, null, 20);
+
+        assertThat(page.items().get(0).createdAt().getOffset())
+                .isEqualTo(ZoneOffset.ofHours(8));
     }
 
     @Test

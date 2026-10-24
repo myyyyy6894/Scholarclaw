@@ -88,7 +88,7 @@ class RagControllerTest {
         when(chatMessageService.page(eq(USER_ID), eq(COURSE_ID), eq(90010L), eq(20)))
                 .thenReturn(new ChatMessagePageVO(List.of(new ChatMessageVO(
                         90011L, COURSE_ID, "WEB", "ASSISTANT", "KB_QA", "答案",
-                        List.of(new CitationItemVO("pc_1", 50001L, "a.pdf", 1, 2, "5.1", "内容")),
+                        List.of(new CitationItemVO("pc_1", 50001L, "a.pdf", 1, 2, "5.1", "内容", 0.9)),
                         false, "tr_0123456789ab", 185, 1120, null)), null, false));
 
         mockMvc.perform(get("/api/v1/courses/2001/messages")

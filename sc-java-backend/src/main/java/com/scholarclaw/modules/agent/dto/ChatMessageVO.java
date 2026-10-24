@@ -2,7 +2,7 @@ package com.scholarclaw.modules.agent.dto;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /** `API-CHAT-001` 单条消息。 */
@@ -18,5 +18,5 @@ public record ChatMessageVO(
         String traceId,
         Integer retrievalCostMs,
         Integer llmFirstTokenMs,
-        LocalDateTime createdAt) {
+        OffsetDateTime createdAt) {
 }

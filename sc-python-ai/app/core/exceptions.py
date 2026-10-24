@@ -142,6 +142,17 @@ class ParentChunkFetchFailedError(NonRetryableAiError):
         super().__init__(AiErrorCode.E_RAG_03, message)
 
 
+class CitationVerificationFailedError(NonRetryableAiError):
+    """引用校验未通过（非法/超长/畸形/无有效引用）。
+
+    复用 `E-RAG-03`：当前错误码字典没有专门的引用校验码，RAG 上下文读取失败已使用该码；
+    调用方必须中止回答，不得把半截内容当作成功落库。
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(AiErrorCode.E_RAG_03, message)
+
+
 class UpstreamModelAuthError(NonRetryableAiError):
     """上游模型鉴权失败（401/403/404）。"""
 

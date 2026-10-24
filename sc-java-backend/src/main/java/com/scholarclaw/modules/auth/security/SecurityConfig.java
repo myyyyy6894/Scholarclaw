@@ -4,6 +4,7 @@ import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.common.security.SecurityErrorResponder;
 import com.scholarclaw.modules.auth.jwt.JwtService;
 import com.scholarclaw.modules.auth.service.TokenRevocationService;
+import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -44,6 +45,11 @@ public class SecurityConfig {
                 .logout(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // SSE 完成/异常时会触发 ASYNC 二次分派；此时首次 HTTP 请求已完成 JWT 鉴权，
+                        // 若再次按 anyRequest().authenticated() 鉴权，会在响应已提交后抛
+                        // AccessDeniedException，表现为 Nginx upstream prematurely closed。
+                        // 这里只放行二次分派，首次 REQUEST 仍必须通过 JWT。
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login").permitAll()
                         // 内部接口由 InternalTokenAuthFilter 保护（Python 没有 JWT，不能套 Bearer 规则）
                         .requestMatchers("/internal/**").permitAll()

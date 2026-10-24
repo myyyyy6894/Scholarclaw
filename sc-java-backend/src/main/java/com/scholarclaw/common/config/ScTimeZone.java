@@ -1,5 +1,6 @@
 package com.scholarclaw.common.config;
 
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
@@ -44,5 +45,10 @@ public final class ScTimeZone {
      */
     public static OffsetDateTime now() {
         return OffsetDateTime.now(zoneId).truncatedTo(ChronoUnit.MILLIS);
+    }
+
+    /** 把数据库 `DATETIME` 解释为应用时区，并输出带偏移量的时间。 */
+    public static OffsetDateTime toOffsetDateTime(LocalDateTime value) {
+        return value == null ? null : value.atZone(zoneId).toOffsetDateTime();
     }
 }

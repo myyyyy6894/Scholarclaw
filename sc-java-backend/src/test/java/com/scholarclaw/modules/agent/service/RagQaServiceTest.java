@@ -104,6 +104,211 @@ class RagQaServiceTest {
     }
 
     @Test
+    @DisplayName("citation 帧结构非法（空数组/标量/字段类型错误）不落库")
+    void invalidCitationFramesDoNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("citation", "[]"),
+                        new SseFrame("done", DONE)));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("citation 引用字段反序列化失败不静默变成 null")
+    void citationFieldFailureDoesNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("citation", """
+                                {"citations":[{"parent_chunk_id":"pc_50001_v1_1","doc_id":"50001",
+                                 "doc_name":"a.pdf","page_start":"第一页","page_end":2,
+                                 "section_title":null,"content":"内容","similarity_score":0.9}]}
+                                """),
+                        new SseFrame("token",
+                                "{\"delta\":\"答案\",\"is_general_supplement\":false}"),
+                        new SseFrame("done", DONE)));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("citation 缺少 similarity_score 时不落库")
+    void missingSimilarityScoreDoesNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("citation", """
+                                {"citations":[{"parent_chunk_id":"pc_50001_v1_1","doc_id":"50001",
+                                 "doc_name":"a.pdf","page_start":1,"page_end":2,
+                                 "section_title":null,"content":"内容"}]}
+                                """),
+                        new SseFrame("token",
+                                "{\"delta\":\"答案\",\"is_general_supplement\":false}"),
+                        new SseFrame("done", DONE)));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("citation doc_id 为 JSON number 时不落库")
+    void numericDocIdDoesNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("citation", """
+                                {"citations":[{"parent_chunk_id":"pc_50001_v1_1","doc_id":50001,
+                                 "doc_name":"a.pdf","page_start":1,"page_end":2,
+                                 "section_title":null,"content":"内容","similarity_score":0.9}]}
+                                """),
+                        new SseFrame("token",
+                                "{\"delta\":\"答案\",\"is_general_supplement\":false}"),
+                        new SseFrame("done", DONE)));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("citation parent_chunk_id 不符合规范时不落库")
+    void invalidParentChunkIdDoesNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("citation", """
+                                {"citations":[{"parent_chunk_id":"pc_1","doc_id":"50001",
+                                 "doc_name":"a.pdf","page_start":1,"page_end":2,
+                                 "section_title":null,"content":"内容","similarity_score":0.9}]}
+                                """),
+                        new SseFrame("token",
+                                "{\"delta\":\"答案\",\"is_general_supplement\":false}"),
+                        new SseFrame("done", DONE)));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("拒答且存在通用补充时同时保存声明与补充正文")
+    void persistsRejectionNoticeAndSupplementTogether() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        String expected = "未找到相关内容\n\n"
+                + "💡 以下为基于通用专业知识的补充参考（非本校课件原文，请注意甄别）：\n"
+                + "补充说明";
+        when(chatMessageService.appendAssistant(eq(USER_ID), eq(COURSE_ID), eq(expected),
+                any(), eq(true), anyString(), eq(110), eq(0)))
+                .thenReturn(ASSISTANT_MESSAGE_ID);
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("rejection_notice",
+                                "{\"notice_text\":\"未找到相关内容\",\"has_general_supplement\":true}"),
+                        new SseFrame("token", """
+                                {"delta":"💡 以下为基于通用专业知识的补充参考（非本校课件原文，请注意甄别）：\\n",
+                                 "is_general_supplement":true}
+                                """),
+                        new SseFrame("token",
+                                "{\"delta\":\"补充说明\",\"is_general_supplement\":true}"),
+                        new SseFrame("done",
+                                "{\"is_rejected\":true,\"retrieval_cost_ms\":110,"
+                                        + "\"llm_first_token_ms\":0,\"stripped_citation_count\":0}")));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService).appendAssistant(eq(USER_ID), eq(COURSE_ID),
+                eq(expected), any(), eq(true), anyString(), eq(110), eq(0));
+        verify(chatWindowService).append(USER_ID, COURSE_ID, "ASSISTANT", expected);
+    }
+
+    @Test
+    @DisplayName("token 帧缺少 delta/布尔标记时中止且不落库")
+    void invalidTokenFrameDoesNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("token", "{\"delta\":123}"),
+                        new SseFrame("done", DONE)));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("done 帧字段类型非法时中止且不落库")
+    void invalidDoneFrameDoesNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("citation", CITATION),
+                        new SseFrame("token",
+                                "{\"delta\":\"答案\",\"is_general_supplement\":false}"),
+                        new SseFrame("done", "{\"is_rejected\":\"no\"}")));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("正常 done 但未收到有效引用时不落库")
+    void missingCitationOnNormalAnswerDoesNotPersist() {
+        stubValidCourse();
+        when(chatMessageService.appendUser(any(), any(), any(), any(), any()))
+                .thenReturn(USER_MESSAGE_ID);
+        when(chatMessageService.recentHistory(any(), any(), any())).thenReturn(List.of());
+        when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
+                .thenReturn(handle(
+                        new SseFrame("token",
+                                "{\"delta\":\"答案\",\"is_general_supplement\":false}"),
+                        new SseFrame("done", DONE)));
+
+        service.stream(USER_ID, new RagQaRequest("2001", "问题", null));
+
+        verify(chatMessageService, never()).appendAssistant(any(), any(), any(),
+                any(), eq(false), any(), anyInt(), anyInt());
+    }
+
+    @Test
     @DisplayName("下游 error 帧不落库助手消息")
     void errorFrameDoesNotPersistAssistant() {
         stubValidCourse();
@@ -287,7 +492,7 @@ class RagQaServiceTest {
     }
 
     private static final String CITATION = """
-            {"citations":[{"parent_chunk_id":"pc_1","doc_id":"50001","doc_name":"a.pdf",
+            {"citations":[{"parent_chunk_id":"pc_50001_v1_1","doc_id":"50001","doc_name":"a.pdf",
              "page_start":1,"page_end":2,"section_title":null,"content":"内容",
              "similarity_score":0.9}]}
             """;

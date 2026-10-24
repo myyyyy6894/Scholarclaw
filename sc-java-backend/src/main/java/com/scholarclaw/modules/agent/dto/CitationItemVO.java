@@ -11,5 +11,6 @@ public record CitationItemVO(
         int pageStart,
         int pageEnd,
         String sectionTitle,
-        String content) {
+        String content,
+        Double similarityScore) {
 }

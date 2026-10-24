@@ -120,6 +120,11 @@ sc:
       # 向量清理最终失败的持久化补偿队列（由 TASK-902 GC 重放）
       vector-compensation: ${SC_MQ_INGEST_VECTOR_COMPENSATION:rag.ingest.vector-compensation}
       confirm-timeout-ms: ${SC_MQ_INGEST_CONFIRM_TIMEOUT_MS:5000}
+      # 停放/补偿队列积压巡检：当前无自动消费者，仅发现并告警（重放属 TASK-902）。
+      backlog-monitor:
+        initial-delay-ms: 60000
+        interval-ms: 300000
+        warn-threshold: 1
   # 用户时区默认值与产品基线一致（01 §FR-DDL-001）。
   # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
   # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。

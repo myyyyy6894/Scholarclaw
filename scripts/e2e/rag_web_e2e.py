@@ -111,6 +111,24 @@ ERROR_SSE_BODY = (
     '"trace_id":"tr_0123456789ab"}\n\n'
 )
 
+CITATION_FAILURE_SSE_BODY = (
+    "event:citation\n"
+    f"data:{json.dumps(CITATION_EVENT, ensure_ascii=False)}\n\n"
+    "event:token\n"
+    'data:{"delta":"模型编造的内容。","is_general_supplement":false}\n\n'
+    "event:error\n"
+    'data:{"code":"E-RAG-03","message":"引用校验未通过（存在非法引用；有效引用 0，'
+    '非法引用 1，超长标签 0，畸形标签 0）；本次实际召回切片为：'
+    '《第5章_事务处理.pdf》第14-14页。请重试或换一种问法。",'
+    '"trace_id":"tr_0123456789ab"}\n\n'
+)
+
+TAIL_ERROR_SSE_BODY = SSE_BODY + (
+    "event:error\n"
+    'data:{"code":"UPSTREAM_MODEL_ERROR","message":"连接尾部异常",'
+    '"trace_id":"tr_0123456789ab"}\n\n'
+)
+
 
 def envelope(data: object) -> dict:
     return {
@@ -142,9 +160,18 @@ def install_routes(page: Page, state: MockState) -> None:
         path = urlparse(request.url).path
         if request.method == "POST" and path == "/api/v1/rag/qa/stream":
             body = json.loads(request.post_data or "{}")
-            payload = ERROR_SSE_BODY if "触发错误" in str(body.get("query")) else SSE_BODY
+            query = str(body.get("query"))
+            if "触发引用失败" in query:
+                payload = CITATION_FAILURE_SSE_BODY
+            elif "完成后尾错误" in query:
+                payload = TAIL_ERROR_SSE_BODY
+                state.streamed = True
+            elif "触发错误" in query:
+                payload = ERROR_SSE_BODY
+            else:
+                payload = SSE_BODY
+                state.streamed = True
             state.saw_token_request = True
-            state.streamed = state.streamed or payload is SSE_BODY
             route.fulfill(status=200, headers={
                 "Content-Type": "text/event-stream; charset=utf-8",
                 "Cache-Control": "no-cache",
@@ -206,6 +233,7 @@ def main() -> int:
         page.get_by_role("button", name="发送").click()
         page.get_by_text("第5章_事务处理.pdf", exact=True).first.wait_for(timeout=5000)
         check("流式回答渲染", page.get_by_text("答案[来源：第5章_事务处理.pdf - 第14页]。").first.is_visible())
+        check("内联引用高亮", page.locator(".sc-rag__inline-citation").count() >= 1)
         check("引用卡片展示文件名与页码", page.get_by_text("第 14 页", exact=True).first.is_visible())
         page.locator(".sc-rag__citation summary").first.click()
         check("父块切片可展开", page.get_by_text(
@@ -219,10 +247,24 @@ def main() -> int:
         page.get_by_text("当前课程还没有对话").wait_for(timeout=5000)
         check("清空会话调用 DELETE 并回到空状态", state.cleared)
 
+        page.get_by_role("textbox").fill("触发引用失败")
+        page.get_by_role("button", name="发送").click()
+        page.get_by_text("引用校验未通过", exact=False).first.wait_for(timeout=5000)
+        check("引用失败时半截回答被丢弃",
+              page.get_by_text("模型编造的内容。", exact=False).count() == 0)
+        check("引用失败时引用卡片被清空",
+              page.get_by_text("第5章_事务处理.pdf", exact=True).count() == 0)
+
         page.get_by_role("textbox").fill("触发错误")
         page.get_by_role("button", name="发送").click()
         page.get_by_text("E-RAG-03", exact=False).first.wait_for(timeout=5000)
         check("错误帧与正常完成可区分", page.get_by_text("E-RAG-03", exact=False).first.is_visible())
+
+        page.get_by_role("textbox").fill("完成后尾错误")
+        page.get_by_role("button", name="发送").click()
+        page.get_by_text("答案[来源：第5章_事务处理.pdf - 第14页]。", exact=False).first.wait_for(timeout=5000)
+        check("done 后忽略传输尾错误",
+              page.get_by_text("连接尾部异常", exact=False).count() == 0)
 
         check("浏览器无 console error", not console_errors)
         page.screenshot(path=args.screenshot, full_page=True)

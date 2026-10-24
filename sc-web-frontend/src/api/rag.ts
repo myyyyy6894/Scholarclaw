@@ -16,7 +16,7 @@ export interface RagCitation {
   page_end: number
   section_title: string | null
   content: string
-  similarity_score?: number
+  similarity_score?: number | null
 }
 
 export interface CitationPayload {

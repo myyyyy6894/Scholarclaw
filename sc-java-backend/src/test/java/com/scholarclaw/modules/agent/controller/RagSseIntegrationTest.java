@@ -106,7 +106,7 @@ class RagSseIntegrationTest {
         when(pythonClient.openSseStream(anyString(), any(), anyLong(), any()))
                 .thenReturn(handle(
                         new SseFrame("citation", """
-                                {"citations":[{"parent_chunk_id":"pc_1","doc_id":"50001",
+                                {"citations":[{"parent_chunk_id":"pc_50001_v1_1","doc_id":"50001",
                                  "doc_name":"a.pdf","page_start":1,"page_end":2,
                                  "section_title":"5.1","content":"内容",
                                  "similarity_score":0.9}]}
@@ -161,6 +161,9 @@ class RagSseIntegrationTest {
                 .contains("event:citation")
                 .contains("\"user_message_id\":\"90001\"")
                 .contains("\"course_index_status\":\"ACTIVE\"")
+                .contains("\"parent_chunk_id\":\"pc_50001_v1_1\"")
+                .contains("\"doc_id\":\"50001\"")
+                .contains("\"similarity_score\":0.9")
                 .contains("event:token")
                 .contains("\"delta\":\"答案\"")
                 .contains("event:done")

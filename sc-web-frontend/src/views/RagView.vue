@@ -14,6 +14,7 @@ import {
   applyDone,
   applyInterrupted,
   applyRejection,
+  applyStreamFailure,
   applyToken,
   citationPageLabel,
   citationScoreLabel,
@@ -21,6 +22,8 @@ import {
   formatDuration,
   historyToUiMessages,
   queryError,
+  splitInlineCitations,
+  type InlineSegment,
   type UiMessage,
 } from '@/views/rag/rag-chat'
 
@@ -218,27 +221,34 @@ async function send(): Promise<void> {
           terminalReceived = true
         },
         onErrorEvent: (payload) => {
+          if (doneReceived) {
+            // done 已落库成功；忽略传输尾部错误，避免成功回答被误判为失败
+            return
+          }
           terminalReceived = true
           streamError.value = `${payload.code}: ${payload.message}`
-          applyInterrupted(assistantMessage, payload.message)
+          applyStreamFailure(assistantMessage, payload.message)
         },
         onClosed: () => {
           if (!doneReceived && !terminalReceived && !controller.signal.aborted) {
-            applyInterrupted(assistantMessage, '连接已结束，回答未完整生成。')
+            streamError.value = '连接已结束，回答未完整生成。'
+            applyStreamFailure(assistantMessage, '连接已结束，回答未完整生成。')
           }
         },
       },
       controller.signal,
     )
   } catch (error) {
-    if (controller.signal.aborted) {
+    if (doneReceived) {
+      // 已收到 done 并完成落库：忽略后续传输层异常
+    } else if (controller.signal.aborted) {
       applyInterrupted(assistantMessage, '已停止生成。')
     } else {
       const message = error instanceof ApiError
         ? `${error.code}: ${error.message}`
         : error instanceof Error ? error.message : '问答请求失败。'
       streamError.value = message
-      applyInterrupted(assistantMessage, message)
+      applyStreamFailure(assistantMessage, message)
       if (!(error instanceof ApiError)) {
         notifyError(error)
       }
@@ -321,6 +331,10 @@ async function scrollToBottom(): Promise<void> {
 
 function citationKey(citation: RagCitation): string {
   return `${citation.parent_chunk_id}-${citation.page_start}`
+}
+
+function inlineSegments(message: UiMessage): InlineSegment[] {
+  return splitInlineCitations(message.content, message.citations)
 }
 
 function messageMeta(message: UiMessage): string {
@@ -462,7 +476,12 @@ function messageMeta(message: UiMessage): string {
             <div v-if="message.noticeText !== null" class="sc-rag__notice">
               {{ message.noticeText }}
             </div>
-            <div v-if="message.content !== ''" class="sc-rag__content">{{ message.content }}</div>
+            <div v-if="message.content !== ''" class="sc-rag__content">
+              <template v-for="(segment, index) in inlineSegments(message)" :key="`seg-${index}`">
+                <span v-if="segment.citationIndex === null">{{ segment.text }}</span>
+                <span v-else class="sc-rag__inline-citation">{{ segment.text }}</span>
+              </template>
+            </div>
             <div v-if="message.supplement !== ''" class="sc-rag__supplement">
               <strong>通用知识补充（非本校课件原文）</strong>
               <p>{{ message.supplement }}</p>
@@ -706,6 +725,14 @@ function messageMeta(message: UiMessage): string {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.75;
+}
+
+.sc-rag__inline-citation {
+  padding: 0 2px;
+  border-radius: 4px;
+  background: var(--sc-brand-soft);
+  color: var(--sc-brand-strong);
+  font-weight: 600;
 }
 
 .sc-rag__notice {

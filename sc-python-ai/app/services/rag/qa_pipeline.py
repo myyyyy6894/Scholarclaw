@@ -22,13 +22,20 @@ from time import perf_counter
 from typing import Any
 
 from app.core.config import Settings
-from app.core.exceptions import AiErrorCode, NonRetryableAiError
+from app.core.exceptions import (
+    AiErrorCode,
+    CitationVerificationFailedError,
+    NonRetryableAiError,
+)
+from app.core.logging import get_logger
 from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.gateway.ssrf_safe_model_gateway import RetryPolicy, SsrfSafeModelGateway
 from app.services.rag.citation_verifier import CitationVerifier
 from app.services.rag.dense_retriever import DenseVectorRetriever
 from app.services.rag.parent_chunk_client import AuthoritativeParentChunk, ParentChunkClient
 from app.services.rag.retriever_base import RetrievalRequest, RetrievalResult
+
+logger = get_logger(__name__)
 
 #: 模型明确表示“召回父块均不含答案”的固定哨兵；不得出现在最终回答中。
 NO_ANSWER_SENTINEL = "NO_ANSWER_IN_COURSE"
@@ -187,6 +194,8 @@ class RagQaPipeline:
                         continue
                     decided = True
                     pending_safe += verifier.feed(sentinel_buffer)
+                    if verifier.failed:
+                        raise _citation_failure(verifier, parents)
                     if pending_safe.strip():
                         if not citation_sent:
                             citation_sent = True
@@ -196,6 +205,8 @@ class RagQaPipeline:
                         pending_safe = ""
                     continue
                 pending_safe += verifier.feed(delta)
+                if verifier.failed:
+                    raise _citation_failure(verifier, parents)
                 if pending_safe.strip():
                     if not citation_sent:
                         citation_sent = True
@@ -208,9 +219,16 @@ class RagQaPipeline:
             if _is_no_answer(sentinel_buffer):
                 rejected_by_llm = True
             else:
-                pending_safe += verifier.feed(sentinel_buffer) + verifier.flush()
+                pending_safe += verifier.feed(sentinel_buffer)
+                if verifier.failed:
+                    raise _citation_failure(verifier, parents)
+                pending_safe += verifier.flush()
+                if verifier.failed:
+                    raise _citation_failure(verifier, parents)
         elif not rejected_by_llm:
             pending_safe += verifier.flush()
+            if verifier.failed:
+                raise _citation_failure(verifier, parents)
 
         if not rejected_by_llm:
             if pending_safe.strip():
@@ -225,6 +243,9 @@ class RagQaPipeline:
                 pending_safe = ""
             if not emitted_any:
                 rejected_by_llm = True
+            elif verifier.valid_count == 0:
+                # 有正文但没有任何可验证的课件引用：不得当作成功回答
+                raise _citation_failure(verifier, parents, no_valid=True)
 
         if rejected_by_llm:
             async for event in self._rejection_stream(request, retrieval_cost_ms):
@@ -257,8 +278,32 @@ class RagQaPipeline:
         tail = verifier.flush()
         if tail:
             yield TokenEvent(tail, True)
+        if verifier.failed:
+            logger.warning("通用补充中出现非法引用，已剔除 valid=%s invalid=%s overlong=%s malformed=%s",
+                           verifier.valid_count, verifier.invalid_count,
+                           verifier.overlong_count, verifier.malformed_count)
         yield DoneEvent(True, retrieval_cost_ms, first_token_ms or 0,
                         verifier.stripped_count)
+
+
+def _citation_failure(verifier: CitationVerifier,
+                      parents: tuple[AuthoritativeParentChunk, ...],
+                      *, no_valid: bool = False) -> CitationVerificationFailedError:
+    slices = "、".join(
+        f"《{parent.doc_name}》第{parent.page_start}-{parent.page_end}页"
+        for parent in parents
+    ) or "无"
+    reason = "未检测到有效引用" if no_valid else "存在非法引用"
+    message = (
+        f"引用校验未通过（{reason}；有效引用 {verifier.valid_count}，"
+        f"非法引用 {verifier.invalid_count}，超长标签 {verifier.overlong_count}，"
+        f"畸形标签 {verifier.malformed_count}）；本次实际召回切片为：{slices}。"
+        "请重试或换一种问法。"
+    )
+    logger.warning("引用校验失败 valid=%s invalid=%s overlong=%s malformed=%s",
+                   verifier.valid_count, verifier.invalid_count,
+                   verifier.overlong_count, verifier.malformed_count)
+    return CitationVerificationFailedError(message)
 
 
 def _validate_request(request: RagQaRequest) -> None:

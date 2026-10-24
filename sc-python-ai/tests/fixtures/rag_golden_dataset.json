@@ -1,0 +1,666 @@
+{
+  "version": "1.0",
+  "created_at": "2026-10-23",
+  "description": "ScholarClaw RAG 合成链路冒烟 fixture（40 题，8 题负样本）。语料为两门课程的 12 页合成 Markdown，仅用于验证检索/引用/拒答代码路径与报告结构；不是真实课程 PDF，也不是人工标注的 Golden Dataset，不得作为 P6 质量准出或 τ_reject 标定依据。",
+  "dataset_kind": "synthetic-link-smoke",
+  "source": "synthetic_markdown_fixture",
+  "annotation": {
+    "annotator_id": null,
+    "annotated_at": null,
+    "reviewed_by": null,
+    "review_status": "NOT_ANNOTATED",
+    "annotation_spec": "真实评测时需两人独立标注：query→期望页码→采分点；第三人仲裁分歧；标注规范、仲裁记录与 PDF 快照一并入库。",
+    "note": "当前为合成替身语料，无真实课程 PDF、无人工标注，不得作为 P6 质量准出证据。"
+  },
+  "corpus_snapshot": {
+    "note": "真实评测时每个 doc_key 必须填写源 PDF 相对路径与 SHA-256；当前为空表示未提供真实语料。",
+    "documents": {}
+  },
+  "courses": [
+    {
+      "key": "db",
+      "course_name": "数据库系统概念",
+      "user_id": "10001",
+      "course_id": "2001",
+      "course_index_version": 1,
+      "documents": [
+        {
+          "key": "db_tx",
+          "doc_id": "50001",
+          "doc_name": "第5章_事务处理.md",
+          "parse_version": 1,
+          "pages": [
+            {
+              "page": 1,
+              "text": "事务是数据库操作的逻辑单元。事务具有 ACID 四个特性：原子性要求事务中的操作要么全部完成要么全部不做；一致性要求事务把数据库从一个一致状态转换到另一个一致状态；隔离性要求并发事务之间互不干扰；持久性要求事务提交后的修改即使系统故障也不会丢失。"
+            },
+            {
+              "page": 2,
+              "text": "两阶段锁协议(2PL)把加锁和解锁分为两个阶段。扩展阶段只能申请锁，不能释放任何锁；收缩阶段只能释放锁，不能再申请任何锁。严格两阶段锁要求事务持有所有排他锁直到提交或回滚。2PL 保证可串行化，但可能产生死锁，数据库需要通过死锁检测或超时来处理。"
+            },
+            {
+              "page": 3,
+              "text": "SQL 标准定义了四种隔离级别：读未提交、读已提交、可重复读和串行化。读未提交可能产生脏读；读已提交避免脏读但可能不可重复读；可重复读避免不可重复读但可能幻读；串行化避免幻读。脏读是指读取了其他事务尚未提交的数据。"
+            }
+          ]
+        },
+        {
+          "key": "db_index",
+          "doc_id": "50002",
+          "doc_name": "第6章_索引与查询优化.md",
+          "parse_version": 1,
+          "pages": [
+            {
+              "page": 1,
+              "text": "B+树是一种平衡多路搜索树，内部节点只存键和指针，叶子节点存储键和数据指针。B+树扇出大、树高低，适合磁盘存储。所有叶子节点通过双向链表连接，因此范围查询可以顺序扫描叶子节点，效率很高。"
+            },
+            {
+              "page": 2,
+              "text": "聚簇索引决定数据行的物理存储顺序，叶子节点直接存放整行数据；二级索引的叶子节点存放主键值，查询非索引列时需要根据主键回到聚簇索引查找，这个过程叫回表。覆盖索引可以避免回表。"
+            },
+            {
+              "page": 3,
+              "text": "查询优化器会估算选择率、访问路径和连接顺序。选择率是满足条件的行数占总行数的比例；选择率越低，索引越有价值。多表连接时优化器比较不同连接顺序的代价，选择代价较小的执行计划。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "os",
+      "course_name": "操作系统",
+      "user_id": "10001",
+      "course_id": "3001",
+      "course_index_version": 1,
+      "documents": [
+        {
+          "key": "os_proc",
+          "doc_id": "60001",
+          "doc_name": "第3章_进程与线程.md",
+          "parse_version": 1,
+          "pages": [
+            {
+              "page": 1,
+              "text": "进程是程序的一次执行实例。进程有三种基本状态：就绪、运行和阻塞。进程控制块 PCB 保存进程标识、程序计数器、寄存器现场、调度信息和资源清单。进程创建时分配 PCB，进程结束时回收 PCB。"
+            },
+            {
+              "page": 2,
+              "text": "线程是 CPU 调度的基本单位，进程是资源分配的基本单位。同一进程内的线程共享地址空间和打开文件，但拥有独立的栈和寄存器。用户级线程由用户态线程库管理，切换快，但一个线程阻塞会导致整个进程阻塞；内核级线程由操作系统管理，可以并行，但切换开销较大。"
+            },
+            {
+              "page": 3,
+              "text": "上下文切换保存当前进程的寄存器、程序计数器和栈指针，并恢复下一个进程的现场。上下文切换有开销，频繁切换会降低 CPU 利用率。抢占式调度允许操作系统强制暂停正在运行的进程，把 CPU 分配给更高优先级的就绪进程。"
+            }
+          ]
+        },
+        {
+          "key": "os_mem",
+          "doc_id": "60002",
+          "doc_name": "第4章_内存管理.md",
+          "parse_version": 1,
+          "pages": [
+            {
+              "page": 1,
+              "text": "分页把虚拟地址空间划分为固定大小的页，把物理内存划分为同样大小的页框。页表记录虚拟页号到物理页框号的映射。CPU 每次访问内存先查页表；TLB 是页表的高速缓存，命中 TLB 可以避免访问内存中的页表。"
+            },
+            {
+              "page": 2,
+              "text": "虚拟内存让进程拥有比物理内存更大的地址空间。访问的页不在内存时触发缺页中断，操作系统把页从磁盘调入内存。内存不足时通过页面置换选择一个页面换出。"
+            },
+            {
+              "page": 3,
+              "text": "常见页面置换算法包括 FIFO、LRU 和 Clock。FIFO 按进入内存的先后顺序淘汰页面；LRU 淘汰最长时间未被访问的页面；Clock 使用访问位循环扫描。FIFO 可能出现 Belady 异常，即增加页框数反而导致缺页次数增加。"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "D01",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "事务的 ACID 四个特性分别是什么？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "原子性",
+        "一致性",
+        "隔离性",
+        "持久性"
+      ]
+    },
+    {
+      "id": "D02",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "事务的原子性要求是什么？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "要么全部完成要么全部不做"
+      ]
+    },
+    {
+      "id": "D03",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "事务持久性在系统故障时意味着什么？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "提交后的修改不会丢失"
+      ]
+    },
+    {
+      "id": "D04",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "隔离性对并发事务有什么要求？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "并发事务互不干扰"
+      ]
+    },
+    {
+      "id": "D05",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "两阶段锁协议 2PL 分为哪两个阶段？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "扩展阶段",
+        "收缩阶段"
+      ]
+    },
+    {
+      "id": "D06",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "2PL 的扩展阶段允许释放锁吗？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "只能申请锁",
+        "不能释放任何锁"
+      ]
+    },
+    {
+      "id": "D07",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "2PL 的收缩阶段有什么限制？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "只能释放锁",
+        "不能再申请锁"
+      ]
+    },
+    {
+      "id": "D08",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "两阶段锁协议为什么可能产生死锁？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "2PL 保证可串行化",
+        "可能产生死锁",
+        "死锁检测或超时"
+      ]
+    },
+    {
+      "id": "D09",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "SQL 标准定义了哪四种隔离级别？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "读未提交",
+        "读已提交",
+        "可重复读",
+        "串行化"
+      ]
+    },
+    {
+      "id": "D10",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "什么是脏读？",
+      "reference": {
+        "doc_name": "第5章_事务处理.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "读取其他事务尚未提交的数据"
+      ]
+    },
+    {
+      "id": "D11",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "B+ 树为什么适合范围查询？",
+      "reference": {
+        "doc_name": "第6章_索引与查询优化.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "叶子节点双向链表",
+        "顺序扫描"
+      ]
+    },
+    {
+      "id": "D12",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "B+ 树的叶子节点是如何连接的？",
+      "reference": {
+        "doc_name": "第6章_索引与查询优化.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "双向链表"
+      ]
+    },
+    {
+      "id": "D13",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "聚簇索引和二级索引有什么区别？",
+      "reference": {
+        "doc_name": "第6章_索引与查询优化.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "聚簇索引叶子节点存放整行",
+        "二级索引叶子节点存放主键"
+      ]
+    },
+    {
+      "id": "D14",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "数据库查询中的回表是什么意思？",
+      "reference": {
+        "doc_name": "第6章_索引与查询优化.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "根据主键回到聚簇索引查找"
+      ]
+    },
+    {
+      "id": "D15",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "查询优化器如何利用选择率？",
+      "reference": {
+        "doc_name": "第6章_索引与查询优化.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "选择率越低索引越有价值"
+      ]
+    },
+    {
+      "id": "D16",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "多表连接时优化器如何选择连接顺序？",
+      "reference": {
+        "doc_name": "第6章_索引与查询优化.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "比较代价",
+        "选择代价较小的执行计划"
+      ]
+    },
+    {
+      "id": "O01",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "进程有哪三种基本状态？",
+      "reference": {
+        "doc_name": "第3章_进程与线程.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "就绪",
+        "运行",
+        "阻塞"
+      ]
+    },
+    {
+      "id": "O02",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "进程控制块 PCB 保存哪些信息？",
+      "reference": {
+        "doc_name": "第3章_进程与线程.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "进程标识",
+        "程序计数器",
+        "寄存器现场",
+        "调度信息",
+        "资源清单"
+      ]
+    },
+    {
+      "id": "O03",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "线程和进程的主要区别是什么？",
+      "reference": {
+        "doc_name": "第3章_进程与线程.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "线程是 CPU 调度基本单位",
+        "进程是资源分配基本单位",
+        "共享地址空间"
+      ]
+    },
+    {
+      "id": "O04",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "用户级线程有什么优缺点？",
+      "reference": {
+        "doc_name": "第3章_进程与线程.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "切换快",
+        "一个线程阻塞导致整个进程阻塞"
+      ]
+    },
+    {
+      "id": "O05",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "内核级线程有什么特点？",
+      "reference": {
+        "doc_name": "第3章_进程与线程.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "由操作系统管理",
+        "可以并行",
+        "切换开销较大"
+      ]
+    },
+    {
+      "id": "O06",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "上下文切换需要保存哪些现场信息？",
+      "reference": {
+        "doc_name": "第3章_进程与线程.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "寄存器",
+        "程序计数器",
+        "栈指针"
+      ]
+    },
+    {
+      "id": "O07",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "什么是抢占式调度？",
+      "reference": {
+        "doc_name": "第3章_进程与线程.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "强制暂停运行进程",
+        "分配给更高优先级就绪进程"
+      ]
+    },
+    {
+      "id": "O08",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "分页机制如何完成虚拟地址到物理地址的转换？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "虚拟页号到物理页框号",
+        "页表映射"
+      ]
+    },
+    {
+      "id": "O09",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "页表的作用是什么？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "记录虚拟页号到物理页框号的映射"
+      ]
+    },
+    {
+      "id": "O10",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "TLB 命中有什么好处？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "key_points": [
+        "避免访问内存中的页表",
+        "页表高速缓存"
+      ]
+    },
+    {
+      "id": "O11",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "虚拟内存解决了什么问题？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "地址空间大于物理内存"
+      ]
+    },
+    {
+      "id": "O12",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "缺页中断发生时操作系统做什么？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "把页从磁盘调入内存"
+      ]
+    },
+    {
+      "id": "O13",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "内存不足时页面置换起什么作用？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 2,
+        "page_end": 2
+      },
+      "key_points": [
+        "选择一个页面换出"
+      ]
+    },
+    {
+      "id": "O14",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "FIFO 页面置换算法如何选择淘汰页面？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "按进入内存的先后顺序"
+      ]
+    },
+    {
+      "id": "O15",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "LRU 页面置换算法淘汰哪个页面？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "最长时间未被访问的页面"
+      ]
+    },
+    {
+      "id": "O16",
+      "course_key": "os",
+      "category": "answerable",
+      "query": "什么是 Belady 异常？",
+      "reference": {
+        "doc_name": "第4章_内存管理.md",
+        "page_start": 3,
+        "page_end": 3
+      },
+      "key_points": [
+        "增加页框数反而导致缺页次数增加",
+        "FIFO"
+      ]
+    },
+    {
+      "id": "N01",
+      "course_key": "db",
+      "category": "no_answer",
+      "query": "量子计算中的 Shor 算法如何分解大整数？",
+      "reference": null,
+      "expected": "rejection"
+    },
+    {
+      "id": "N02",
+      "course_key": "db",
+      "category": "no_answer",
+      "query": "如何用 React 实现虚拟列表？",
+      "reference": null,
+      "expected": "rejection"
+    },
+    {
+      "id": "N03",
+      "course_key": "os",
+      "category": "no_answer",
+      "query": "TCP 三次握手为什么需要三次？",
+      "reference": null,
+      "expected": "rejection"
+    },
+    {
+      "id": "N04",
+      "course_key": "os",
+      "category": "no_answer",
+      "query": "Transformer 自注意力的计算复杂度是多少？",
+      "reference": null,
+      "expected": "rejection"
+    },
+    {
+      "id": "N05",
+      "course_key": "db",
+      "category": "low_relevance",
+      "query": "数据库课程的成绩如何计算？",
+      "reference": null,
+      "expected": "rejection"
+    },
+    {
+      "id": "N06",
+      "course_key": "os",
+      "category": "low_relevance",
+      "query": "操作系统的就业前景怎么样？",
+      "reference": null,
+      "expected": "rejection"
+    },
+    {
+      "id": "N07",
+      "course_key": "os",
+      "category": "cross_course",
+      "query": "B+ 树叶子节点如何通过链表支持范围查询？",
+      "reference": null,
+      "expected": "rejection",
+      "note": "答案位于数据库课程，操作系统课程不应返回该内容"
+    },
+    {
+      "id": "N08",
+      "course_key": "db",
+      "category": "cross_course",
+      "query": "进程上下文切换需要保存哪些寄存器？",
+      "reference": null,
+      "expected": "rejection",
+      "note": "答案位于操作系统课程，数据库课程不应返回该内容"
+    }
+  ]
+}

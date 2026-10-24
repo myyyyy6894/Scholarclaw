@@ -34,6 +34,9 @@ class ChromaVectorStore:
 
     def replace_document(self, context: ParseContext, children: list[ChildChunk],
                          embeddings: list[list[float]]) -> None:
+        if not context.embedding_model or not context.embedding_model.strip():
+            raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR,
+                                      "写入向量时 Embedding 模型不能为空。")
         if len(children) != len(embeddings):
             raise NonRetryableAiError(AiErrorCode.INTERNAL_ERROR,
                                       "子块数量与向量数量不一致。")
@@ -83,7 +86,7 @@ class ChromaVectorStore:
     def query_children(self, *, user_id: str, course_id: str, course_index_version: int,
                        valid_doc_ids: tuple[str, ...] | list[str],
                        query_embedding: list[float], top_k: int,
-                       embedding_model: str | None = None) -> list[ChildVectorMatch]:
+                       embedding_model: str) -> list[ChildVectorMatch]:
         """在当前版本 Collection 中执行课程范围内的子块向量检索。
 
         * 只读：不创建 Collection；集合不存在视为"尚无索引"，返回空列表；
@@ -93,6 +96,9 @@ class ChromaVectorStore:
         """
         if top_k < 1:
             raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "检索 Top-K 必须为正整数。")
+        if not embedding_model or not embedding_model.strip():
+            raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR,
+                                      "检索时 Embedding 模型不能为空。")
         if not isinstance(course_index_version, int) or course_index_version < 1:
             raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR,
                                       "课程索引版本必须为正整数。")
@@ -128,7 +134,8 @@ class ChromaVectorStore:
             raise RetryableAiError(AiErrorCode.INTERNAL_ERROR,
                                    "向量检索失败。") from error
         return _to_matches(raw, allowed_doc_ids=set(doc_ids),
-                           expected_model=embedding_model)
+                           expected_model=embedding_model,
+                           expected_version=course_index_version)
 
     def collection_name(self, user_id: str, course_id: str, version: int) -> str:
         return f"sc_u{user_id}_c{course_id}_v{version}"
@@ -262,7 +269,8 @@ def _first(value) -> list:
 
 
 def _to_matches(raw, *, allowed_doc_ids: set[int],
-                expected_model: str | None) -> list[ChildVectorMatch]:
+                expected_model: str | None,
+                expected_version: int | None = None) -> list[ChildVectorMatch]:
     ids = _first((raw or {}).get("ids"))
     metadatas = _first((raw or {}).get("metadatas"))
     documents = _first((raw or {}).get("documents"))
@@ -271,7 +279,8 @@ def _to_matches(raw, *, allowed_doc_ids: set[int],
     for chunk_id, metadata, content, distance in zip(ids, metadatas, documents, distances):
         match = _to_match(chunk_id, metadata, content, distance,
                           allowed_doc_ids=allowed_doc_ids,
-                          expected_model=expected_model)
+                          expected_model=expected_model,
+                          expected_version=expected_version)
         if match is not None:
             matches.append(match)
     matches.sort(key=lambda item: item.similarity, reverse=True)
@@ -279,7 +288,8 @@ def _to_matches(raw, *, allowed_doc_ids: set[int],
 
 
 def _to_match(chunk_id, metadata, content, distance, *, allowed_doc_ids: set[int],
-              expected_model: str | None) -> ChildVectorMatch | None:
+              expected_model: str | None,
+              expected_version: int | None = None) -> ChildVectorMatch | None:
     if not isinstance(metadata, dict) or not metadata.get("parent_chunk_id"):
         logger.warning("跳过缺少 parent_chunk_id 的向量记录 chunk_id=%s", chunk_id)
         return None
@@ -296,9 +306,14 @@ def _to_match(chunk_id, metadata, content, distance, *, allowed_doc_ids: set[int
         logger.warning("丢弃不在 valid_doc_ids 内的向量记录 chunk_id=%s doc_id=%s",
                        chunk_id, doc_id)
         return None
-    if expected_model and metadata.get("embedding_model") not in (None, "", expected_model):
-        logger.warning("丢弃 Embedding 模型不一致的向量记录 chunk_id=%s", chunk_id)
+    if metadata.get("embedding_model") != expected_model:
+        logger.warning("丢弃 Embedding 模型缺失或不一致的向量记录 chunk_id=%s", chunk_id)
         return None
+    if expected_version is not None:
+        raw_version = metadata.get("course_index_version")
+        if raw_version is not None and _optional_int(raw_version) != expected_version:
+            logger.warning("丢弃索引版本陈旧的向量记录 chunk_id=%s", chunk_id)
+            return None
     return ChildVectorMatch(
         chunk_id=str(chunk_id),
         parent_chunk_id=str(metadata["parent_chunk_id"]),

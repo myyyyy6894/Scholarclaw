@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0、P1、P2、P3、P4、P5 已全部验收 `DONE`（P2 于 2026-10-20、P3 于 2026-10-21、P4 于 2026-10-22、P5 于 2026-10-23 验收通过）；下一阶段 P6 / TASK-601。** P5 覆盖上传/重试/重建/课程切换的 MQ 生产、Python 解析消费者、`/parse-context` 与 `/ingest-result`、ChromaDB 索引、DLQ/重试/巡检、默认 Embedding 迁移与真实 MySQL RR 竞态联调；Python 消费者默认开启。**P5 边界：** 站内通知属 TASK-802（P8），物理文件删除与 `DELETED` 终态属 TASK-901/902（P9），均未计入 P5 完成能力。真实文字版 PDF 已通过 `scripts/e2e/ingest_e2e.py` 完成完整闭环；`browser_p4_e2e.py` 覆盖重试/重建与迁移弹窗。仓库内 P4 冒烟脚本仍使用 SQL 夹具构造 READY，不代表真实解析闭环。 P0-07（通读 `docs/03`/`docs/04`）已于 2026-10-19 完成。仓库已有基线提交（分支 `main`），7 个容器实测 `healthy`，入口 `http://127.0.0.1:80`。任务状态以 `TASK_TRACKER.md` §1 为准。
+**当前进度：P0~P5 已验收 `DONE`；P6（TASK-601~606）已实现并处于 `IN_REVIEW`，尚未验收。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线。**P6 代码阻断（SSE ASYNC 安全链、建流前 JSON 错误、CitationVerifier 硬红线、畸形来源标签、PO-04 声明落库、citation 帧严格校验、Embedding 模型严格匹配、内联引用高亮、队列积压告警）已修复，并完成真实 Nginx→Java→Python→MySQL/Chroma + 浏览器联调。但 TASK-606 缺少真实课程 PDF、人工标注与真实供应商 Key，质量证据不成立；P6 不可验收，不得进入 P7。** 真实供应商 E2E 未执行；当前评测数字来自确定性哈希替身，不代表真实检索质量。任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 

@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.api.internal_v1.endpoints_rag import _event_stream, get_rag_qa_pipeline
-from app.core.exceptions import ParentChunkFetchFailedError
+from app.core.exceptions import CitationVerificationFailedError, ParentChunkFetchFailedError
 from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.rag.qa_pipeline import (
     ChatTurn,
@@ -140,6 +140,20 @@ def test_qa_stream_maps_pipeline_error_to_error_frame(stream_client) -> None:
     assert "event: done" not in response.text
 
 
+def test_qa_stream_maps_citation_failure_message(stream_client) -> None:
+    pipeline = FakePipeline(error=CitationVerificationFailedError(
+        "引用校验未通过（存在非法引用）；本次实际召回切片为：《第5章.pdf》第1-2页。"))
+    _fastapi(stream_client).dependency_overrides[get_rag_qa_pipeline] = lambda: pipeline
+
+    response = stream_client.post("/internal/ai/v1/rag/qa-stream", json=_body())
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert '"code":"E-RAG-03"' in response.text
+    assert "引用校验未通过" in response.text
+    assert "第1-2页" in response.text
+
+
 def test_qa_stream_rejects_body_and_header_identity_mismatch(stream_client) -> None:
     _fastapi(stream_client).dependency_overrides[get_rag_qa_pipeline] = lambda: FakePipeline()
 
@@ -198,3 +212,46 @@ async def test_cancelled_stream_does_not_emit_error_frame() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await anext(generator)
+
+
+@pytest.mark.asyncio
+async def test_real_pipeline_malformed_citation_emits_error_without_done() -> None:
+    from app.core.config import load_settings
+    from app.services.rag.parent_chunk_client import AuthoritativeParentChunk
+    from app.services.rag.qa_pipeline import RagQaPipeline
+    from app.services.rag.retriever_base import ParentMatch, RetrievalResult
+
+    class Retriever:
+        async def retrieve(self, request):
+            return RetrievalResult(
+                parents=(ParentMatch("pc_50001_v1_1", "50001", 0.9),),
+                top_similarity=0.9, below_threshold=False)
+
+    class ParentClient:
+        async def fetch(self, **kwargs):
+            return (AuthoritativeParentChunk(
+                "pc_50001_v1_1", "50001", "第5章.pdf", 1, 2, "5.2", "内容"),)
+
+    class Gateway:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def stream_chat(self, endpoint, payload, **kwargs):
+            yield "真实结论[来源：第5章.pdf - 第1页]"
+            yield "；伪来源[来源不存在.pdf - 第999页]"
+
+    pipeline = RagQaPipeline(
+        load_settings({}), retriever=Retriever(), parent_client=ParentClient(),
+        gateway_factory=lambda: Gateway())
+
+    frames = [chunk async for chunk in _event_stream(pipeline, _request())]
+    body = "".join(frames)
+
+    assert "event: error" in body
+    assert "E-RAG-03" in body
+    assert "畸形标签 1" in body
+    assert "event: done" not in body
+    assert "来源不存在.pdf" not in body

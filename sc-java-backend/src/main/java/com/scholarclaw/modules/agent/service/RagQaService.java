@@ -1,9 +1,9 @@
 package com.scholarclaw.modules.agent.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.scholarclaw.common.client.PythonAiEngineClient;
 import com.scholarclaw.common.client.PythonAiEngineClient.SseFrame;
@@ -21,6 +21,7 @@ import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -28,6 +29,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -53,6 +55,12 @@ public class RagQaService {
     private static final long EMITTER_TIMEOUT_MS = 120_000L;
     private static final long FIRST_PACKET_TIMEOUT_MS = 15_000L;
     private static final Duration UPSTREAM_READ_TIMEOUT = Duration.ofSeconds(120);
+    /** 父块主键规范：`pc_{doc_id}_v{parse_version}_{chunk_seq}`（`03` §4.4 / chunker）。 */
+    private static final Pattern PARENT_CHUNK_ID = Pattern.compile(
+            "^pc_[1-9]\\d*_v[1-9]\\d*_[1-9]\\d*$");
+    private static final Pattern DECIMAL_ID = Pattern.compile("^[1-9]\\d*$");
+    private static final String GENERAL_SUPPLEMENT_PREFIX =
+            "💡 以下为基于通用专业知识的补充参考（非本校课件原文，请注意甄别）：";
 
     private final CourseService courseService;
     private final KnowledgeDocService knowledgeDocService;
@@ -187,60 +195,184 @@ public class RagQaService {
                 default -> log.debug("忽略未知 RAG 事件 event={} trace_id={}",
                         frame.event(), context.traceId);
             }
-        } catch (JsonProcessingException error) {
-            log.warn("RAG 下游帧不是合法 JSON event={} trace_id={}",
-                    frame.event(), context.traceId);
+        } catch (JsonProcessingException | FrameInvalidException error) {
+            log.warn("RAG 下游帧结构非法 event={} trace_id={} reason={}",
+                    frame.event(), context.traceId, error.getMessage());
             finishWithError(context, "INTERNAL_ERROR", "回答生成失败，请稍后重试。");
         }
     }
 
     private void forwardCitation(StreamContext context, String data) throws JsonProcessingException {
-        ObjectNode node = (ObjectNode) objectMapper.readTree(data);
-        context.citationsJson = node.has("citations") ? node.get("citations").toString() : null;
-        node.put("user_message_id", String.valueOf(context.userMessageId));
-        node.put("course_index_status", context.course.getIndexStatus());
-        node.putNull("rebuild_progress_note");
-        send(context, "citation", node.toString());
+        ObjectNode node = requireObject(data, "citation");
+        JsonNode citationsNode = node.get("citations");
+        if (citationsNode == null || !citationsNode.isArray()
+                || citationsNode.isEmpty() || citationsNode.size() > 4) {
+            throw new FrameInvalidException("citation.citations 必须为 1~4 个数组元素");
+        }
+        List<CitationItemVO> citations = new ArrayList<>(citationsNode.size());
+        for (JsonNode item : citationsNode) {
+            citations.add(parseCitation(item));
+        }
+        context.citations = List.copyOf(citations);
+        ObjectNode outbound = objectMapper.createObjectNode();
+        // 出站只序列化已验证 DTO，避免把 Python 原始 JSON 原样透传给客户端
+        ArrayNode outboundCitations = outbound.putArray("citations");
+        for (CitationItemVO citation : citations) {
+            ObjectNode out = outboundCitations.addObject();
+            out.put("parent_chunk_id", citation.parentChunkId());
+            out.put("doc_id", String.valueOf(citation.docId()));
+            out.put("doc_name", citation.docName());
+            out.put("page_start", citation.pageStart());
+            out.put("page_end", citation.pageEnd());
+            if (citation.sectionTitle() == null) {
+                out.putNull("section_title");
+            } else {
+                out.put("section_title", citation.sectionTitle());
+            }
+            out.put("content", citation.content());
+            out.put("similarity_score", citation.similarityScore());
+        }
+        outbound.put("user_message_id", String.valueOf(context.userMessageId));
+        outbound.put("course_index_status", context.course.getIndexStatus());
+        outbound.putNull("rebuild_progress_note");
+        send(context, "citation", outbound.toString());
     }
 
     private void forwardRejection(StreamContext context, String data) throws JsonProcessingException {
-        ObjectNode node = (ObjectNode) objectMapper.readTree(data);
+        ObjectNode node = requireObject(data, "rejection_notice");
         JsonNode notice = node.get("notice_text");
-        if (notice != null && notice.isTextual()) {
-            context.rejectionNotice = notice.asText();
+        if (notice == null || !notice.isTextual() || notice.asText().isBlank()) {
+            throw new FrameInvalidException("rejection_notice.notice_text 必须为非空字符串");
         }
+        JsonNode hasSupplement = node.get("has_general_supplement");
+        if (hasSupplement == null || !hasSupplement.isBoolean()) {
+            throw new FrameInvalidException("rejection_notice.has_general_supplement 必须为布尔值");
+        }
+        context.rejectionNotice = notice.asText();
         node.put("user_message_id", String.valueOf(context.userMessageId));
         send(context, "rejection_notice", node.toString());
     }
 
     private void forwardToken(StreamContext context, String data) throws JsonProcessingException {
-        ObjectNode node = (ObjectNode) objectMapper.readTree(data);
+        ObjectNode node = requireObject(data, "token");
         JsonNode delta = node.get("delta");
-        if (delta != null && delta.isTextual()) {
-            context.answer.append(delta.asText());
+        JsonNode supplement = node.get("is_general_supplement");
+        if (delta == null || !delta.isTextual() || delta.asText().isEmpty()) {
+            throw new FrameInvalidException("token.delta 必须为非空字符串");
         }
+        if (supplement == null || !supplement.isBoolean()) {
+            throw new FrameInvalidException("token.is_general_supplement 必须为布尔值");
+        }
+        context.answer.append(delta.asText());
         send(context, "token", node.toString());
     }
 
-    private void handleDone(StreamContext context, String data) {
-        JsonNode node;
+    private ObjectNode requireObject(String data, String event) throws JsonProcessingException {
+        JsonNode node = objectMapper.readTree(data);
+        if (node == null || !node.isObject()) {
+            throw new FrameInvalidException(event + " 帧必须是 JSON 对象");
+        }
+        return (ObjectNode) node;
+    }
+
+    private CitationItemVO parseCitation(JsonNode item) {
+        if (item == null || !item.isObject()) {
+            throw new FrameInvalidException("citation 元素必须是对象");
+        }
+        String parentChunkId = requiredText(item, "parent_chunk_id");
+        if (!PARENT_CHUNK_ID.matcher(parentChunkId).matches()) {
+            throw new FrameInvalidException("parent_chunk_id 必须符合 pc_{doc_id}_v{version}_{seq}");
+        }
+        Long docId = requiredDecimalId(item.get("doc_id"), "doc_id");
+        String docName = requiredText(item, "doc_name");
+        int pageStart = requiredPositiveInt(item.get("page_start"), "page_start");
+        int pageEnd = requiredPositiveInt(item.get("page_end"), "page_end");
+        if (pageEnd < pageStart) {
+            throw new FrameInvalidException("page_end 不能小于 page_start");
+        }
+        JsonNode sectionTitle = item.get("section_title");
+        if (sectionTitle != null && !sectionTitle.isNull() && !sectionTitle.isTextual()) {
+            throw new FrameInvalidException("section_title 必须为字符串或 null");
+        }
+        String content = requiredText(item, "content");
+        double similarityScore = requiredFiniteScore(item.get("similarity_score"));
+        return new CitationItemVO(parentChunkId, docId, docName,
+                pageStart, pageEnd,
+                sectionTitle == null || sectionTitle.isNull() ? null : sectionTitle.asText(),
+                content, similarityScore);
+    }
+
+    private static String requiredText(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isTextual() || value.asText().isBlank()) {
+            throw new FrameInvalidException(field + " 必须为非空字符串");
+        }
+        return value.asText();
+    }
+
+    private static Long requiredDecimalId(JsonNode value, String field) {
+        if (value == null || !value.isTextual()
+                || !DECIMAL_ID.matcher(value.asText()).matches()) {
+            throw new FrameInvalidException(field + " 必须为十进制字符串");
+        }
         try {
-            node = objectMapper.readTree(data);
-        } catch (JsonProcessingException error) {
+            long parsed = Long.parseLong(value.asText());
+            if (parsed <= 0) {
+                throw new NumberFormatException("non-positive");
+            }
+            return parsed;
+        } catch (NumberFormatException error) {
+            throw new FrameInvalidException(field + " 必须为十进制字符串");
+        }
+    }
+
+    private static double requiredFiniteScore(JsonNode value) {
+        if (value == null || !value.isNumber() || !Double.isFinite(value.asDouble())) {
+            throw new FrameInvalidException("similarity_score 必须为有限数值");
+        }
+        return value.asDouble();
+    }
+
+    private static int requiredPositiveInt(JsonNode value, String field) {
+        if (value == null || !value.isIntegralNumber() || value.asInt() < 1) {
+            throw new FrameInvalidException(field + " 必须为正整数");
+        }
+        return value.asInt();
+    }
+
+    private void handleDone(StreamContext context, String data) {
+        final ObjectNode node;
+        final boolean rejected;
+        final int retrievalCostMs;
+        final int llmFirstTokenMs;
+        final int stripped;
+        try {
+            node = requireObject(data, "done");
+            rejected = requireBoolean(node, "is_rejected");
+            retrievalCostMs = requireNonNegativeInt(node, "retrieval_cost_ms");
+            llmFirstTokenMs = requireNonNegativeInt(node, "llm_first_token_ms");
+            stripped = requireNonNegativeInt(node, "stripped_citation_count");
+        } catch (JsonProcessingException | FrameInvalidException error) {
             finishWithError(context, "INTERNAL_ERROR", "回答生成失败，请稍后重试。");
+            return;
+        }
+        if (!rejected && (context.citations == null || context.citations.isEmpty())) {
+            finishWithError(context, "E-RAG-03",
+                    "引用校验未通过；未收到可核验的引用标签。请重试或换一种问法。");
+            return;
+        }
+        if (rejected && context.citations != null && !context.citations.isEmpty()) {
+            finishWithError(context, "INTERNAL_ERROR",
+                    "协议错误：拒答回答不得携带课件引用。");
             return;
         }
         if (!claimTerminal(context)) {
             return;
         }
         cancelTimer(context);
-        boolean rejected = node.path("is_rejected").asBoolean(false);
-        int retrievalCostMs = Math.max(0, node.path("retrieval_cost_ms").asInt(0));
-        int llmFirstTokenMs = Math.max(0, node.path("llm_first_token_ms").asInt(0));
-        int stripped = Math.max(0, node.path("stripped_citation_count").asInt(0));
         String content = context.answer.toString();
-        if (content.isBlank() && rejected && context.rejectionNotice != null) {
-            content = context.rejectionNotice;
+        if (rejected) {
+            content = composeRejectedContent(context.rejectionNotice, content);
         }
         if (content.isBlank()) {
             // 不把空回答/不完整回答当作成功落库
@@ -253,7 +385,7 @@ public class RagQaService {
         try {
             Long assistantMessageId = chatMessageService.appendAssistant(
                     context.userId, context.courseId, content,
-                    parseCitations(context.citationsJson), rejected, context.traceId,
+                    context.citations, rejected, context.traceId,
                     retrievalCostMs, llmFirstTokenMs);
             chatWindowService.append(context.userId, context.courseId,
                     ChatMessageService.ROLE_ASSISTANT, content);
@@ -277,6 +409,38 @@ public class RagQaService {
         }
     }
 
+    /**
+     * 拒答落库内容固定为 `{notice}\n\n{补充前缀}\n{通用补充正文}`（`PO-04`）。
+     * 无补充时只保存声明；声明缺失视为协议错误，返回空串交由调用方按失败处理。
+     */
+    private static String composeRejectedContent(String notice, String answer) {
+        if (notice == null || notice.isBlank()) {
+            return "";
+        }
+        if (answer == null || answer.isBlank()) {
+            return notice;
+        }
+        String supplement = answer.startsWith(GENERAL_SUPPLEMENT_PREFIX)
+                ? answer : GENERAL_SUPPLEMENT_PREFIX + "\n" + answer;
+        return notice + "\n\n" + supplement;
+    }
+
+    private static boolean requireBoolean(ObjectNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isBoolean()) {
+            throw new FrameInvalidException(field + " 必须为布尔值");
+        }
+        return value.asBoolean();
+    }
+
+    private static int requireNonNegativeInt(ObjectNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isIntegralNumber() || value.asInt() < 0) {
+            throw new FrameInvalidException(field + " 必须为非负整数");
+        }
+        return value.asInt();
+    }
+
     private void completeQuietly(StreamContext context) {
         try {
             context.emitter.complete();
@@ -289,14 +453,21 @@ public class RagQaService {
         String code = "INTERNAL_ERROR";
         String message = "回答生成失败，请稍后重试。";
         try {
-            JsonNode node = objectMapper.readTree(data);
+            ObjectNode node = requireObject(data, "error");
             String rawCode = node.path("code").asText("");
+            String rawMessage = node.path("message").asText("");
             ErrorCode mapped = ErrorCode.fromCode(rawCode);
             if (mapped != null) {
                 code = mapped.code();
                 message = mapped.defaultMessage();
+                // 引用校验失败需要把“实际召回切片”等确定性说明带给前端；
+                // 只接受来自受控 Python 错误帧的短文本，避免透传内部细节。
+                if (mapped == ErrorCode.E_RAG_03 && rawMessage != null
+                        && !rawMessage.isBlank() && rawMessage.length() <= 512) {
+                    message = rawMessage.replaceAll("[\\p{Cntrl}]", " ");
+                }
             }
-        } catch (JsonProcessingException ignored) {
+        } catch (JsonProcessingException | FrameInvalidException ignored) {
             // 保持通用错误码与脱敏文案
         }
         finishWithError(context, code, message);
@@ -379,19 +550,6 @@ public class RagQaService {
         }
     }
 
-    private List<CitationItemVO> parseCitations(String json) {
-        if (json == null || json.isBlank()) {
-            return null;
-        }
-        try {
-            return objectMapper.readValue(json, new TypeReference<List<CitationItemVO>>() {
-            });
-        } catch (JsonProcessingException error) {
-            log.warn("引用卡片无法映射，按空引用落库");
-            return null;
-        }
-    }
-
     private String errorJson(String code, String message, String traceId) {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("code", code);
@@ -441,6 +599,13 @@ public class RagQaService {
         }
     }
 
+    /** 下游帧结构不符合契约：必须中止，不得静默降级成成功回答。 */
+    private static final class FrameInvalidException extends RuntimeException {
+        private FrameInvalidException(String message) {
+            super(message);
+        }
+    }
+
     /** 单次流式请求的线程内状态；仅在 worker 线程与容器回调之间共享。 */
     private static final class StreamContext {
         private final Long userId;
@@ -455,7 +620,7 @@ public class RagQaService {
         private final AtomicReference<SseStreamHandle> handle = new AtomicReference<>();
         private final Object sendLock = new Object();
         private final StringBuilder answer = new StringBuilder();
-        private volatile String citationsJson;
+        private volatile List<CitationItemVO> citations;
         private volatile String rejectionNotice;
         private volatile ScheduledFuture<?> firstPacketTimer;
 

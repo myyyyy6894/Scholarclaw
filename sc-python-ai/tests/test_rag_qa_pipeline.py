@@ -3,6 +3,7 @@ import pytest
 from app.core.config import load_settings
 from app.core.exceptions import (
     AiErrorCode,
+    CitationVerificationFailedError,
     NonRetryableAiError,
     ParentChunkFetchFailedError,
 )
@@ -132,12 +133,11 @@ async def _collect(pipeline, request):
 
 
 @pytest.mark.asyncio
-async def test_normal_answer_emits_citation_tokens_then_done_and_strips_fake_page() -> None:
+async def test_normal_answer_emits_citation_tokens_then_done() -> None:
     pipeline, retriever, client, factory = _pipeline(
         _retrieval(("pc_1", "50001", 0.9), ("pc_2", "50001", 0.8)),
         _authoritative(_chunk(), _chunk("pc_2", start=5, end=6)),
-        ["根据课件，2PL 分两阶段[来源：第5章.pdf - 第2页]，"
-         "[来源：第5章.pdf - 第999页]。"],
+        ["根据课件，2PL 分两阶段[来源：第5章.pdf - 第2页]。"],
     )
 
     events = await _collect(pipeline, _request())
@@ -147,11 +147,11 @@ async def test_normal_answer_emits_citation_tokens_then_done_and_strips_fake_pag
     assert events[0].citations[0].similarity_score == 0.9
     assert events[0].citations[1].page_start == 5
     tokens = "".join(event.delta for event in events if isinstance(event, TokenEvent))
-    assert tokens == "根据课件，2PL 分两阶段[来源：第5章.pdf - 第2页]，。"
+    assert tokens == "根据课件，2PL 分两阶段[来源：第5章.pdf - 第2页]。"
     done = events[-1]
     assert isinstance(done, DoneEvent)
     assert done.is_rejected is False
-    assert done.stripped_citation_count == 1
+    assert done.stripped_citation_count == 0
     assert done.retrieval_cost_ms >= 0
     assert done.llm_first_token_ms >= 0
     assert retriever.requests[0].valid_doc_ids == ("50001",)
@@ -162,6 +162,95 @@ async def test_normal_answer_emits_citation_tokens_then_done_and_strips_fake_pag
     assert payload["messages"][1]["role"] == "user"
     assert payload["messages"][2]["role"] == "assistant"
     assert len(payload["messages"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_invalid_citation_aborts_instead_of_success() -> None:
+    pipeline, _, _, _ = _pipeline(
+        _retrieval(("pc_1", "50001", 0.9)), _authoritative(_chunk()),
+        ["模型编造的内容。[来源：不存在.pdf - 第999页]"])
+
+    events = []
+    with pytest.raises(CitationVerificationFailedError) as error:
+        async for event in pipeline.stream(_request()):
+            events.append(event)
+
+    assert not any(isinstance(event, DoneEvent) for event in events)
+    assert "引用校验未通过" in str(error.value)
+    assert "实际召回切片" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_answer_without_any_citation_aborts() -> None:
+    pipeline, _, _, _ = _pipeline(
+        _retrieval(("pc_1", "50001", 0.9)), _authoritative(_chunk()),
+        ["模型编造的内容，没有任何课件引用。"])
+
+    with pytest.raises(CitationVerificationFailedError) as error:
+        async for _ in pipeline.stream(_request()):
+            pass
+
+    assert "未检测到有效引用" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_overlong_citation_aborts_without_echoing_tag() -> None:
+    long_tag = "[来源：" + "不存在" * 200
+    pipeline, _, _, _ = _pipeline(
+        _retrieval(("pc_1", "50001", 0.9)), _authoritative(_chunk()),
+        ["前缀" + long_tag])
+
+    events = []
+    with pytest.raises(CitationVerificationFailedError):
+        async for event in pipeline.stream(_request()):
+            events.append(event)
+
+    emitted = "".join(event.delta for event in events if isinstance(event, TokenEvent))
+    assert long_tag not in emitted
+    assert not any(isinstance(event, DoneEvent) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_malformed_tag_after_valid_citation_aborts() -> None:
+    pipeline, _, _, _ = _pipeline(
+        _retrieval(("pc_1", "50001", 0.9)), _authoritative(_chunk()),
+        ["真实结论[来源：第5章.pdf - 第1页]；伪来源[来源不存在.pdf - 第999页]"])
+
+    events = []
+    with pytest.raises(CitationVerificationFailedError) as error:
+        async for event in pipeline.stream(_request()):
+            events.append(event)
+
+    emitted = "".join(event.delta for event in events if isinstance(event, TokenEvent))
+    assert "来源不存在.pdf" not in emitted
+    assert not any(isinstance(event, DoneEvent) for event in events)
+    assert "畸形标签 1" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_chinese_bracket_fabricated_tag_after_valid_citation_aborts() -> None:
+    pipeline, _, _, _ = _pipeline(
+        _retrieval(("pc_1", "50001", 0.9)), _authoritative(_chunk()),
+        ["真实结论[来源：第5章.pdf - 第1页]【来源：不存在.pdf - 第999页】"])
+
+    with pytest.raises(CitationVerificationFailedError):
+        async for _ in pipeline.stream(_request()):
+            pass
+
+
+
+@pytest.mark.asyncio
+async def test_duplicate_doc_name_ambiguous_citation_aborts() -> None:
+    duplicate_a = _chunk("pc_1", doc_id="50001", doc_name="同名.pdf", start=1, end=5)
+    duplicate_b = _chunk("pc_2", doc_id="50002", doc_name="同名.pdf", start=3, end=8)
+    pipeline, _, _, _ = _pipeline(
+        _retrieval(("pc_1", "50001", 0.9), ("pc_2", "50002", 0.8)),
+        _authoritative(duplicate_a, duplicate_b),
+        ["结论[来源：同名.pdf - 第4页]"])
+
+    with pytest.raises(CitationVerificationFailedError):
+        async for _ in pipeline.stream(_request()):
+            pass
 
 
 @pytest.mark.asyncio

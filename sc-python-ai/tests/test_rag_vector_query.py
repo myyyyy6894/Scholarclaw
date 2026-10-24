@@ -93,7 +93,8 @@ def test_query_children_is_read_only_and_returns_empty_for_missing_collection() 
 
     matches = _store(client).query_children(
         user_id="10001", course_id="2001", course_index_version=3,
-        valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10)
+        valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10,
+            embedding_model="embed")
 
     assert matches == []
     assert client.lookups == ["sc_u10001_c2001_v3"]
@@ -104,10 +105,23 @@ def test_query_children_short_circuits_on_empty_valid_doc_ids() -> None:
 
     matches = _store(client).query_children(
         user_id="10001", course_id="2001", course_index_version=3,
-        valid_doc_ids=[], query_embedding=[1.0], top_k=10)
+        valid_doc_ids=[], query_embedding=[1.0], top_k=10,
+            embedding_model="embed")
 
     assert matches == []
     assert client.lookups == []
+
+
+def test_query_children_rejects_blank_embedding_model() -> None:
+    store = _store(FakeClient(FakeCollection(_raw())))
+
+    with pytest.raises(NonRetryableAiError) as error:
+        store.query_children(
+            user_id="10001", course_id="2001", course_index_version=3,
+            valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10,
+            embedding_model="")
+
+    assert error.value.error_code.value == "VALIDATION_ERROR"
 
 
 def test_query_children_rejects_non_decimal_ids() -> None:
@@ -116,7 +130,8 @@ def test_query_children_rejects_non_decimal_ids() -> None:
     with pytest.raises(NonRetryableAiError) as error:
         store.query_children(
             user_id="10001", course_id="2001", course_index_version=3,
-            valid_doc_ids=["50001x"], query_embedding=[1.0], top_k=10)
+            valid_doc_ids=["50001x"], query_embedding=[1.0], top_k=10,
+            embedding_model="embed")
 
     assert error.value.error_code.value == "VALIDATION_ERROR"
 
@@ -127,11 +142,13 @@ def test_query_children_rejects_empty_or_non_finite_query_vector() -> None:
     with pytest.raises(NonRetryableAiError):
         store.query_children(
             user_id="10001", course_id="2001", course_index_version=3,
-            valid_doc_ids=["50001"], query_embedding=[], top_k=10)
+            valid_doc_ids=["50001"], query_embedding=[], top_k=10,
+            embedding_model="embed")
     with pytest.raises(NonRetryableAiError):
         store.query_children(
             user_id="10001", course_id="2001", course_index_version=3,
-            valid_doc_ids=["50001"], query_embedding=[float("nan")], top_k=10)
+            valid_doc_ids=["50001"], query_embedding=[float("nan")], top_k=10,
+            embedding_model="embed")
 
 
 def test_query_children_drops_docs_outside_valid_set_and_model_mismatch() -> None:
@@ -141,6 +158,7 @@ def test_query_children_drops_docs_outside_valid_set_and_model_mismatch() -> Non
         ("pc_3_c1", _metadata("pc_3", 50001, model="other"), "other model", 0.3),
         ("pc_4_c1", {"doc_id": 50001}, "no parent", 0.4),
         ("pc_5_c1", _metadata("pc_5", 50001), "nan distance", float("nan")),
+        ("pc_6_c1", _metadata("pc_6", 50001, model=""), "empty model", 0.1),
     ))
 
     matches = _store(FakeClient(collection)).query_children(
@@ -157,7 +175,8 @@ def test_query_children_maps_dimension_mismatch_to_non_retryable_error() -> None
     with pytest.raises(NonRetryableAiError) as error:
         _store(FakeClient(collection)).query_children(
             user_id="10001", course_id="2001", course_index_version=3,
-            valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10)
+            valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10,
+            embedding_model="embed")
 
     assert error.value.error_code.value == "UPSTREAM_MODEL_ERROR"
     assert error.value.retryable is False
@@ -169,10 +188,30 @@ def test_query_children_rejects_non_cosine_collection() -> None:
     with pytest.raises(NonRetryableAiError) as error:
         _store(FakeClient(collection)).query_children(
             user_id="10001", course_id="2001", course_index_version=3,
-            valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10)
+            valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10,
+            embedding_model="embed")
 
     assert error.value.error_code.value == "INTERNAL_ERROR"
     assert collection.query_kwargs is None
+
+
+def test_stale_vectors_cannot_bypass_ready_doc_or_index_version() -> None:
+    """陈旧向量只能占用候选位，不能越过 READY/版本/父块校验。"""
+    stale_version = {**_metadata("pc_stale_version", 50001),
+                     "course_index_version": 2}
+    stale_doc = _metadata("pc_stale_doc", 59999)
+    collection = FakeCollection(_raw(
+        ("pc_stale_v", stale_version, "旧索引版本", 0.0),
+        ("pc_stale_d", stale_doc, "非 READY 文档", 0.1),
+        ("pc_ok", _metadata("pc_ok", 50001), "有效", 0.2),
+    ))
+
+    matches = _store(FakeClient(collection)).query_children(
+        user_id="10001", course_id="2001", course_index_version=3,
+        valid_doc_ids=["50001"], query_embedding=[1.0], top_k=10,
+        embedding_model="embed")
+
+    assert [match.parent_chunk_id for match in matches] == ["pc_ok"]
 
 
 def test_query_children_with_real_chroma_uses_course_filter() -> None:

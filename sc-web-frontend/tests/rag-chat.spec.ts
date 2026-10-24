@@ -5,6 +5,7 @@ import {
   applyDone,
   applyInterrupted,
   applyRejection,
+  applyStreamFailure,
   applyToken,
   citationPageLabel,
   citationScoreLabel,
@@ -12,6 +13,7 @@ import {
   formatDuration,
   historyToUiMessages,
   queryError,
+  splitInlineCitations,
   splitSupplement,
   SUPPLEMENT_PREFIX,
 } from '@/views/rag/rag-chat'
@@ -65,8 +67,7 @@ describe('rag chat presentation', () => {
     expect(messages[1]?.messageId).toBe('90002')
   })
 
-  it('问题校验 trim 后非空且不超过 2000 字', () => {
-    expect(queryError('   ')).toBe('请输入问题。')
+  it('问题校验 trim 后非空且不超过 2000 字', () => {    expect(queryError('   ')).toBe('请输入问题。')
     expect(queryError(' 问题 ')).toBeNull()
     expect(queryError('问'.repeat(2001))).toBe('问题长度不得超过 2000 个字符。')
   })
@@ -128,11 +129,85 @@ describe('rag chat presentation', () => {
     })
     expect(rejected.isRejected).toBe(true)
     expect(rejected.noticeText).toBe('未找到相关内容')
+    expect(rejected.content).toBe('')
+    expect(rejected.citations).toBeNull()
 
     const interrupted = createLocalMessage('ASSISTANT')
     applyInterrupted(interrupted, '连接中断')
     expect(interrupted.streaming).toBe(false)
     expect(interrupted.interrupted).toBe(true)
     expect(interrupted.errorText).toBe('连接中断')
+  })
+
+  it('错误/断流/引用失败丢弃半截回答与引用', () => {
+    const message = createLocalMessage('ASSISTANT')
+    message.content = '半截回答'
+    message.supplement = '补充'
+    message.citations = [{
+      parent_chunk_id: 'pc_1', doc_id: '50001', doc_name: 'a.pdf',
+      page_start: 1, page_end: 1, section_title: null, content: '内容',
+    }]
+
+    applyStreamFailure(message, '引用校验未通过')
+
+    expect(message.content).toBe('')
+    expect(message.supplement).toBe('')
+    expect(message.citations).toBeNull()
+    expect(message.streaming).toBe(false)
+    expect(message.interrupted).toBe(true)
+    expect(message.errorText).toBe('引用校验未通过')
+  })
+
+  it('拒答历史恢复声明与通用补充，不把声明当普通正文', () => {
+    const messages = historyToUiMessages([
+      historyMessage({
+        message_id: '90002',
+        role: 'ASSISTANT',
+        is_rejected: true,
+        content: '📌 检索说明：未找到相关内容。\n\n'
+          + SUPPLEMENT_PREFIX + '\n通用补充正文',
+      }),
+    ])
+
+    expect(messages[0]?.content).toBe('')
+    expect(messages[0]?.noticeText).toBe('📌 检索说明：未找到相关内容。')
+    expect(messages[0]?.supplement).toBe('通用补充正文')
+    expect(messages[0]?.isRejected).toBe(true)
+  })
+
+  it('只高亮同时命中 citation 的文件名与页码', () => {
+    const citations = [{
+      parent_chunk_id: 'pc_50001_v1_1', doc_id: '50001', doc_name: 'a.pdf',
+      page_start: 14, page_end: 16, section_title: null, content: '内容',
+    }]
+    const segments = splitInlineCitations(
+      '结论[来源：a.pdf - 第15页]，伪造[来源：a.pdf - 第99页]，'
+        + '未知[来源：b.pdf - 第1页]，中文【来源：a.pdf - 第14页】。',
+      citations,
+    )
+
+    expect(segments.filter((segment) => segment.citationIndex !== null)
+      .map((segment) => segment.text)).toEqual([
+      '[来源：a.pdf - 第15页]',
+      '【来源：a.pdf - 第14页】',
+    ])
+    expect(segments.map((segment) => segment.text).join('')).toBe(
+      '结论[来源：a.pdf - 第15页]，伪造[来源：a.pdf - 第99页]，'
+        + '未知[来源：b.pdf - 第1页]，中文【来源：a.pdf - 第14页】。',
+    )
+  })
+
+  it('没有引用时正文整体作为纯文本', () => {
+    expect(splitInlineCitations('结论[来源：a.pdf - 第1页]', null)).toEqual([
+      { text: '结论[来源：a.pdf - 第1页]', citationIndex: null },
+    ])
+  })
+
+  it('相似度为 null 时不展示（兼容历史旧记录）', () => {
+    expect(citationScoreLabel({
+      parent_chunk_id: 'pc_50001_v1_1', doc_id: '50001', doc_name: 'a.pdf',
+      page_start: 1, page_end: 1, section_title: null, content: '',
+      similarity_score: null,
+    })).toBeNull()
   })
 })

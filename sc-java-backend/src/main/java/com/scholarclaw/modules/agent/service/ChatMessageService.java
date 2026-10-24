@@ -3,6 +3,7 @@ package com.scholarclaw.modules.agent.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.modules.agent.dto.ChatMessagePageVO;
 import com.scholarclaw.modules.agent.dto.ChatMessageVO;
 import com.scholarclaw.modules.agent.dto.CitationItemVO;
@@ -116,7 +117,7 @@ public class ChatMessageService {
                 entity.getRole(), entity.getIntentType(), entity.getContent(),
                 fromJson(entity.getCitationsJson()), Boolean.TRUE.equals(entity.getIsRejected()),
                 entity.getTraceId(), entity.getRetrievalCostMs(),
-                entity.getLlmFirstTokenMs(), entity.getCreatedAt());
+                entity.getLlmFirstTokenMs(), ScTimeZone.toOffsetDateTime(entity.getCreatedAt()));
     }
 
     private String toJson(List<CitationItemVO> citations) {

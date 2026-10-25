@@ -17,6 +17,7 @@ from app.api.internal_v1.endpoints_agent import get_ddl_extractor
 from app.core.exceptions import UpstreamModelError
 from app.schemas.ddl_extract import DdlPayload, TimePrecision
 from app.services.ddl.extractor import DdlExtractionRequest, DdlExtractionResult
+from app.services.ddl.time_parser import DdlInitialStatus, TimeResolution
 from tests.conftest import REMOTE_HOST, TEST_INTERNAL_TOKEN
 
 API_KEY = "sk-endpoint-secret-key"
@@ -57,6 +58,17 @@ def _result() -> DdlExtractionResult:
             confidence=0.96,
             has_ambiguity=False,
             ambiguity_reason=None,
+        ),
+        time_resolution=TimeResolution(
+            time_precision=TimePrecision.EXACT_DATETIME,
+            due_date=date(2026, 10, 25),
+            due_time=time(22, 0, 0),
+            due_at=datetime.fromisoformat("2026-10-25T22:00:00+08:00"),
+            time_inferred=False,
+            is_relative_time=False,
+            has_ambiguity=False,
+            ambiguity_reason=None,
+            initial_status=DdlInitialStatus.ACTIVE,
         ),
     )
 
@@ -146,6 +158,9 @@ def test_force_ddl_extract_returns_contract_payload(agent_client) -> None:
     assert "status" not in payload
     assert "time_inferred" not in payload
     assert "follow_up_at" not in payload
+    assert "due_at" not in response.text
+    assert "time_inferred" not in response.text
+    assert "time_resolution" not in response.text
     assert API_KEY not in response.text
 
     captured = extractor.requests[0]

@@ -46,6 +46,11 @@ from app.schemas.ddl_extract import (
 )
 from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.gateway.ssrf_safe_model_gateway import RetryPolicy, SsrfSafeModelGateway
+from app.services.ddl.time_keywords import (
+    ABSOLUTE_DATE_PATTERN,
+    find_vague_marker,
+)
+from app.services.ddl.time_parser import DdlTimeParser, TimeResolution
 
 logger = get_logger(__name__)
 
@@ -62,34 +67,7 @@ MAX_EXTRACTION_READ_TIMEOUT_SECONDS = 10.0
 _GATEWAY_PATH = "chat/completions"
 _MAX_OUTPUT_TOKENS = 800
 
-#: 原文中的模糊时间限定词。用于在模型误判为确定时间时做保守降级；
-#: 不是完整的自然语言时间解析器（完整规则属 TASK-702）。
-_VAGUE_TIME_MARKERS: tuple[str, ...] = (
-    "下周左右",
-    "尽快",
-    "尽早",
-    "近期",
-    "最近",
-    "稍后",
-    "有空",
-    "待定",
-    "另行通知",
-    "另行安排",
-    "自行安排",
-    "不确定",
-    "未定",
-    "左右",
-    "前后",
-    "大约",
-    "大概",
-    "再说",
-    "回头",
-)
-#: 绝对日历日期（含年月日）。有它才允许保留“左右/前后”等限定词的日期。
-_ABSOLUTE_DATE_PATTERN = re.compile(
-    r"\d{4}\s*[-/年]\s*\d{1,2}\s*[-/月]\s*\d{1,2}\s*日?"
-    r"|\d{1,2}\s*月\s*\d{1,2}\s*[日号]"
-)
+#: 原文中的模糊时间限定词与绝对日期模式集中在 :mod:`app.services.ddl.time_keywords`。
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIME_PATTERN = re.compile(r"^\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,6})?$")
 
@@ -158,6 +136,9 @@ class DdlExtractionResult:
 
     intent_confidence: float
     payload: DdlPayload
+    #: TASK-702 的四级时间解析结果（含 `due_at`/`time_inferred`/初始状态建议）。
+    #: 当前 `API-INT-AI-002` 响应不暴露这些字段，供 TASK-703 集成使用。
+    time_resolution: TimeResolution | None = None
 
 
 class _InvalidModelOutput(Exception):
@@ -242,6 +223,7 @@ class DdlExtractor:
         settings: Settings,
         *,
         gateway_factory: GatewayFactory | None = None,
+        time_parser: DdlTimeParser | None = None,
         sleep: SleepFunction = asyncio.sleep,
         max_attempts: int = MAX_EXTRACTION_ATTEMPTS,
         retry_delays: Sequence[float] = SHAPE_RETRY_DELAYS,
@@ -258,6 +240,7 @@ class DdlExtractor:
                 ),
             )
         )
+        self._time_parser = time_parser or DdlTimeParser()
         self._sleep = sleep
         self._max_attempts = max_attempts
         self._retry_delays = tuple(retry_delays)
@@ -272,6 +255,17 @@ class DdlExtractor:
             try:
                 output = await self._call_model(request, messages)
                 result = _normalize_output(output, request)
+                refined_payload, resolution = self._time_parser.refine(
+                    result.payload,
+                    raw_text=request.raw_text,
+                    reference_time=request.reference_time,
+                    user_timezone=request.user_timezone,
+                )
+                result = DdlExtractionResult(
+                    intent_confidence=result.intent_confidence,
+                    payload=refined_payload,
+                    time_resolution=resolution,
+                )
             except _InvalidModelOutput as exc:
                 last_error = exc
                 logger.warning(
@@ -292,11 +286,17 @@ class DdlExtractor:
 
             logger.info(
                 "DDL 提取完成 precision=%s confidence=%.3f ambiguous=%s intent_confidence=%.3f "
-                "attempts=%s",
+                "status=%s time_inferred=%s attempts=%s",
                 result.payload.time_precision.value,
                 result.payload.confidence,
                 result.payload.has_ambiguity,
                 result.intent_confidence,
+                result.time_resolution.initial_status.value
+                if result.time_resolution is not None
+                else "UNKNOWN",
+                result.time_resolution.time_inferred
+                if result.time_resolution is not None
+                else False,
                 attempt,
             )
             return result
@@ -423,7 +423,7 @@ def _normalize_output(
         reasons.append("模型返回的时间原文片段无法在通知中定位，已置空")
     if raw_time_text is None and precision is TimePrecision.VAGUE_OR_MISSING:
         # 只能从原文中摘取，不能编造；找不到就保持 null。
-        raw_time_text = _find_vague_marker(request.raw_text)
+        raw_time_text = find_vague_marker(request.raw_text)
 
     deliverable_format = _checked_text(
         model_payload.deliverable_format, MAX_DETAIL_LENGTH, "deliverable_format"
@@ -516,11 +516,11 @@ def _apply_vague_guard(
     raw_text: str,
     reasons: list[str],
 ) -> tuple[TimePrecision, date | None, time | None]:
-    marker = _find_vague_marker(raw_text)
+    marker = find_vague_marker(raw_text)
     if marker is None:
         return precision, due_date, due_time
 
-    if _ABSOLUTE_DATE_PATTERN.search(raw_text) is None:
+    if ABSOLUTE_DATE_PATTERN.search(raw_text) is None:
         # 没有任何绝对日历日期时，模糊词意味着不得输出确定日期/时刻，
         # 无论模型把它标成 EXACT、DATE_ONLY 还是 INVALID_OR_PAST。
         if precision is not TimePrecision.VAGUE_OR_MISSING:
@@ -692,13 +692,6 @@ def _normalize_text(value: str) -> str:
 
 def _appears_in(fragment: str, text: str) -> bool:
     return _normalize_text(fragment) in _normalize_text(text)
-
-
-def _find_vague_marker(raw_text: str) -> str | None:
-    for marker in _VAGUE_TIME_MARKERS:
-        if marker in raw_text:
-            return marker
-    return None
 
 
 def _dedupe_reasons(reasons: Sequence[str]) -> list[str]:

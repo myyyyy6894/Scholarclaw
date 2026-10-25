@@ -12,7 +12,8 @@
 `/internal/ai/v1/rag/vectors` 向量清理（TASK-504）、Java 解析回调（TASK-503）、
 `DenseVectorRetriever` 稠密检索组件（TASK-601）、父块权威回查客户端（TASK-602）、
 RAG 生成管线与 `CitationVerifier`（TASK-603）、内部 SSE 端点 `/internal/ai/v1/rag/qa-stream`（TASK-604）、
-内部 `/internal/ai/v1/agent/route-and-extract` 的 `FORCE_DDL_EXTRACT` 模式（TASK-701）。
+内部 `/internal/ai/v1/agent/route-and-extract` 的 `FORCE_DDL_EXTRACT` 模式（TASK-701）
+与确定性四级时间解析（TASK-702；`TimeResolution` 暂不进入 API 响应）。
 **尚未接入**：`AUTO_ROUTE` 完整意图路由（TASK-706；当前返回 `501 FEATURE_NOT_AVAILABLE`）。
 """
 

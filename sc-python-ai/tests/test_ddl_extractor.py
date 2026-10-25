@@ -693,3 +693,64 @@ async def test_code_fenced_json_is_tolerated() -> None:
     result = await extractor.extract(_request())
 
     assert result.payload.time_precision is TimePrecision.EXACT_DATETIME
+
+
+async def test_extractor_attaches_date_only_sentinel_resolution() -> None:
+    model_payload = _payload(
+        raw_time_text="10月25日",
+        time_precision="DATE_ONLY",
+        parsed_due_time=None,
+    )
+    extractor, _ = _extractor(_response(_content(model_payload)))
+
+    result = await extractor.extract(_request(raw_text="10月25日交实验报告。"))
+
+    assert result.time_resolution is not None
+    assert result.time_resolution.due_at is not None
+    assert result.time_resolution.due_at.isoformat() == "2026-10-25T23:59:59+08:00"
+    assert result.time_resolution.time_inferred is True
+    assert result.time_resolution.initial_status.value == "ACTIVE"
+
+
+async def test_extractor_refines_cross_year_before_returning_payload() -> None:
+    model_payload = _payload(
+        raw_time_text="1月5日",
+        time_precision="DATE_ONLY",
+        parsed_due_date="2026-01-05",
+        parsed_due_time=None,
+    )
+    extractor, _ = _extractor(_response(_content(model_payload)))
+
+    result = await extractor.extract(
+        _request(
+            raw_text="1月5日交实验报告。",
+            reference_time="2026-12-20T10:00:00+08:00",
+        )
+    )
+
+    assert result.payload.parsed_due_date == date(2027, 1, 5)
+    assert result.payload.has_ambiguity is True
+    assert "跨年顺延" in (result.payload.ambiguity_reason or "")
+    assert result.time_resolution is not None
+    assert result.time_resolution.due_at is not None
+    assert result.time_resolution.due_at.isoformat() == "2027-01-05T23:59:59+08:00"
+
+
+async def test_extractor_resolves_relative_week_and_marks_relative() -> None:
+    model_payload = _payload(
+        raw_time_text="下周三前",
+        time_precision="DATE_ONLY",
+        is_relative_time=True,
+        parsed_due_date="2026-10-21",
+        parsed_due_time=None,
+    )
+    extractor, _ = _extractor(_response(_content(model_payload)))
+
+    result = await extractor.extract(_request(raw_text="下周三前交实验报告。"))
+
+    assert result.payload.parsed_due_date == date(2026, 10, 21)
+    assert result.payload.is_relative_time is True
+    assert result.time_resolution is not None
+    assert result.time_resolution.due_at is not None
+    assert result.time_resolution.due_at.isoformat() == "2026-10-21T23:59:59+08:00"
+    assert result.time_resolution.time_inferred is True

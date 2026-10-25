@@ -20,7 +20,9 @@ import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeParentChunkEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.support.MybatisTableInfoTestSupport;
 import java.util.List;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,6 +41,12 @@ class KnowledgeIngestResultServiceTest {
     private CourseService courseService;
     private ApplicationEventPublisher eventPublisher;
     private KnowledgeIngestResultService service;
+
+    @BeforeAll
+    static void initTableInfo() {
+        MybatisTableInfoTestSupport.init(
+                KnowledgeDocEntity.class, KnowledgeParentChunkEntity.class);
+    }
 
     @BeforeEach
     void setUp() {

@@ -6,13 +6,23 @@ import static org.mockito.Mockito.verify;
 
 import com.scholarclaw.common.event.CourseDeletingEvent;
 import com.scholarclaw.common.event.CourseEmbeddingChangedEvent;
+import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
+import com.scholarclaw.modules.knowledge.entity.KnowledgeParentChunkEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.support.MybatisTableInfoTestSupport;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /** TASK-402：课程事件驱动文档状态与父块清理。 */
 class KnowledgeCourseEventListenerTest {
+
+    @BeforeAll
+    static void initTableInfo() {
+        MybatisTableInfoTestSupport.init(
+                KnowledgeDocEntity.class, KnowledgeParentChunkEntity.class);
+    }
 
     @Test
     @DisplayName("课程切换 Embedding：文档转 PARSING 并清空旧父块")

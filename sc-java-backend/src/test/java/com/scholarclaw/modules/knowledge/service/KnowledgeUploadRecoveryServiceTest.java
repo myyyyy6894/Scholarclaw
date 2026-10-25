@@ -9,12 +9,14 @@ import static org.mockito.Mockito.when;
 
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
+import com.scholarclaw.support.MybatisTableInfoTestSupport;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,11 @@ class KnowledgeUploadRecoveryServiceTest {
     private KnowledgeDocMapper docMapper;
     private StorageService storageService;
     private KnowledgeUploadRecoveryService service;
+
+    @BeforeAll
+    static void initTableInfo() {
+        MybatisTableInfoTestSupport.init(KnowledgeDocEntity.class);
+    }
 
     @BeforeEach
     void setUp() {

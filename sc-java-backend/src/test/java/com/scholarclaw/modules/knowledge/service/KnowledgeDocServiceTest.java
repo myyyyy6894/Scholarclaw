@@ -23,9 +23,11 @@ import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
+import com.scholarclaw.support.MybatisTableInfoTestSupport;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,6 +44,11 @@ class KnowledgeDocServiceTest {
     private CourseService courseService;
     private UserConfigService userConfigService;
     private KnowledgeDocService service;
+
+    @BeforeAll
+    static void initTableInfo() {
+        MybatisTableInfoTestSupport.init(KnowledgeDocEntity.class);
+    }
 
     @BeforeEach
     void setUp() {

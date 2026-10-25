@@ -6,15 +6,17 @@ server:
       # 客户端与测试工具按 ISO-8859-1 解码导致中文乱码。
       charset: UTF-8
       force: true
-    multipart:
-      # 单文件上限 50MB（04 §4.4.2）；请求略大 1MB 以容纳 multipart 边界与表单开销。
-      # 控制器仍会按 getSize() 精确校验 >50MB，见 FileUploadSecurityValidator。
-      max-file-size: 50MB
-      max-request-size: 51MB
 
 spring:
   application:
     name: sc-java-backend
+  servlet:
+    multipart:
+      # 单文件上限 50MB（04 §4.4.2）；请求略大 1MB 以容纳 multipart 边界与表单开销。
+      # 必须放在 spring.servlet.multipart：放在 server.servlet 下会被忽略并回退到 1MB 默认值，
+      # 表现为几 MB 的课件也报 FILE_SIZE_EXCEEDED。
+      max-file-size: 50MB
+      max-request-size: 51MB
   # 数据源（TASK-201 起）：`02` §5.1 规定只有 sc-java-backend 连接 MySQL，Python 零连接权限。
   # 参数依据 `03` §9.1：字符集 utf8mb4、会话时区 Asia/Shanghai（不依赖 JVM 默认时区，见 ENV-01）。
   # useSSL=false + allowPublicKeyRetrieval=true：容器内网通信 + MySQL 8 默认 caching_sha2_password

@@ -4,7 +4,8 @@
 后续任务在各自 `endpoints_*.py` 中追加路由并**必须**加上 `require_internal_token` 依赖：
 
 * `endpoints_probe.py`（TASK-302，已实现）：`POST /model/probe`
-* `endpoints_agent.py`（TASK-706）：`POST /agent/route-and-extract`
+* `endpoints_agent.py`（TASK-701，已实现）：`POST /agent/route-and-extract`
+  （仅 `FORCE_DDL_EXTRACT`；`AUTO_ROUTE` 属 TASK-706，返回 `501 FEATURE_NOT_AVAILABLE`）
 * `endpoints_rag.py`（TASK-504/604/605）：`DELETE /rag/vectors`、`POST /rag/qa-stream`
 """
 
@@ -12,13 +13,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.internal_v1 import endpoints_health, endpoints_probe, endpoints_rag
+from app.api.internal_v1 import (
+    endpoints_agent,
+    endpoints_health,
+    endpoints_probe,
+    endpoints_rag,
+)
 
 INTERNAL_API_PREFIX = "/internal/ai/v1"
 
 internal_v1_router = APIRouter()
 internal_v1_router.include_router(endpoints_health.router)
 internal_v1_router.include_router(endpoints_probe.router)
+internal_v1_router.include_router(endpoints_agent.router)
 internal_v1_router.include_router(endpoints_rag.router)
 
 __all__ = ["INTERNAL_API_PREFIX", "internal_v1_router"]

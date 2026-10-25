@@ -33,6 +33,7 @@ class AiErrorCode(StrEnum):
     VALIDATION_ERROR = "VALIDATION_ERROR"
     AUTH_FORBIDDEN = "AUTH_FORBIDDEN"
     RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
+    FEATURE_NOT_AVAILABLE = "FEATURE_NOT_AVAILABLE"
     E_SYS_02 = "E-SYS-02"
     E_RAG_01 = "E-RAG-01"
     E_RAG_02 = "E-RAG-02"
@@ -49,6 +50,7 @@ ERROR_CODE_HTTP_STATUS: dict[AiErrorCode, int | None] = {
     AiErrorCode.VALIDATION_ERROR: 400,
     AiErrorCode.AUTH_FORBIDDEN: 403,
     AiErrorCode.RESOURCE_NOT_FOUND: 404,
+    AiErrorCode.FEATURE_NOT_AVAILABLE: 501,
     AiErrorCode.E_SYS_02: 400,
     AiErrorCode.E_RAG_01: None,
     AiErrorCode.E_RAG_02: None,
@@ -283,6 +285,7 @@ ERROR_CODE_MESSAGES: dict[AiErrorCode, str] = {
     AiErrorCode.VALIDATION_ERROR: "请求参数校验失败。",
     AiErrorCode.AUTH_FORBIDDEN: "无权访问该资源。",
     AiErrorCode.RESOURCE_NOT_FOUND: "目标资源不存在或已被删除。",
+    AiErrorCode.FEATURE_NOT_AVAILABLE: "该能力尚未开放，请等待后续版本。",
     AiErrorCode.E_SYS_02: "该自定义 Base URL 未通过安全校验，或上游返回了重定向。",
     AiErrorCode.E_RAG_01: "扫描件暂不支持，请上传文字版 PDF（OCR 将在 v1.1 开放）。",
     AiErrorCode.E_RAG_02: "课件解析多次重试后仍失败，请稍后手动重试或更换文件。",

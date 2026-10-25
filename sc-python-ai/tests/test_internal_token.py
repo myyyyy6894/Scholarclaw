@@ -74,7 +74,9 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
     """记录当前内部路由规模：新增内部接口时必须同步确认鉴权依赖已加。
 
     TASK-302 新增 `POST /model/probe`；TASK-504 新增 `DELETE /rag/vectors`；
-    TASK-604 新增 `POST /rag/qa-stream`。三者均为跨容器调用，必须携带 `X-Internal-Token`。
+    TASK-604 新增 `POST /rag/qa-stream`；TASK-701 新增
+    `POST /agent/route-and-extract`（仅 FORCE_DDL_EXTRACT）。均为跨容器调用，
+    必须携带 `X-Internal-Token`。
     """
     from app.main import create_app
 
@@ -85,7 +87,8 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
     }
 
     assert paths == {HEALTH_PATH, "/internal/ai/v1/model/probe",
-                     "/internal/ai/v1/rag/vectors", "/internal/ai/v1/rag/qa-stream"}
+                     "/internal/ai/v1/rag/vectors", "/internal/ai/v1/rag/qa-stream",
+                     "/internal/ai/v1/agent/route-and-extract"}
 
 
 def test_user_id_header_is_ignored_when_token_invalid(remote_client: TestClient) -> None:

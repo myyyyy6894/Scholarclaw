@@ -21,10 +21,16 @@ import com.scholarclaw.common.exception.GlobalExceptionHandler;
 import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.ddl.dto.CompleteDdlTaskRequest;
 import com.scholarclaw.modules.ddl.dto.CreateDdlTaskRequest;
+import com.scholarclaw.modules.ddl.dto.DdlExtractOutcome;
+import com.scholarclaw.modules.ddl.dto.DdlExtractVO;
 import com.scholarclaw.modules.ddl.dto.DdlTaskBoardVO;
 import com.scholarclaw.modules.ddl.dto.DdlTaskVO;
 import com.scholarclaw.modules.ddl.dto.DeleteDdlTaskVO;
+import com.scholarclaw.modules.ddl.dto.DraftDecisionRequest;
+import com.scholarclaw.modules.ddl.dto.ExtractDdlTaskRequest;
+import com.scholarclaw.modules.ddl.dto.TaskChangeDraftVO;
 import com.scholarclaw.modules.ddl.dto.UpdateDdlTaskRequest;
+import com.scholarclaw.modules.ddl.service.DdlExtractionService;
 import com.scholarclaw.modules.ddl.service.DdlTaskService;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -53,12 +59,15 @@ class DdlTaskControllerTest {
                     ZoneId.of("Asia/Shanghai")).build();
 
     private DdlTaskService ddlTaskService;
+    private DdlExtractionService ddlExtractionService;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         ddlTaskService = mock(DdlTaskService.class);
-        mockMvc = MockMvcBuilders.standaloneSetup(new DdlTaskController(ddlTaskService))
+        ddlExtractionService = mock(DdlExtractionService.class);
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                        new DdlTaskController(ddlTaskService, ddlExtractionService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -224,6 +233,85 @@ class DdlTaskControllerTest {
                 .andExpect(jsonPath("$.message").value("任务已删除"))
                 .andExpect(jsonPath("$.data.deleted_task_id").value("103"))
                 .andExpect(jsonPath("$.data.status").value("CANCELED"));
+    }
+
+    @Test
+    @DisplayName("提取接口返回 extract_outcome/task/change_draft 契约字段")
+    void extractReturnsContractEnvelope() throws Exception {
+        when(ddlExtractionService.extract(eq(USER_ID), any(ExtractDdlTaskRequest.class)))
+                .thenReturn(new DdlExtractVO(DdlExtractOutcome.CREATED, taskVO(), null));
+
+        mockMvc.perform(post("/api/v1/ddl/tasks/extract")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"raw_text":"请于2099年12月31日22:00前提交实验报告",
+                                 "client_request_id":"req_extract_001","force_create":false}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.extract_outcome").value("CREATED"))
+                .andExpect(jsonPath("$.data.task.task_id").value("103"))
+                .andExpect(jsonPath("$.data.change_draft").isEmpty());
+
+        verify(ddlExtractionService).extract(eq(USER_ID), any(ExtractDdlTaskRequest.class));
+    }
+
+    @Test
+    @DisplayName("变更草案确认接口返回任务，缺失 decision 返回 400")
+    void draftDecisionReturnsTask() throws Exception {
+        when(ddlExtractionService.decideDraft(eq(USER_ID), eq(TASK_ID),
+                any(DraftDecisionRequest.class))).thenReturn(taskVO());
+
+        mockMvc.perform(post("/api/v1/ddl/tasks/103/draft-decision")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"decision\":\"CONFIRM_UPDATE\",\"client_request_id\":\"req_decide_001\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.task_id").value("103"));
+
+        mockMvc.perform(post("/api/v1/ddl/tasks/103/draft-decision")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"client_request_id\":\"req_decide_001\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    @DisplayName("提取接口缺少 raw_text 返回 400")
+    void extractRequiresRawText() throws Exception {
+        mockMvc.perform(post("/api/v1/ddl/tasks/extract")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"client_request_id\":\"req_extract_001\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    @DisplayName("变更草案响应包含 change_draft 对比字段")
+    void extractCanReturnChangeDraft() throws Exception {
+        TaskChangeDraftVO draft = new TaskChangeDraftVO(
+                TASK_ID, "提交实验二报告（延期）", "EXACT_DATETIME",
+                "2099-12-31", "23:59:00",
+                OffsetDateTime.parse("2099-12-31T23:59:00+08:00"), false,
+                "zip", "学习通", "延期通知", "12月31日 23:59",
+                OffsetDateTime.parse("2026-10-16T11:40:00+08:00"));
+        when(ddlExtractionService.extract(eq(USER_ID), any(ExtractDdlTaskRequest.class)))
+                .thenReturn(new DdlExtractVO(
+                        DdlExtractOutcome.CHANGE_DRAFT_CONFIRM_REQUIRED, taskVO(), draft));
+
+        mockMvc.perform(post("/api/v1/ddl/tasks/extract")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"raw_text":"实验二报告延期到12月31日23:59",
+                                 "client_request_id":"req_extract_002"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.extract_outcome")
+                        .value("CHANGE_DRAFT_CONFIRM_REQUIRED"))
+                .andExpect(jsonPath("$.data.task.task_id").value("103"))
+                .andExpect(jsonPath("$.data.change_draft.target_task_id").value("103"))
+                .andExpect(jsonPath("$.data.change_draft.new_task_title")
+                        .value("提交实验二报告（延期）"))
+                .andExpect(jsonPath("$.data.change_draft.new_due_at")
+                        .value("2099-12-31T23:59:00+08:00"));
     }
 
     private static DdlTaskVO taskVO() {

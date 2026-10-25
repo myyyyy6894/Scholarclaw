@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.enums.TaskStatus;
+import com.scholarclaw.common.enums.TimePrecision;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
@@ -13,6 +14,7 @@ import com.scholarclaw.modules.ddl.dto.CreateDdlTaskRequest;
 import com.scholarclaw.modules.ddl.dto.DdlTaskBoardVO;
 import com.scholarclaw.modules.ddl.dto.DdlTaskVO;
 import com.scholarclaw.modules.ddl.dto.DeleteDdlTaskVO;
+import com.scholarclaw.modules.ddl.dto.TaskChangeDraftVO;
 import com.scholarclaw.modules.ddl.dto.UpdateDdlTaskRequest;
 import com.scholarclaw.modules.ddl.entity.DdlTaskEntity;
 import com.scholarclaw.modules.ddl.mapper.DdlTaskMapper;
@@ -22,7 +24,9 @@ import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.math.BigDecimal;
 import java.time.DateTimeException;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -61,15 +65,18 @@ public class DdlTaskService {
     private final CourseService courseService;
     private final UserConfigService userConfigService;
     private final DdlTimeRuleValidator timeRuleValidator;
+    private final DdlDraftStore draftStore;
 
     public DdlTaskService(DdlTaskMapper ddlTaskMapper,
                           CourseService courseService,
                           UserConfigService userConfigService,
-                          DdlTimeRuleValidator timeRuleValidator) {
+                          DdlTimeRuleValidator timeRuleValidator,
+                          DdlDraftStore draftStore) {
         this.ddlTaskMapper = ddlTaskMapper;
         this.courseService = courseService;
         this.userConfigService = userConfigService;
         this.timeRuleValidator = timeRuleValidator;
+        this.draftStore = draftStore;
     }
 
     /**
@@ -157,7 +164,10 @@ public class DdlTaskService {
                     query -> query.orderByDesc(DdlTaskEntity::getCompletedAt),
                     COMPLETED_LIST_LIMIT, user.zoneId());
         }
-        return new DdlTaskBoardVO(pending, List.of(), active, completed);
+        List<TaskChangeDraftVO> drafts = draftStore.listDrafts(userId).stream()
+                .map(draft -> draft.toVO(user.zoneId()))
+                .toList();
+        return new DdlTaskBoardVO(pending, drafts, active, completed);
     }
 
     /** `API-DDL-004`：编辑字段、补充时间激活、或将待定任务改为待补充时间。 */
@@ -198,6 +208,8 @@ public class DdlTaskService {
         if (updated == 0) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        // 编辑已解决待确认变更，草案不再有效。
+        draftStore.deleteDraftAfterCommit(userId, taskId);
         return toVO(entity, user.zoneId());
     }
 
@@ -237,6 +249,7 @@ public class DdlTaskService {
         if (updated == 0) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        draftStore.deleteDraftAfterCommit(userId, taskId);
         return toVO(entity, user.zoneId());
     }
 
@@ -249,6 +262,7 @@ public class DdlTaskService {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         if (TaskStatus.CANCELED.name().equals(entity.getStatus())) {
+            draftStore.deleteDraft(userId, taskId);
             return new DeleteDdlTaskVO(taskId.toString(), TaskStatus.CANCELED.name());
         }
         LocalDateTime now = ScTimeZone.now().toLocalDateTime();
@@ -259,7 +273,208 @@ public class DdlTaskService {
         if (updated == 0) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        draftStore.deleteDraftAfterCommit(userId, taskId);
         return new DeleteDdlTaskVO(taskId.toString(), TaskStatus.CANCELED.name());
+    }
+
+    /**
+     * 插入 TASK-704 已构建好的提取任务；唯一键冲突时回查已有任务。
+     *
+     * <p>{@code created=false} 表示命中 `uk_ddl_idempotency_key`（并发重试/重复提交），
+     * 调用方应返回 `IDEMPOTENT_HIT`。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public DdlTaskCreationResult createExtractedTask(DdlTaskEntity entity) {
+        try {
+            ddlTaskMapper.insert(entity);
+            return new DdlTaskCreationResult(
+                    toVO(entity, entityZone(entity.getUserTimezone(), ScTimeZone.zoneId())), true);
+        } catch (DuplicateKeyException e) {
+            DdlTaskEntity existing = ddlTaskMapper.selectByIdempotencyKey(entity.getIdempotencyKey());
+            if (existing == null || !Objects.equals(existing.getUserId(), entity.getUserId())) {
+                throw e;
+            }
+            return new DdlTaskCreationResult(
+                    toVO(existing, entityZone(existing.getUserTimezone(), ScTimeZone.zoneId())), false);
+        }
+    }
+
+    /** `API-DDL-005` `CONFIRM_UPDATE`：用草案覆盖原任务。 */
+    @Transactional(rollbackFor = Exception.class)
+    public DdlTaskVO applyDraftUpdate(Long userId, Long taskId, DdlTaskDraft draft) {
+        UserContext user = resolveUserContext(userId);
+        DdlTaskEntity entity = lockOwnedTask(userId, taskId);
+        ParsedDraft parsed = parseDraft(draft);
+        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
+        // 必须在覆盖 dueAt/status 之前计算，才能判断“是否延期”并重置提醒位。
+        int flags = computeRemindedFlags(entity, parsed.status(), parsed.dueAt(), now);
+
+        entity.setCourseId(draft.courseId());
+        entity.setCourseName(requireDraftText(draft.courseName(), 128, "course_name"));
+        entity.setTaskTitle(requireDraftText(draft.taskTitle(), 255, "task_title"));
+        entity.setDeliverableFormat(optionalDraftText(draft.deliverableFormat(), 255,
+                "deliverable_format"));
+        entity.setSubmissionChannel(optionalDraftText(draft.submissionChannel(), 255,
+                "submission_channel"));
+        entity.setRawSourceText(optionalDraftText(draft.rawSourceText(), 4000, "raw_source_text"));
+        entity.setRawTimeText(optionalDraftText(draft.rawTimeText(), 128, "raw_time_text"));
+        entity.setTimePrecision(parsed.precision().name());
+        entity.setIsRelativeTime(draft.isRelativeTime() ? 1 : 0);
+        entity.setDueDate(parsed.dueDate());
+        entity.setDueTime(parsed.dueTime());
+        entity.setDueAt(parsed.dueAt());
+        entity.setTimeInferred(draft.timeInferred() ? 1 : 0);
+        entity.setUserTimezone(timeRuleValidator.normalizeUserTimezone(draft.userTimezone()));
+        entity.setConfidence(draft.confidence());
+        entity.setStatus(parsed.status().name());
+        entity.setFollowUpAt(parsed.followUpAt());
+        entity.setFollowUpCount(0);
+        entity.setRemindedFlags(flags);
+        entity.setCompletedAt(null);
+        entity.setContentHash(draft.contentHash());
+        entity.setUpdatedAt(now);
+
+        int updated = ddlTaskMapper.update(null, taskUpdateWrapper(entity));
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return toVO(entity, user.zoneId());
+    }
+
+    /** `API-DDL-005` `CREATE_NEW`：把草案另存为全新的独立任务。 */
+    @Transactional(rollbackFor = Exception.class)
+    public DdlTaskCreationResult createFromDraft(Long userId, DdlTaskDraft draft,
+                                                 String clientRequestIdRaw) {
+        String clientRequestId = requireClientRequestId(clientRequestIdRaw);
+        UserContext user = resolveUserContext(userId);
+        String idempotencyKey = DdlIdempotencyKey.forWebRequest(userId, clientRequestId);
+        DdlTaskEntity existing = ddlTaskMapper.selectByIdempotencyKey(idempotencyKey);
+        if (existing != null && Objects.equals(existing.getUserId(), userId)) {
+            return new DdlTaskCreationResult(toVO(existing, user.zoneId()), false);
+        }
+
+        ParsedDraft parsed = parseDraft(draft);
+        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
+        DdlTaskEntity entity = new DdlTaskEntity();
+        entity.setUserId(userId);
+        entity.setCourseId(draft.courseId());
+        entity.setCourseName(requireDraftText(draft.courseName(), 128, "course_name"));
+        entity.setTaskTitle(requireDraftText(draft.taskTitle(), 255, "task_title"));
+        entity.setDeliverableFormat(optionalDraftText(draft.deliverableFormat(), 255,
+                "deliverable_format"));
+        entity.setSubmissionChannel(optionalDraftText(draft.submissionChannel(), 255,
+                "submission_channel"));
+        entity.setRawSourceText(optionalDraftText(draft.rawSourceText(), 4000, "raw_source_text"));
+        entity.setRawTimeText(optionalDraftText(draft.rawTimeText(), 128, "raw_time_text"));
+        entity.setTimePrecision(parsed.precision().name());
+        entity.setIsRelativeTime(draft.isRelativeTime() ? 1 : 0);
+        entity.setDueDate(parsed.dueDate());
+        entity.setDueTime(parsed.dueTime());
+        entity.setDueAt(parsed.dueAt());
+        entity.setTimeInferred(draft.timeInferred() ? 1 : 0);
+        entity.setUserTimezone(timeRuleValidator.normalizeUserTimezone(draft.userTimezone()));
+        entity.setConfidence(draft.confidence());
+        entity.setStatus(parsed.status().name());
+        entity.setFollowUpAt(parsed.followUpAt());
+        entity.setFollowUpCount(0);
+        entity.setRemindedFlags(0);
+        entity.setHasSubtasks(0);
+        entity.setSourcePlatform(SOURCE_WEB);
+        entity.setSourceMsgId(clientRequestId);
+        entity.setIdempotencyKey(idempotencyKey);
+        entity.setContentHash(draft.contentHash());
+        entity.setCompletedAt(null);
+        entity.setCreatedAt(now);
+        entity.setUpdatedAt(now);
+
+        try {
+            ddlTaskMapper.insert(entity);
+            return new DdlTaskCreationResult(toVO(entity, user.zoneId()), true);
+        } catch (DuplicateKeyException e) {
+            DdlTaskEntity raced = ddlTaskMapper.selectByIdempotencyKey(idempotencyKey);
+            if (raced == null || !Objects.equals(raced.getUserId(), userId)) {
+                throw e;
+            }
+            return new DdlTaskCreationResult(toVO(raced, user.zoneId()), false);
+        }
+    }
+
+    private ParsedDraft parseDraft(DdlTaskDraft draft) {
+        if (draft == null || draft.confidence() == null
+                || draft.confidence().compareTo(BigDecimal.ZERO) < 0
+                || draft.confidence().compareTo(BigDecimal.ONE) > 0) {
+            throw invalidDraft();
+        }
+        TimePrecision precision;
+        TaskStatus status;
+        try {
+            precision = TimePrecision.valueOf(draft.timePrecision());
+            status = TaskStatus.valueOf(draft.status());
+        } catch (RuntimeException e) {
+            throw invalidDraft();
+        }
+        LocalDate dueDate = draft.dueDateValue();
+        LocalTime dueTime = draft.dueTimeValue();
+        LocalDateTime dueAt = draft.dueAtValue();
+        LocalDateTime followUpAt = draft.followUpAtValue();
+        if (status != TaskStatus.ACTIVE
+                && status != TaskStatus.PENDING_TIME
+                && status != TaskStatus.PENDING_CONFIRM) {
+            throw invalidDraft();
+        }
+        if (precision == TimePrecision.DATE_ONLY
+                && (dueTime != null || !draft.timeInferred())) {
+            throw invalidDraft();
+        }
+        if (precision == TimePrecision.EXACT_DATETIME
+                && (dueDate == null || dueTime == null || dueAt == null)) {
+            throw invalidDraft();
+        }
+        if (precision == TimePrecision.VAGUE_OR_MISSING
+                && (dueDate != null || dueTime != null || dueAt != null)) {
+            throw invalidDraft();
+        }
+        if (precision == TimePrecision.INVALID_OR_PAST
+                && dueDate != null && dueAt == null) {
+            throw invalidDraft();
+        }
+        if (status == TaskStatus.PENDING_TIME
+                && (dueDate != null || dueTime != null || dueAt != null)) {
+            throw invalidDraft();
+        }
+        if ((status == TaskStatus.PENDING_TIME || status == TaskStatus.PENDING_CONFIRM)
+                && followUpAt == null) {
+            throw invalidDraft();
+        }
+        if (status == TaskStatus.ACTIVE && followUpAt != null) {
+            throw invalidDraft();
+        }
+        if ((status == TaskStatus.ACTIVE || status == TaskStatus.OVERDUE)
+                && (dueDate == null || dueAt == null)) {
+            throw invalidDraft();
+        }
+        return new ParsedDraft(precision, status, dueDate, dueTime, dueAt, followUpAt);
+    }
+
+    private static String requireDraftText(String raw, int maxLength, String field) {
+        String value = trimToNull(raw);
+        if (value == null || value.length() > maxLength) {
+            throw invalidDraft();
+        }
+        return value;
+    }
+
+    private static String optionalDraftText(String raw, int maxLength, String field) {
+        String value = trimToNull(raw);
+        if (value != null && value.length() > maxLength) {
+            throw invalidDraft();
+        }
+        return value;
+    }
+
+    private static BusinessException invalidDraft() {
+        return new BusinessException(ErrorCode.DRAFT_EXPIRED_OR_NOT_FOUND,
+                "变更草案已失效，请重新提取通知。");
     }
 
     private DdlTaskEntity lockOwnedTask(Long userId, Long taskId) {
@@ -338,7 +553,7 @@ public class DdlTaskService {
         return value;
     }
 
-    private static String requireClientRequestId(String raw) {
+    static String requireClientRequestId(String raw) {
         String value = trimToNull(raw);
         if (value == null) {
             throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED);
@@ -350,7 +565,7 @@ public class DdlTaskService {
         return value;
     }
 
-    private static Long parseOptionalPositiveId(String raw, String field) {
+    static Long parseOptionalPositiveId(String raw, String field) {
         String value = trimToNull(raw);
         if (value == null) {
             return null;
@@ -416,6 +631,11 @@ public class DdlTaskService {
                 .set(DdlTaskEntity::getFollowUpCount, entity.getFollowUpCount())
                 .set(DdlTaskEntity::getRemindedFlags, entity.getRemindedFlags())
                 .set(DdlTaskEntity::getCompletedAt, entity.getCompletedAt())
+                .set(DdlTaskEntity::getRawSourceText, entity.getRawSourceText())
+                .set(DdlTaskEntity::getRawTimeText, entity.getRawTimeText())
+                .set(DdlTaskEntity::getIsRelativeTime, entity.getIsRelativeTime())
+                .set(DdlTaskEntity::getConfidence, entity.getConfidence())
+                .set(DdlTaskEntity::getContentHash, entity.getContentHash())
                 .set(DdlTaskEntity::getUpdatedAt, entity.getUpdatedAt());
     }
 
@@ -440,7 +660,7 @@ public class DdlTaskService {
                 .set(DdlTaskEntity::getUpdatedAt, entity.getUpdatedAt());
     }
 
-    private static DdlTaskVO toVO(DdlTaskEntity entity, ZoneId userZone) {
+    static DdlTaskVO toVO(DdlTaskEntity entity, ZoneId userZone) {
         int flags = entity.getRemindedFlags() == null ? 0 : entity.getRemindedFlags();
         // 优先使用任务创建时的时区快照，保证 due_date/due_time 与 due_at 的墙钟语义一致；
         // 快照缺失/非法时才退回当前用户时区。
@@ -478,7 +698,7 @@ public class DdlTaskService {
     /**
      * 数据库 DATETIME 按应用时区解释；输出时换算回用户时区，保证 {@code due_at} 带用户偏移量。
      */
-    private static OffsetDateTime toUserOffset(LocalDateTime appLocal, ZoneId userZone) {
+    static OffsetDateTime toUserOffset(LocalDateTime appLocal, ZoneId userZone) {
         if (appLocal == null) {
             return null;
         }
@@ -508,6 +728,14 @@ public class DdlTaskService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    public record DdlTaskCreationResult(DdlTaskVO task, boolean created) {
+    }
+
+    private record ParsedDraft(TimePrecision precision, TaskStatus status,
+                               LocalDate dueDate, LocalTime dueTime,
+                               LocalDateTime dueAt, LocalDateTime followUpAt) {
     }
 
     private record UserContext(String timezoneName, ZoneId zoneId) {

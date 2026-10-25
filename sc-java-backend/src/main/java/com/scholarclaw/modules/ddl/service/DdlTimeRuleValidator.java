@@ -5,6 +5,7 @@ import com.scholarclaw.common.enums.TaskStatus;
 import com.scholarclaw.common.enums.TimePrecision;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import java.math.BigDecimal;
 import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -42,6 +43,7 @@ public class DdlTimeRuleValidator {
             .withResolverStyle(ResolverStyle.STRICT);
     private static final LocalTime DATE_ONLY_SENTINEL = LocalTime.of(23, 59, 59);
     private static final int FOLLOW_UP_HOURS = 24;
+    private static final BigDecimal CONFIDENCE_CONFIRM_THRESHOLD = new BigDecimal("0.800");
 
     /**
      * 校验并计算手动建单/编辑的时间字段。
@@ -67,9 +69,73 @@ public class DdlTimeRuleValidator {
         };
     }
 
+    /**
+     * 把 TASK-701/702 的模型提取结果映射为落库时间字段（TASK-704）。
+     *
+     * <p>与手动建单的区别：
+     * <ul>
+     *   <li>{@code INVALID_OR_PAST} 是模型提取的合法结果：有日期时按过去草案保留
+     *       {@code due_at} 并置 {@code PENDING_CONFIRM}；无日期时置 {@code PENDING_TIME}；</li>
+     *   <li>置信度 {@code < 0.800} 或模型标注歧义时，即使时间明确也进入
+     *       {@code PENDING_CONFIRM}；</li>
+     *   <li>相对日期、跨年等规则已在 Python `TimeParser` 完成，这里只做时区换算与状态映射。</li>
+     * </ul>
+     */
+    public DdlTimeFields resolveExtracted(TimePrecision precision,
+                                          LocalDate parsedDueDate,
+                                          LocalTime parsedDueTime,
+                                          boolean hasAmbiguity,
+                                          BigDecimal confidence,
+                                          ZoneId userZone,
+                                          LocalDateTime now) {
+        boolean confirmed = confidence != null
+                && confidence.compareTo(CONFIDENCE_CONFIRM_THRESHOLD) >= 0
+                && !hasAmbiguity;
+
+        return switch (precision) {
+            case EXACT_DATETIME -> {
+                if (parsedDueDate == null || parsedDueTime == null) {
+                    throw upstreamIncomplete("EXACT_DATETIME 缺少日期或时刻");
+                }
+                LocalDateTime dueAt = toAppZone(parsedDueDate, parsedDueTime, userZone);
+                TaskStatus status = confirmed && dueAt.isAfter(now)
+                        ? TaskStatus.ACTIVE : TaskStatus.PENDING_CONFIRM;
+                yield new DdlTimeFields(precision, parsedDueDate, parsedDueTime, dueAt,
+                        false, status, followUpAt(status, now));
+            }
+            case DATE_ONLY -> {
+                if (parsedDueDate == null) {
+                    throw upstreamIncomplete("DATE_ONLY 缺少日期");
+                }
+                LocalDateTime dueAt = toAppZone(parsedDueDate, DATE_ONLY_SENTINEL, userZone);
+                TaskStatus status = confirmed && dueAt.isAfter(now)
+                        ? TaskStatus.ACTIVE : TaskStatus.PENDING_CONFIRM;
+                yield new DdlTimeFields(precision, parsedDueDate, null, dueAt,
+                        true, status, followUpAt(status, now));
+            }
+            case VAGUE_OR_MISSING -> new DdlTimeFields(precision, null, null, null,
+                    false, TaskStatus.PENDING_TIME, now.plusHours(FOLLOW_UP_HOURS));
+            case INVALID_OR_PAST -> {
+                if (parsedDueDate == null) {
+                    yield new DdlTimeFields(precision, null, null, null,
+                            false, TaskStatus.PENDING_TIME, now.plusHours(FOLLOW_UP_HOURS));
+                }
+                boolean inferred = parsedDueTime == null;
+                LocalTime effectiveTime = parsedDueTime == null ? DATE_ONLY_SENTINEL : parsedDueTime;
+                LocalDateTime dueAt = toAppZone(parsedDueDate, effectiveTime, userZone);
+                yield new DdlTimeFields(precision, parsedDueDate, parsedDueTime, dueAt,
+                        inferred, TaskStatus.PENDING_CONFIRM, now.plusHours(FOLLOW_UP_HOURS));
+            }
+        };
+    }
+
+    private static BusinessException upstreamIncomplete(String detail) {
+        return new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR,
+                "模型返回的 DDL 时间字段不完整（" + detail + "）。");
+    }
+
     /** 校验用户 IANA 时区；空值回退应用默认时区。 */
-    public ZoneId resolveUserZone(String timezone) {
-        String candidate = trimToNull(timezone);
+    public ZoneId resolveUserZone(String timezone) {        String candidate = trimToNull(timezone);
         if (candidate == null) {
             return ScTimeZone.zoneId();
         }

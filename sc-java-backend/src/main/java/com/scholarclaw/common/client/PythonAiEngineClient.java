@@ -52,6 +52,8 @@ public class PythonAiEngineClient {
     public static final String VECTORS_PATH = "/internal/ai/v1/rag/vectors";
     /** Python 侧内部 RAG 流式问答路径（`04` §4.9.3，TASK-604）。 */
     public static final String RAG_QA_STREAM_PATH = "/internal/ai/v1/rag/qa-stream";
+    /** Python 侧内部意图路由与 DDL 提取路径（`04` §4.9.2，TASK-701/704）。 */
+    public static final String ROUTE_AND_EXTRACT_PATH = "/internal/ai/v1/agent/route-and-extract";
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
     private static final int MAX_ERROR_BODY_BYTES = 64 * 1024;
 

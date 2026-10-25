@@ -6,10 +6,14 @@ import com.scholarclaw.common.response.Result;
 import com.scholarclaw.common.security.SecurityContextUtils;
 import com.scholarclaw.modules.ddl.dto.CompleteDdlTaskRequest;
 import com.scholarclaw.modules.ddl.dto.CreateDdlTaskRequest;
+import com.scholarclaw.modules.ddl.dto.DdlExtractVO;
 import com.scholarclaw.modules.ddl.dto.DdlTaskBoardVO;
 import com.scholarclaw.modules.ddl.dto.DdlTaskVO;
 import com.scholarclaw.modules.ddl.dto.DeleteDdlTaskVO;
+import com.scholarclaw.modules.ddl.dto.DraftDecisionRequest;
+import com.scholarclaw.modules.ddl.dto.ExtractDdlTaskRequest;
 import com.scholarclaw.modules.ddl.dto.UpdateDdlTaskRequest;
+import com.scholarclaw.modules.ddl.service.DdlExtractionService;
 import com.scholarclaw.modules.ddl.service.DdlTaskService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -26,22 +30,30 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * DDL 任务接口（{@code 04} §4.6：`API-DDL-002~004/006/007`，TASK-703）。
+ * DDL 任务接口（{@code 04} §4.6：`API-DDL-001~004/005~007`，TASK-703/704）。
  *
  * <p>身份只来自 JWT；路径中的 {@code task_id} 仅作为资源标识，服务层始终用
  * {@code user_id + task_id} 联合过滤，跨用户访问统一返回 404（防 IDOR）。
- *
- * <p>`API-DDL-001`（通知提取）与 `API-DDL-005`（变更草案决策）依赖 Python 提取与 Redis 草案，
- * 属 TASK-704，不在本控制器暴露。
  */
 @RestController
 @RequestMapping("/api/v1/ddl/tasks")
 public class DdlTaskController {
 
     private final DdlTaskService ddlTaskService;
+    private final DdlExtractionService ddlExtractionService;
 
-    public DdlTaskController(DdlTaskService ddlTaskService) {
+    public DdlTaskController(DdlTaskService ddlTaskService,
+                             DdlExtractionService ddlExtractionService) {
         this.ddlTaskService = ddlTaskService;
+        this.ddlExtractionService = ddlExtractionService;
+    }
+
+    /** `API-DDL-001`：粘贴通知文本提取并创建任务 / 返回语义重复提示或变更草案。 */
+    @PostMapping("/extract")
+    public Result<DdlExtractVO> extract(@Valid @RequestBody ExtractDdlTaskRequest request) {
+        return Result.ok("DDL 提取处理完成",
+                ddlExtractionService.extract(
+                        SecurityContextUtils.requireCurrentUserId(), request));
     }
 
     @PostMapping
@@ -84,6 +96,16 @@ public class DdlTaskController {
         return Result.ok("任务已删除",
                 ddlTaskService.cancelTask(
                         SecurityContextUtils.requireCurrentUserId(), parseTaskId(taskId)));
+    }
+
+    /** `API-DDL-005`：确认更新 / 仍然新建 / 忽略重复通知变更草案。 */
+    @PostMapping("/{taskId}/draft-decision")
+    public Result<DdlTaskVO> decideDraft(@PathVariable("taskId") String taskId,
+                                         @Valid @RequestBody DraftDecisionRequest request) {
+        return Result.ok("变更草案处理完成",
+                ddlExtractionService.decideDraft(
+                        SecurityContextUtils.requireCurrentUserId(), parseTaskId(taskId),
+                        request));
     }
 
     private static Long parseTaskId(String raw) {

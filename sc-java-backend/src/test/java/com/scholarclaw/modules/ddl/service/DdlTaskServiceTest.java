@@ -50,6 +50,7 @@ class DdlTaskServiceTest {
     private DdlTaskMapper mapper;
     private CourseService courseService;
     private UserConfigService userConfigService;
+    private DdlDraftStore draftStore;
     private DdlTaskService service;
 
     @BeforeAll
@@ -62,9 +63,11 @@ class DdlTaskServiceTest {
         mapper = mock(DdlTaskMapper.class);
         courseService = mock(CourseService.class);
         userConfigService = mock(UserConfigService.class);
+        draftStore = mock(DdlDraftStore.class);
         service = new DdlTaskService(mapper, courseService, userConfigService,
-                new DdlTimeRuleValidator());
+                new DdlTimeRuleValidator(), draftStore);
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(userConfig("Asia/Shanghai")));
+        when(draftStore.listDrafts(USER_ID)).thenReturn(List.of());
         doAnswer(invocation -> {
             DdlTaskEntity entity = invocation.getArgument(0);
             if (entity.getTaskId() == null) {
@@ -387,6 +390,7 @@ class DdlTaskServiceTest {
         assertThat(existing.getFollowUpAt()).isNull();
         assertThat(vo.status()).isEqualTo("COMPLETED");
         assertThat(vo.completedAt()).isNotNull();
+        verify(draftStore).deleteDraftAfterCommit(USER_ID, TASK_ID);
     }
 
     @Test
@@ -468,6 +472,7 @@ class DdlTaskServiceTest {
         assertThat(existing.getFollowUpAt()).isNull();
         assertThat(vo.deletedTaskId()).isEqualTo("103");
         assertThat(vo.status()).isEqualTo("CANCELED");
+        verify(draftStore).deleteDraftAfterCommit(USER_ID, TASK_ID);
     }
 
     @Test
@@ -480,6 +485,7 @@ class DdlTaskServiceTest {
 
         verify(mapper, never()).update(any(), any());
         assertThat(vo.status()).isEqualTo("CANCELED");
+        verify(draftStore).deleteDraft(USER_ID, TASK_ID);
     }
 
     @Test
@@ -528,6 +534,22 @@ class DdlTaskServiceTest {
     }
 
     @Test
+    @DisplayName("看板包含 Redis 中未过期的变更草案")
+    void listIncludesPendingChangeDrafts() {
+        DdlTaskEntity active = task("ACTIVE", LocalDate.of(2099, 12, 30),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 30, 22, 0));
+        when(mapper.selectList(any())).thenReturn(List.of(active));
+        DdlTaskDraft draft = DdlTaskDraft.fromEntity(active, TASK_ID, "2026-10-16T11:40:00");
+        when(draftStore.listDrafts(USER_ID)).thenReturn(List.of(draft));
+
+        DdlTaskBoardVO board = service.listTasks(USER_ID, "ACTIVE_BOARD", null);
+
+        assertThat(board.activeTasks()).hasSize(1);
+        assertThat(board.pendingChangeDrafts()).hasSize(1);
+        assertThat(board.pendingChangeDrafts().get(0).targetTaskId()).isEqualTo(TASK_ID);
+    }
+
+    @Test
     @DisplayName("非法 status_group → VALIDATION_ERROR，不查库")
     void invalidStatusGroupIsRejected() {
         assertError(ErrorCode.VALIDATION_ERROR,
@@ -555,6 +577,123 @@ class DdlTaskServiceTest {
         assertThat(vo.userTimezone()).isEqualTo("America/New_York");
         assertThat(vo.dueAt())
                 .isEqualTo(OffsetDateTime.parse("2099-12-31T22:00:00-05:00"));
+    }
+
+    @Test
+    @DisplayName("CONFIRM_UPDATE 应用草案字段并重置延期提醒位")
+    void applyDraftUpdateAppliesFieldsAndResetsFlags() {
+        DdlTaskEntity existing = task("ACTIVE", LocalDate.of(2099, 12, 30),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 30, 22, 0));
+        existing.setRemindedFlags(7);
+        when(mapper.selectByIdForUpdate(TASK_ID, USER_ID)).thenReturn(existing);
+        when(mapper.update(isNull(), any())).thenReturn(1);
+
+        DdlTaskEntity candidate = task("ACTIVE", LocalDate.of(2099, 12, 31),
+                LocalTime.of(23, 59), LocalDateTime.of(2099, 12, 31, 23, 59));
+        candidate.setTaskTitle("延期任务");
+        candidate.setDeliverableFormat("pdf");
+        candidate.setSubmissionChannel("邮箱");
+        candidate.setRawSourceText("延期通知");
+        candidate.setRawTimeText("12月31日 23:59");
+        candidate.setConfidence(new BigDecimal("0.980"));
+        candidate.setContentHash("new-hash");
+        DdlTaskDraft draft = DdlTaskDraft.fromEntity(candidate, TASK_ID, "2026-10-16T11:40:00");
+
+        DdlTaskVO vo = service.applyDraftUpdate(USER_ID, TASK_ID, draft);
+
+        assertThat(existing.getTaskTitle()).isEqualTo("延期任务");
+        assertThat(existing.getDueAt()).isEqualTo(LocalDateTime.of(2099, 12, 31, 23, 59));
+        assertThat(existing.getStatus()).isEqualTo("ACTIVE");
+        assertThat(existing.getRemindedFlags()).isZero();
+        assertThat(existing.getContentHash()).isEqualTo("new-hash");
+        assertThat(existing.getRawSourceText()).isEqualTo("延期通知");
+        assertThat(existing.getConfidence()).isEqualByComparingTo("0.980");
+        assertThat(existing.getCompletedAt()).isNull();
+        assertThat(existing.getFollowUpCount()).isZero();
+        assertThat(vo.taskId()).isEqualTo(TASK_ID);
+    }
+
+    @Test
+    @DisplayName("CONFIRM_UPDATE 改为 VAGUE：清空 due 字段并置 PENDING_TIME")
+    void applyDraftUpdateToVagueClearsDueFields() {
+        DdlTaskEntity existing = task("ACTIVE", LocalDate.of(2099, 12, 30),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 30, 22, 0));
+        when(mapper.selectByIdForUpdate(TASK_ID, USER_ID)).thenReturn(existing);
+        when(mapper.update(isNull(), any())).thenReturn(1);
+
+        DdlTaskEntity candidate = task("PENDING_TIME", null, null, null);
+        candidate.setTimePrecision("VAGUE_OR_MISSING");
+        candidate.setTimeInferred(0);
+        candidate.setFollowUpAt(LocalDateTime.of(2099, 1, 1, 0, 0));
+        DdlTaskDraft draft = DdlTaskDraft.fromEntity(candidate, TASK_ID, "2026-10-16T11:40:00");
+
+        service.applyDraftUpdate(USER_ID, TASK_ID, draft);
+
+        assertThat(existing.getStatus()).isEqualTo("PENDING_TIME");
+        assertThat(existing.getDueDate()).isNull();
+        assertThat(existing.getDueTime()).isNull();
+        assertThat(existing.getDueAt()).isNull();
+        assertThat(existing.getFollowUpAt()).isNotNull();
+        assertThat(existing.getRemindedFlags()).isZero();
+    }
+
+    @Test
+    @DisplayName("CREATE_NEW 用新的 client_request_id 插入独立任务")
+    void createFromDraftInsertsNewTask() {
+        when(mapper.selectByIdempotencyKey(any())).thenReturn(null);
+        DdlTaskEntity candidate = task("ACTIVE", LocalDate.of(2099, 12, 31),
+                LocalTime.of(23, 59), LocalDateTime.of(2099, 12, 31, 23, 59));
+        candidate.setContentHash("new-hash");
+        DdlTaskDraft draft = DdlTaskDraft.fromEntity(candidate, TASK_ID, "2026-10-16T11:40:00");
+
+        DdlTaskService.DdlTaskCreationResult result =
+                service.createFromDraft(USER_ID, draft, "req_decide_002");
+
+        assertThat(result.created()).isTrue();
+        DdlTaskEntity inserted = capturedInsert();
+        assertThat(inserted.getTaskId()).isEqualTo(TASK_ID);
+        assertThat(inserted.getUserId()).isEqualTo(USER_ID);
+        assertThat(inserted.getSourceMsgId()).isEqualTo("req_decide_002");
+        assertThat(inserted.getIdempotencyKey())
+                .isEqualTo(DdlIdempotencyKey.forWebRequest(USER_ID, "req_decide_002"));
+        assertThat(inserted.getContentHash()).isEqualTo("new-hash");
+        assertThat(inserted.getStatus()).isEqualTo("ACTIVE");
+        assertThat(inserted.getDueAt()).isEqualTo(LocalDateTime.of(2099, 12, 31, 23, 59));
+        assertThat(inserted.getCreatedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("CREATE_NEW 重试命中新幂等键：返回已有任务，不重复插入")
+    void createFromDraftDuplicateReturnsExisting() {
+        DdlTaskEntity existing = task("ACTIVE", LocalDate.of(2099, 12, 31),
+                LocalTime.of(23, 59), LocalDateTime.of(2099, 12, 31, 23, 59));
+        when(mapper.selectByIdempotencyKey(any())).thenReturn(existing);
+        DdlTaskEntity candidate = task("ACTIVE", LocalDate.of(2099, 12, 31),
+                LocalTime.of(23, 59), LocalDateTime.of(2099, 12, 31, 23, 59));
+        DdlTaskDraft draft = DdlTaskDraft.fromEntity(candidate, TASK_ID, "2026-10-16T11:40:00");
+
+        DdlTaskService.DdlTaskCreationResult result =
+                service.createFromDraft(USER_ID, draft, "req_decide_002");
+
+        assertThat(result.created()).isFalse();
+        assertThat(result.task().taskId()).isEqualTo(TASK_ID);
+        verify(mapper, never()).insert(any(DdlTaskEntity.class));
+    }
+
+    @Test
+    @DisplayName("损坏草案（ACTIVE 但缺 due_at）→ DRAFT_EXPIRED_OR_NOT_FOUND")
+    void corruptDraftIsExpired() {
+        when(mapper.selectByIdForUpdate(TASK_ID, USER_ID)).thenReturn(
+                task("ACTIVE", LocalDate.of(2099, 12, 30),
+                        LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 30, 22, 0)));
+        DdlTaskDraft draft = new DdlTaskDraft(
+                TASK_ID, COURSE_ID, "操作系统原理", "任务", "EXACT_DATETIME",
+                null, null, null, false, "ACTIVE", null,
+                null, null, "原文", "时间", "Asia/Shanghai",
+                new BigDecimal("0.960"), false, "hash", "2026-10-16T11:40:00");
+
+        assertError(ErrorCode.DRAFT_EXPIRED_OR_NOT_FOUND,
+                () -> service.applyDraftUpdate(USER_ID, TASK_ID, draft));
     }
 
     private DdlTaskEntity capturedInsert() {

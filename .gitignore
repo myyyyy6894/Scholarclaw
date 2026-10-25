@@ -12,6 +12,10 @@ docs/
 *.p12
 *.jks
 
+# ===== 本地课件与临时测试数据（不纳入版本管理）=====
+# `resource/` 存放个人课件 PDF，体积大且可能含版权内容，禁止提交。
+resource/
+
 # ===== Java / Maven =====
 target/
 !.mvn/wrapper/maven-wrapper.jar

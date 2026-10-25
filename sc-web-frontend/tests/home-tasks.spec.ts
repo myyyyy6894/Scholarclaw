@@ -9,8 +9,13 @@ describe('home task lists', () => {
     expect(UPCOMING_TASKS.some((item) => item.task === 'TASK-404')).toBe(false)
   })
 
+  it('TASK-705 已实现且不再标记为 upcoming', () => {
+    expect(IMPLEMENTED_CAPABILITIES.some((item) => item.includes('TASK-705'))).toBe(true)
+    expect(UPCOMING_TASKS.some((item) => item.task === 'TASK-705')).toBe(false)
+  })
+
   it('upcoming 只保留确实未实现的任务', () => {
-    expect(UPCOMING_TASKS.map((item) => item.task)).toEqual(['TASK-605', 'TASK-705'])
+    expect(UPCOMING_TASKS.map((item) => item.task)).toEqual(['TASK-706'])
   })
 
   it('已实现清单与 upcoming 任务号不重叠', () => {

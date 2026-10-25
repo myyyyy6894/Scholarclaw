@@ -20,6 +20,7 @@ const PAGE_META: Record<string, { title: string; subtitle: string }> = {
   courses: { title: '课程空间', subtitle: '管理课程与 Embedding 模型绑定' },
   knowledge: { title: '课程知识库', subtitle: '上传课件并跟踪真实解析状态' },
   rag: { title: '课程问答', subtitle: '基于课件的溯源回答与引用' },
+  ddl: { title: 'DDL 待办', subtitle: '通知提取、待确认收件箱与任务闭环' },
   settings: { title: '模型配置', subtitle: 'BYOK 密钥与模型连接设置' },
 }
 
@@ -89,6 +90,12 @@ async function doLogout(): Promise<void> {
           </svg>
           <span>课程问答</span>
         </router-link>
+        <router-link v-if="auth.isAuthenticated" class="sc-nav__item" title="DDL 待办" aria-label="DDL 待办" :class="{ 'sc-nav__item--active': route.name === 'ddl' }" :to="{ name: 'ddl' }">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 2h10a2 2 0 0 1 2 2v18l-7-4-7 4V4a2 2 0 0 1 2-2zm1 5v2h8V7zm0 4v2h5v-2z" />
+          </svg>
+          <span>DDL 待办</span>
+        </router-link>
         <router-link v-if="auth.isAuthenticated" class="sc-nav__item" title="模型配置" aria-label="模型配置" :class="{ 'sc-nav__item--active': route.name === 'settings' }" :to="{ name: 'settings' }">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z" />
@@ -124,7 +131,7 @@ async function doLogout(): Promise<void> {
           <h1>{{ pageMeta.title }}</h1>
           <p v-if="pageMeta.subtitle">{{ pageMeta.subtitle }}</p>
         </div>
-        <span class="sc-topbar__badge">MVP · P6</span>
+        <span class="sc-topbar__badge">MVP · P7</span>
       </header>
       <main class="sc-content">
         <div class="sc-page">

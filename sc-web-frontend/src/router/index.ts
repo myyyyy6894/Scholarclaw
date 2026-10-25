@@ -3,6 +3,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import { installAuthGuard } from '@/router/guard'
 import CoursesView from '@/views/CoursesView.vue'
+import DdlView from '@/views/DdlView.vue'
 import HomeView from '@/views/HomeView.vue'
 import KnowledgeView from '@/views/KnowledgeView.vue'
 import LoginView from '@/views/LoginView.vue'
@@ -18,7 +19,7 @@ import SettingsView from '@/views/SettingsView.vue'
  * | 登录、注册与个人设置（BYOK） | TASK-205（已落地） |
  * | 课程知识库管理（左侧栏 + 文档抽屉） | TASK-404 |
  * | RAG 溯源问答主工作区（`/rag`） | TASK-605（已落地） |
- * | DDL 任务看板与待确认收件箱（中间 Tab 2） | TASK-705 |
+ * | DDL 任务看板与待确认收件箱（`/ddl`） | TASK-705（已落地） |
  *
  * 需要登录的路由声明 `meta.requiresAuth = true`；登录页声明 `meta.guestOnly = true`，
  * 已登录用户访问时直接回到设置页，避免出现"已登录还能看到登录表单"的割裂状态。
@@ -58,6 +59,12 @@ const routes: RouteRecordRaw[] = [
         name: 'rag',
         component: RagView,
         meta: { title: '课程问答', requiresAuth: true },
+      },
+      {
+        path: 'ddl',
+        name: 'ddl',
+        component: DdlView,
+        meta: { title: 'DDL 待办', requiresAuth: true },
       },
       {
         path: 'settings',

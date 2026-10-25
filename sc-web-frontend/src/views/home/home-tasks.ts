@@ -13,6 +13,8 @@ export const IMPLEMENTED_CAPABILITIES = [
   'BYOK 模型配置表单：连通性探测、保存状态、密钥掩码展示',
   '课程空间管理：列表、新建、切换 Embedding 模型、删除（TASK-401）',
   '课程知识库：课程切换、课件列表、上传与解析状态展示（TASK-404）',
+  'RAG 溯源问答工作台：SSE 流式渲染、引用卡片、历史分页（TASK-605）',
+  'DDL 待办工作台：通知提取、待确认收件箱、变更草案决策与任务闭环（TASK-705）',
   '统一 API client：信封解包、错误分类、401 清理会话',
   '登录态管理（Pinia）与浏览器存储封装（只存令牌，不存密钥）',
   '全局错误提示出口（Element Plus ElMessage）',
@@ -20,6 +22,5 @@ export const IMPLEMENTED_CAPABILITIES = [
 ]
 
 export const UPCOMING_TASKS: UpcomingTask[] = [
-  { task: 'TASK-605', title: 'RAG 溯源问答主工作区（SSE 流式 + 引用高亮）' },
-  { task: 'TASK-705', title: 'DDL 任务看板与待确认收件箱' },
+  { task: 'TASK-706', title: 'Single Agent Router（AUTO_ROUTE 自然语言意图路由）' },
 ]

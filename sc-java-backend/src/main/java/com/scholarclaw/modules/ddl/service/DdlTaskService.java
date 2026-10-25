@@ -140,7 +140,7 @@ public class DdlTaskService {
         return toVO(entity, user.zoneId());
     }
 
-    /** `API-DDL-003`：任务看板；变更草案在 TASK-703 固定为空列表。 */
+    /** `API-DDL-003`：任务看板；变更草案取自 Redis（TASK-704）。 */
     public DdlTaskBoardVO listTasks(Long userId, String statusGroupRaw, String courseIdRaw) {
         UserContext user = resolveUserContext(userId);
         Long courseId = parseOptionalPositiveId(courseIdRaw, "course_id");

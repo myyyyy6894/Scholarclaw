@@ -192,7 +192,56 @@ docker compose exec -T sc-mysql sh -lc \
 
 > 禁止在生产库或未授权环境执行上述删除；脚本本身绝不调用任何账号删除接口。
 
-## 6. 安全约束
+## 6. P7 DDL 真实栈 E2E（本地模型替身）
+
+`p7_mock_model.py` 返回 P7 验收所需的四类时间、跨年、周末/凌晨、语义重复与变更草案样本；
+**它只是链路替身，不是真实供应商质量基线**。
+
+**日期不再固定**：绝对日期由脚本按当前时间生成后写入通知原文，mock 原样回显；
+周末/凌晨/跨年用例显式传入固定 `reference_time`。两个脚本启动时都会打印
+`[reference]` 与 `[generated]` 日期，便于审计失败时到底比对了哪一天。
+
+```bash
+# 1) 启动模型替身（内部网络，不映射宿主端口）
+docker run -d --name sc-p7-mock --network scholarclaw-internal \
+  -v "$PWD/scripts/e2e/p7_mock_model.py:/mock.py:ro" \
+  scholarclaw/sc-python-ai:1.0.0 python /mock.py --port 11434
+MOCK_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' sc-p7-mock)
+
+# 2) 让 Java 使用临时白名单重启（不要直接改 .env）
+cp .env /tmp/sc-p7-e2e.env
+printf '\nSC_ALLOW_LOCAL_MODEL_BASE_URL=true\nSC_LOCAL_MODEL_ALLOWED_ORIGINS=http://%s:11434\n' "$MOCK_IP" \
+  >> /tmp/sc-p7-e2e.env
+docker compose --env-file /tmp/sc-p7-e2e.env up -d --force-recreate sc-java-backend
+
+# 3) 真实 HTTP API（46 项）
+sc-python-ai/.venv/bin/python scripts/e2e/p7_api_e2e.py \
+  --base-url http://127.0.0.1 --model-base-url "http://$MOCK_IP:11434/v1"
+
+# 4) 真实浏览器（20 项；复用 §2 的 playwright 临时 venv）
+/tmp/sc-e2e-venv/bin/python scripts/e2e/p7_browser_e2e.py \
+  --base-url http://127.0.0.1 --model-base-url "http://$MOCK_IP:11434/v1"
+```
+
+清理（恢复原 `.env` 注入并删除替身）：
+
+```bash
+docker rm -f sc-p7-mock
+cp .env /tmp/sc-p7-e2e-restore.env
+docker compose --env-file /tmp/sc-p7-e2e-restore.env up -d --force-recreate sc-java-backend
+```
+
+已知限制：会积累 `p7r3v_*` / `p7r3ui_*` 账号与任务；清理前先 SELECT 确认，禁止在生产库执行。
+真实供应商模型、OneBot 入站与 P8 提醒不在本脚本范围内。
+
+旧版本 Redis 草案（缺少 `schema_version` / `target_task_updated_at`）可在部署后清理：
+
+```bash
+python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380   # dry-run
+python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380 --apply
+```
+
+## 7. 安全约束
 
 * 脚本中的 API Key 固定为 `sk-*-not-a-real-key`，只进入被 SSRF 前置拦截的请求体，不会出站；
 * 不读取、不打印 `.env` 中的任何真实密钥；

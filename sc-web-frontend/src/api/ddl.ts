@@ -52,6 +52,8 @@ export interface DdlTask {
   due_time: string | null
   due_at: string | null
   time_inferred: boolean
+  /** 待确认原因：跨年顺延/周末下周一/凌晨跨日/低置信度/过去时间等；非歧义任务为 `null`。 */
+  time_ambiguity_reason: string | null
   user_timezone: string
   confidence: number | null
   status: DdlTaskStatus
@@ -75,10 +77,13 @@ export interface TaskChangeDraft {
   new_due_time: string | null
   new_due_at: string | null
   new_time_inferred: boolean
+  new_time_ambiguity_reason: string | null
   new_deliverable_format: string | null
   new_submission_channel: string | null
   raw_source_text: string | null
   raw_time_text: string | null
+  /** 草案新截止时间所属的用户时区快照；缺失时前端不得静默使用浏览器时区。 */
+  user_timezone: string | null
   expires_at: string
 }
 
@@ -127,6 +132,13 @@ export interface UpdateDdlTaskRequest {
   due_time?: string | null
   deliverable_format?: string | null
   submission_channel?: string | null
+  /**
+   * 显式确认当前时间并重新判定状态。
+   *
+   * 缺省时，若提交的日期/时刻与原任务一致，后端保留原精度/状态/确认原因，
+   * 只改标题不会改变截止时间或激活任务。
+   */
+  reconfirm_time?: boolean
 }
 
 export interface DraftDecisionRequest {

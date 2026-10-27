@@ -33,7 +33,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * DDL 通知提取建单与变更草案决策（TASK-704，`04` `API-DDL-001/005`）。
@@ -55,6 +58,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class DdlExtractionService {
 
+    private static final Logger log = LoggerFactory.getLogger(DdlExtractionService.class);
     private static final Duration EXTRACT_READ_TIMEOUT = Duration.ofSeconds(15);
     private static final int RAW_TEXT_MIN_LENGTH = 4;
     private static final int RAW_TEXT_MAX_LENGTH = 4000;
@@ -77,6 +81,7 @@ public class DdlExtractionService {
     private final DdlSemanticMatcher semanticMatcher;
     private final DdlUserConfigResolver userConfigResolver;
     private final DdlTimeRuleValidator timeRuleValidator;
+    private final DdlDecisionReceiptStore decisionReceiptStore;
 
     public DdlExtractionService(PythonAiEngineClient pythonAiEngineClient,
                                 CourseService courseService,
@@ -85,7 +90,8 @@ public class DdlExtractionService {
                                 DdlDraftStore draftStore,
                                 DdlSemanticMatcher semanticMatcher,
                                 DdlUserConfigResolver userConfigResolver,
-                                DdlTimeRuleValidator timeRuleValidator) {
+                                DdlTimeRuleValidator timeRuleValidator,
+                                DdlDecisionReceiptStore decisionReceiptStore) {
         this.pythonAiEngineClient = pythonAiEngineClient;
         this.courseService = courseService;
         this.ddlTaskMapper = ddlTaskMapper;
@@ -94,121 +100,239 @@ public class DdlExtractionService {
         this.semanticMatcher = semanticMatcher;
         this.userConfigResolver = userConfigResolver;
         this.timeRuleValidator = timeRuleValidator;
+        this.decisionReceiptStore = decisionReceiptStore;
     }
 
     /** `API-DDL-001`：通知文本 → Python 提取 → 三层幂等 → 建单/草案。 */
     public DdlExtractVO extract(Long userId, ExtractDdlTaskRequest request) {
-        String clientRequestId = DdlTaskService.requireClientRequestId(request.clientRequestId());
-        String rawText = requireRawText(request.rawText());
+        return extractForPlatform(userId, DdlIdempotencyKey.SOURCE_PLATFORM_WEB,
+                DdlTaskService.requireClientRequestId(request.clientRequestId()),
+                request.rawText(), request.courseId(), request.referenceTime(),
+                Boolean.TRUE.equals(request.forceCreate()));
+    }
+
+    /**
+     * 带来源平台的提取入口（IM 自然语言或 `/ddl` 指令）。
+     *
+     * <p>{@code sourcePlatform + sourceMsgId} 同时参与 Redis 接入键与请求级幂等键，
+     * 保证同一平台消息重试不会重复建单。
+     */
+    public DdlExtractVO extractForPlatform(Long userId, String sourcePlatform,
+                                           String sourceMsgIdRaw, String rawTextRaw,
+                                           String courseIdRaw, String referenceTime,
+                                           boolean forceCreate) {
+        String sourceMsgId = requireSourceMsgId(sourceMsgIdRaw, sourcePlatform);
+        String rawText = requireRawText(rawTextRaw);
+        return executeExtraction(userId, sourcePlatform, sourceMsgId, rawText, courseIdRaw,
+                referenceTime, forceCreate,
+                (user, courses) -> requestPayload(
+                        userId, user, courses, rawText, referenceTime));
+    }
+
+    /**
+     * 路由层已完成提取时的落库入口（`AUTO_ROUTE` 且意图为 `DDL_EXTRACT`）。
+     *
+     * <p>不再调用 Python：直接复用三层幂等、语义判定与落库逻辑，避免重复提取。
+     */
+    public DdlExtractVO persistRouted(Long userId, String sourcePlatform,
+                                      String sourceMsgIdRaw, String rawTextRaw,
+                                      String courseIdRaw, boolean forceCreate,
+                                      DdlExtractedPayload payload) {
+        String sourceMsgId = requireSourceMsgId(sourceMsgIdRaw, sourcePlatform);
+        String rawText = requireRawText(rawTextRaw);
+        return executeExtraction(userId, sourcePlatform, sourceMsgId, rawText, courseIdRaw,
+                null, forceCreate, (user, courses) -> payload);
+    }
+
+    private DdlExtractVO executeExtraction(Long userId, String sourcePlatform,
+                                           String sourceMsgId, String rawText,
+                                           String courseIdRaw, String referenceTime,
+                                           boolean forceCreate, PayloadSupplier supplier) {
         ResolvedUser user = userConfigResolver.resolve(userId);
         List<CourseNamespaceVO> courses = courseService.listCourses(userId);
-        String idempotencyKey = DdlIdempotencyKey.forWebRequest(userId, clientRequestId);
+        String idempotencyKey = DdlIdempotencyKey.forRequest(
+                userId, sourcePlatform, sourceMsgId);
+        String fingerprint = DdlRequestFingerprint.forExtract(rawText, courseIdRaw, forceCreate);
 
-        // 第 2 层：请求级幂等，命中则完全跳过 Python 调用。
-        DdlTaskEntity existing = ddlTaskMapper.selectByIdempotencyKey(idempotencyKey);
-        if (existing != null && Objects.equals(existing.getUserId(), userId)) {
-            return new DdlExtractVO(DdlExtractOutcome.IDEMPOTENT_HIT,
-                    DdlTaskService.toVO(existing, user.zoneId()), null);
+        // 第 2 层：请求级幂等（唯一键全局唯一，但查询仍强制带 user_id）。
+        DdlTaskEntity created = ddlTaskMapper.selectByIdempotencyKey(idempotencyKey, userId);
+        if (created != null) {
+            DdlExtractVO replay = replayForExistingTask(userId, sourcePlatform, sourceMsgId,
+                    fingerprint, created, user.zoneId());
+            if (replay != null) {
+                return replay;
+            }
         }
 
-        // 第 1 层：Redis 接入锁。
-        LockState lock = draftStore.acquireWebRequest(userId, clientRequestId);
-        if (lock == LockState.PROCESSING) {
+        // 第 1 层：Redis 接入锁 + 终态回执。
+        DdlDraftStore.RequestLock lock = draftStore.acquireRequestLock(
+                sourcePlatform, userId, sourceMsgId);
+        if (lock.state() == LockState.PROCESSING) {
             throw new BusinessException(ErrorCode.REQUEST_IN_PROGRESS);
         }
-        if (lock == LockState.PROCESSED) {
-            DdlTaskEntity processed = ddlTaskMapper.selectByIdempotencyKey(idempotencyKey);
-            if (processed != null && Objects.equals(processed.getUserId(), userId)) {
-                return new DdlExtractVO(DdlExtractOutcome.IDEMPOTENT_HIT,
-                        DdlTaskService.toVO(processed, user.zoneId()), null);
+        if (lock.state() == LockState.PROCESSED) {
+            Optional<DdlRequestReceipt> receipt =
+                    draftStore.loadReceipt(sourcePlatform, userId, sourceMsgId);
+            if (receipt.isPresent()) {
+                requireSameFingerprint(receipt.get(), fingerprint);
+                DdlExtractVO replayed = replayReceipt(userId, receipt.get(), user.zoneId());
+                if (replayed != null) {
+                    return replayed;
+                }
             }
-            // 上次处理结果是语义提示/草案（未建单）：释放并重新处理。
-            draftStore.release(userId, clientRequestId);
-            lock = draftStore.acquireWebRequest(userId, clientRequestId);
-            if (lock != LockState.ACQUIRED) {
+            // 回执缺失/损坏/指向已取消任务：用 CAS 接管为 PROCESSING，避免误删别人的新锁。
+            String takeoverToken = draftStore.takeOverProcessed(
+                    sourcePlatform, userId, sourceMsgId, lock.rawValue());
+            if (takeoverToken == null) {
                 throw new BusinessException(ErrorCode.REQUEST_IN_PROGRESS);
             }
+            lock = DdlDraftStore.RequestLock.acquired(takeoverToken);
         }
 
         boolean handled = false;
         try {
-            JsonNode data = pythonAiEngineClient.postJson(
-                    PythonAiEngineClient.ROUTE_AND_EXTRACT_PATH,
-                    pythonRequest(userId, user, courses, rawText, request.referenceTime()),
-                    userId, EXTRACT_READ_TIMEOUT);
-            DdlExtractedPayload payload = DdlExtractedPayload.fromData(data);
-            LocalDateTime now = ScTimeZone.now().toLocalDateTime();
-            DdlTimeFields time = timeRuleValidator.resolveExtracted(
-                    payload.timePrecision(), payload.parsedDueDate(), payload.parsedDueTime(),
-                    payload.hasAmbiguity(), payload.confidence(), user.zoneId(), now);
-            CourseRef course = resolveCourse(userId, courses, request.courseId(),
-                    payload.courseName());
-            DdlTaskEntity entity = buildEntity(userId, clientRequestId, idempotencyKey,
-                    rawText, payload, time, course, user, now);
-            String contentHash = semanticMatcher.contentHash(entity.getCourseName(), rawText);
-            entity.setContentHash(contentHash);
+            DdlExtractedPayload payload = supplier.load(user, courses);
+            DdlExtractVO result = persistPayload(userId, sourcePlatform, sourceMsgId,
+                    idempotencyKey, fingerprint, rawText, courseIdRaw, forceCreate,
+                    payload, user, courses);
+            handled = true;
+            return result;
+        } finally {
+            if (!handled) {
+                draftStore.releaseRequest(sourcePlatform, userId, sourceMsgId,
+                        lock.ownerToken());
+            }
+        }
+    }
 
-            if (!Boolean.TRUE.equals(request.forceCreate())) {
-                DdlTaskEntity exact = findExactContentHash(userId, contentHash, now);
-                if (exact != null) {
-                    draftStore.markProcessed(userId, clientRequestId);
-                    handled = true;
-                    return new DdlExtractVO(DdlExtractOutcome.SEMANTIC_DUPLICATE_HINT,
-                            DdlTaskService.toVO(exact, user.zoneId()), null);
-                }
-                DdlTaskEntity similar = findSimilarTask(userId, entity);
-                if (similar != null) {
-                    if (requirementsChanged(similar, entity)) {
-                        DdlTaskDraft draft = DdlTaskDraft.fromEntity(entity,
-                                similar.getTaskId(), now.plusHours(DRAFT_TTL_HOURS).toString());
-                        draftStore.saveDraft(userId, draft);
-                        draftStore.markProcessed(userId, clientRequestId);
-                        handled = true;
-                        return new DdlExtractVO(
-                                DdlExtractOutcome.CHANGE_DRAFT_CONFIRM_REQUIRED,
-                                DdlTaskService.toVO(similar, user.zoneId()),
-                                draft.toVO(user.zoneId()));
-                    }
-                    draftStore.markProcessed(userId, clientRequestId);
-                    handled = true;
-                    return new DdlExtractVO(DdlExtractOutcome.SEMANTIC_DUPLICATE_HINT,
-                            DdlTaskService.toVO(similar, user.zoneId()), null);
+    private DdlExtractVO persistPayload(Long userId, String sourcePlatform, String sourceMsgId,
+                                        String idempotencyKey, String fingerprint,
+                                        String rawText, String courseIdRaw, boolean forceCreate,
+                                        DdlExtractedPayload payload, ResolvedUser user,
+                                        List<CourseNamespaceVO> courses) {
+        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
+        DdlTimeFields time = timeRuleValidator.resolveExtracted(
+                payload.timePrecision(), payload.parsedDueDate(), payload.parsedDueTime(),
+                payload.hasAmbiguity(), payload.confidence(), user.zoneId(), now);
+        CourseRef course = resolveCourse(userId, courses, courseIdRaw, payload.courseName());
+        DdlTaskEntity entity = buildEntity(userId, sourcePlatform, sourceMsgId, idempotencyKey,
+                fingerprint, rawText, payload, time, course, user, now);
+        String contentHash = semanticMatcher.contentHash(entity.getCourseName(), rawText);
+        entity.setContentHash(contentHash);
+
+        // 内容锁必须覆盖“语义判定 + 建单/草案 + 终态回执”整个临界区：
+        // `createExtractedTask` 的事务提交发生在方法返回前，因此锁释放时数据已提交。
+        String contentOwner = null;
+        if (!forceCreate) {
+            contentOwner = draftStore.acquireContentLock(userId, contentHash);
+            if (contentOwner == null) {
+                throw new BusinessException(ErrorCode.REQUEST_IN_PROGRESS);
+            }
+        }
+        try {
+            if (!forceCreate) {
+                DdlExtractVO semantic = evaluateSemantic(userId, sourcePlatform, sourceMsgId,
+                        fingerprint, entity, contentHash, user.zoneId(), now);
+                if (semantic != null) {
+                    return semantic;
                 }
             }
 
             DdlTaskService.DdlTaskCreationResult result =
                     ddlTaskService.createExtractedTask(entity);
-            draftStore.markProcessed(userId, clientRequestId);
-            handled = true;
-            return new DdlExtractVO(
-                    result.created() ? DdlExtractOutcome.CREATED : DdlExtractOutcome.IDEMPOTENT_HIT,
-                    result.task(), null);
+            DdlExtractOutcome outcome = result.created()
+                    ? DdlExtractOutcome.CREATED : DdlExtractOutcome.IDEMPOTENT_HIT;
+            Long resultTaskId = result.created()
+                    ? entity.getTaskId() : result.task().taskId();
+            // 已建单终态可由 MySQL 唯一键兜底，回执写失败不阻断响应。
+            markProcessed(sourcePlatform, userId, sourceMsgId, fingerprint, outcome,
+                    resultTaskId, null, now, false);
+            return new DdlExtractVO(outcome, result.task(), null);
         } finally {
-            if (!handled) {
-                draftStore.release(userId, clientRequestId);
+            if (contentOwner != null) {
+                draftStore.releaseContentLock(userId, contentHash, contentOwner);
             }
         }
     }
 
-    /** `API-DDL-005`：确认更新 / 仍然新建 / 忽略变更草案。 */
+    private DdlExtractedPayload requestPayload(Long userId, ResolvedUser user,
+                                               List<CourseNamespaceVO> courses,
+                                               String rawText, String referenceTimeRaw) {
+        JsonNode data = pythonAiEngineClient.postJson(
+                PythonAiEngineClient.ROUTE_AND_EXTRACT_PATH,
+                pythonRequest(userId, user, courses, rawText, referenceTimeRaw),
+                userId, EXTRACT_READ_TIMEOUT);
+        return DdlExtractedPayload.fromData(data);
+    }
+
+    /**
+     * `API-DDL-005`：确认更新 / 仍然新建 / 忽略变更草案；三种决策均有持久化终态回执。
+     *
+     * <p>并发边界：
+     * <ul>
+     *   <li>锁按 {@code user_id + target_task_id} 加，两个不同 {@code client_request_id}
+     *       同时决策同一草案时只允许一个进入；</li>
+     *   <li>决策动作与 MySQL 回执在同一事务内提交，回执写入失败会回滚业务更新；</li>
+     *   <li>草案必须携带目标任务 {@code updated_at} 快照，目标被编辑/完成/取消时拒绝旧草案；</li>
+     *   <li>草案删除失败不回滚已提交的决策，但返回错误；重试通过持久化回执重放并再次清理。</li>
+     * </ul>
+     */
+    @Transactional(rollbackFor = Exception.class)
     public DdlTaskVO decideDraft(Long userId, Long taskId, DraftDecisionRequest request) {
         Decision decision = parseDecision(request.decision());
         String clientRequestId = DdlTaskService.requireClientRequestId(request.clientRequestId());
         ResolvedUser user = userConfigResolver.resolve(userId);
+        String fingerprint = decisionFingerprint(decision, taskId);
 
-        DdlTaskEntity target = ddlTaskMapper.selectOne(Wrappers.<DdlTaskEntity>lambdaQuery()
-                .eq(DdlTaskEntity::getTaskId, taskId)
-                .eq(DdlTaskEntity::getUserId, userId));
+        DdlTaskVO replayed = replayPriorDecision(
+                userId, clientRequestId, fingerprint, user.zoneId());
+        if (replayed != null) {
+            // 已完成的决策不再依赖草案；尽力清理，避免看板残留旧卡。
+            draftStore.deleteDraft(userId, taskId);
+            return replayed;
+        }
+
+        // 同一草案的并发决策锁：与请求 ID 无关，第二个请求直接 409。
+        String lockOwner = draftStore.acquireDraftDecisionLock(userId, taskId);
+        if (lockOwner == null) {
+            throw new BusinessException(ErrorCode.REQUEST_IN_PROGRESS);
+        }
+        // 关键：锁必须在事务 commit/rollback 完成后释放，不能在 finally 立即释放。
+        draftStore.releaseDraftDecisionLockAfterCompletion(userId, taskId, lockOwner);
+        // 拿到锁后重读回执：并发请求可能刚刚完成。
+        replayed = replayPriorDecision(
+                userId, clientRequestId, fingerprint, user.zoneId());
+        if (replayed != null) {
+            draftStore.deleteDraft(userId, taskId);
+            return replayed;
+        }
+
+        // 锁序必须是“先课程、后任务”：课程删除事务先锁课程行再解绑任务行，
+        // 若这里先锁目标任务行再锁课程行，会形成反向锁序（MySQL 死锁/500）。
+        // 草案本身存放在 Redis，读取它不需要数据库行锁。
+        Optional<DdlTaskDraft> draftOpt = draftStore.loadDraft(userId, taskId);
+        draftOpt.ifPresent(draft -> lockDraftCourse(userId, draft));
+
+        DdlTaskEntity target = ddlTaskMapper.selectByIdForUpdate(taskId, userId);
         if (target == null || TaskStatus.CANCELED.name().equals(target.getStatus())) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        if (TaskStatus.COMPLETED.name().equals(target.getStatus())) {
+            throw new BusinessException(ErrorCode.STATE_CONFLICT,
+                    "任务已完成，旧变更草案不再适用；请重新提取通知。");
+        }
 
-        Optional<DdlTaskDraft> draftOpt = draftStore.loadDraft(userId, taskId);
         if (draftOpt.isEmpty()) {
             if (decision == Decision.CREATE_NEW) {
                 String key = DdlIdempotencyKey.forWebRequest(userId, clientRequestId);
-                DdlTaskEntity existing = ddlTaskMapper.selectByIdempotencyKey(key);
-                if (existing != null && Objects.equals(existing.getUserId(), userId)) {
+                DdlTaskEntity existing = ddlTaskMapper.selectByIdempotencyKey(key, userId);
+                if (existing != null) {
+                    if (!DdlRequestFingerprint.OPERATION_DRAFT_CREATE_NEW.equals(
+                            existing.getRequestOperation())) {
+                        throw idempotencyConflict();
+                    }
+                    saveDecisionReceipt(userId, clientRequestId, fingerprint, decision,
+                            taskId, existing.getTaskId());
                     return DdlTaskService.toVO(existing, user.zoneId());
                 }
             }
@@ -218,24 +342,249 @@ public class DdlExtractionService {
         if (!Objects.equals(draft.targetTaskId(), taskId)) {
             throw new BusinessException(ErrorCode.DRAFT_EXPIRED_OR_NOT_FOUND);
         }
+        requireDraftTargetVersion(target, draft);
 
-        return switch (decision) {
-            case CONFIRM_UPDATE -> {
-                DdlTaskVO updated = ddlTaskService.applyDraftUpdate(userId, taskId, draft);
-                draftStore.deleteDraft(userId, taskId);
-                yield updated;
-            }
-            case CREATE_NEW -> {
-                DdlTaskService.DdlTaskCreationResult result =
-                        ddlTaskService.createFromDraft(userId, draft, clientRequestId);
-                draftStore.deleteDraft(userId, taskId);
-                yield result.task();
-            }
-            case DISCARD -> {
-                draftStore.deleteDraft(userId, taskId);
-                yield DdlTaskService.toVO(target, user.zoneId());
-            }
+        DdlTaskVO result = switch (decision) {
+            case CONFIRM_UPDATE -> ddlTaskService.applyDraftUpdate(userId, taskId, draft);
+            case CREATE_NEW -> ddlTaskService.createFromDraft(
+                    userId, draft, clientRequestId).task();
+            case DISCARD -> DdlTaskService.toVO(target, user.zoneId());
         };
+        // 持久化回执与业务更新在同一事务内；失败会回滚上面的 UPDATE/INSERT。
+        saveDecisionReceipt(userId, clientRequestId, fingerprint, decision, taskId,
+                result.taskId());
+        // 事务提交后严格删除草案；失败返回 500，重试通过持久化回执重放并再次清理。
+        draftStore.deleteDraftAfterCommitStrict(userId, taskId);
+        return result;
+    }
+
+    private static String decisionFingerprint(Decision decision, Long taskId) {
+        return decision.name() + ":" + taskId;
+    }
+
+    /** 决策前先锁定草案关联课程行；课程已删除时跳过（应用路径按 PO-05 解绑）。 */
+    private void lockDraftCourse(Long userId, DdlTaskDraft draft) {
+        if (draft.courseId() == null) {
+            return;
+        }
+        try {
+            if (courseService.getActiveCourseForUpdate(userId, draft.courseId()) == null) {
+                return;
+            }
+        } catch (BusinessException e) {
+            if (e.getErrorCode() != ErrorCode.RESOURCE_NOT_FOUND) {
+                throw e;
+            }
+        }
+    }
+
+    /** 决策草案的目标任务版本校验（与 DdlTaskService 的写入前校验形成双重防线）。 */
+    private static void requireDraftTargetVersion(DdlTaskEntity target, DdlTaskDraft draft) {
+        java.time.LocalDateTime snapshot = draft.targetTaskUpdatedAtValue();
+        java.time.LocalDateTime current = target.getUpdatedAt() == null
+                ? null
+                : target.getUpdatedAt().truncatedTo(ChronoUnit.MILLIS);
+        if (snapshot == null || current == null
+                || !current.equals(snapshot.truncatedTo(ChronoUnit.MILLIS))) {
+            throw new BusinessException(ErrorCode.DRAFT_EXPIRED_OR_NOT_FOUND,
+                    "目标任务在草案生成后已被修改，请重新提取通知。");
+        }
+    }
+
+    /**
+     * 第 3 层语义判定；命中时写入终态回执并返回结果，未命中返回 `null` 由调用方建单。
+     *
+     * <p>调用方必须已持有 content_hash 串行锁。
+     */
+    private DdlExtractVO evaluateSemantic(Long userId, String sourcePlatform,
+                                          String sourceMsgId, String fingerprint,
+                                          DdlTaskEntity entity, String contentHash,
+                                          ZoneId zone, LocalDateTime now) {
+        DdlTaskEntity exact = findExactContentHash(userId, contentHash, now);
+        if (exact != null) {
+            return completeWithReceipt(sourcePlatform, userId, sourceMsgId, fingerprint,
+                    DdlExtractOutcome.SEMANTIC_DUPLICATE_HINT, exact, null, null, zone, now);
+        }
+        DdlTaskEntity similar = findSimilarTask(userId, entity);
+        if (similar == null) {
+            return null;
+        }
+        if (!requirementsChanged(similar, entity)) {
+            return completeWithReceipt(sourcePlatform, userId, sourceMsgId, fingerprint,
+                    DdlExtractOutcome.SEMANTIC_DUPLICATE_HINT, similar, null, null, zone, now);
+        }
+        DdlTaskDraft draft = DdlTaskDraft.fromEntity(entity, similar.getTaskId(),
+                similar.getUpdatedAt(), now.plusHours(DRAFT_TTL_HOURS).toString());
+        draftStore.saveDraft(userId, draft);
+        return completeWithReceipt(sourcePlatform, userId, sourceMsgId, fingerprint,
+                DdlExtractOutcome.CHANGE_DRAFT_CONFIRM_REQUIRED, similar,
+                similar.getTaskId(), draft, zone, now);
+    }
+
+    private DdlExtractVO completeWithReceipt(String sourcePlatform, Long userId,
+                                             String sourceMsgId, String fingerprint,
+                                             DdlExtractOutcome outcome, DdlTaskEntity task,
+                                             Long draftTargetTaskId, DdlTaskDraft draft,
+                                             ZoneId zone, LocalDateTime now) {
+        // 语义提示/变更草案没有 MySQL 任务兜底：回执必须写入成功，否则重试会再次调用模型。
+        markProcessed(sourcePlatform, userId, sourceMsgId, fingerprint, outcome,
+                task.getTaskId(), draftTargetTaskId, now, true);
+        return new DdlExtractVO(outcome, DdlTaskService.toVO(task, zone),
+                draft == null ? null : draft.toVO());
+    }
+
+    private void markProcessed(String sourcePlatform, Long userId, String sourceMsgId,
+                               String fingerprint, DdlExtractOutcome outcome, Long taskId,
+                               Long draftTargetTaskId, LocalDateTime now, boolean failClosed) {
+        draftStore.markProcessed(sourcePlatform, userId, sourceMsgId,
+                DdlRequestReceipt.of(fingerprint, outcome.name(), taskId, draftTargetTaskId,
+                        now.plusHours(DRAFT_TTL_HOURS).toString()), failClosed);
+    }
+
+    /**
+     * 数据库已存在同幂等键任务时的重放。
+     *
+     * <p>唯一键只说明请求 ID 相同，**不能**说明业务内容相同：必须比较持久化的
+     * {@code request_operation + request_fingerprint}。手工建单与通知提取复用同一 ID、
+     * 同一 ID 换原文、旧 ID 改 {@code force_create=true} 都必须返回
+     * {@code 409 IDEMPOTENCY_CONFLICT}。
+     */
+    private DdlExtractVO replayForExistingTask(Long userId, String sourcePlatform,
+                                               String sourceMsgId, String fingerprint,
+                                               DdlTaskEntity existing, ZoneId zone) {
+        Optional<DdlRequestReceipt> receipt =
+                draftStore.loadReceipt(sourcePlatform, userId, sourceMsgId);
+        if (receipt.isPresent()) {
+            requireSameFingerprint(receipt.get(), fingerprint);
+            DdlExtractVO replayed = replayReceipt(userId, receipt.get(), zone);
+            if (replayed != null) {
+                return replayed;
+            }
+        }
+        requireSameExtractIdentity(existing, fingerprint);
+        return new DdlExtractVO(DdlExtractOutcome.IDEMPOTENT_HIT,
+                DdlTaskService.toVO(existing, zone), null);
+    }
+
+    private static void requireSameExtractIdentity(DdlTaskEntity existing, String fingerprint) {
+        if (!DdlRequestFingerprint.OPERATION_EXTRACT.equals(existing.getRequestOperation())
+                || !fingerprint.equals(existing.getRequestFingerprint())) {
+            throw idempotencyConflict();
+        }
+    }
+
+    /** 依据终态回执原样重放；任务或草案已不存在时返回 `null`（调用方按过期处理）。 */
+    private DdlExtractVO replayReceipt(Long userId, DdlRequestReceipt receipt, ZoneId zone) {
+        DdlExtractOutcome outcome;
+        try {
+            outcome = DdlExtractOutcome.valueOf(receipt.outcome());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+        Long taskId = parseIdOrNull(receipt.taskId());
+        DdlTaskEntity task = taskId == null ? null : selectOwnedTask(userId, taskId);
+        if (task == null) {
+            return null;
+        }
+        boolean canceled = TaskStatus.CANCELED.name().equals(task.getStatus());
+        if (canceled && (outcome == DdlExtractOutcome.SEMANTIC_DUPLICATE_HINT
+                || outcome == DdlExtractOutcome.CHANGE_DRAFT_CONFIRM_REQUIRED)) {
+            // 终态回执指向已取消任务：不能把已取消卡片原样返回给用户；
+            // 交给调用方用 CAS 接管并重新处理。
+            return null;
+        }
+        if (outcome == DdlExtractOutcome.CREATED
+                || outcome == DdlExtractOutcome.IDEMPOTENT_HIT) {
+            // 数据库已存在同一幂等键：重试统一返回 IDEMPOTENT_HIT，不因 Redis 回执内容而变。
+            return new DdlExtractVO(DdlExtractOutcome.IDEMPOTENT_HIT,
+                    DdlTaskService.toVO(task, zone), null);
+        }
+        if (outcome == DdlExtractOutcome.CHANGE_DRAFT_CONFIRM_REQUIRED) {
+            Long draftTargetId = parseIdOrNull(receipt.draftTargetTaskId());
+            if (draftTargetId != null) {
+                Optional<DdlTaskDraft> draft = draftStore.loadDraft(userId, draftTargetId);
+                if (draft.isPresent()) {
+                    return new DdlExtractVO(outcome, DdlTaskService.toVO(task, zone),
+                            draft.get().toVO());
+                }
+            }
+            // 草案已过期：不得伪装成“仍可确认”，退化为语义重复提示。
+            return new DdlExtractVO(DdlExtractOutcome.SEMANTIC_DUPLICATE_HINT,
+                    DdlTaskService.toVO(task, zone), null);
+        }
+        return new DdlExtractVO(outcome, DdlTaskService.toVO(task, zone), null);
+    }
+
+    private DdlTaskVO replayPriorDecision(Long userId, String clientRequestId,
+                                          String fingerprint, ZoneId zone) {
+        // MySQL 回执是权威：存在即说明该请求已经执行，绝不能再执行一次。
+        Optional<DdlDecisionReceipt> durable =
+                decisionReceiptStore.find(userId, clientRequestId);
+        if (durable.isPresent()) {
+            if (!fingerprint.equals(durable.get().fingerprint())) {
+                throw idempotencyConflict();
+            }
+            DdlTaskVO replayed = replayDecision(userId, durable.get(), zone);
+            if (replayed == null) {
+                throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+            }
+            return replayed;
+        }
+        // Redis 只是缓存：命中时尽量重放，失效时允许重新走数据库校验。
+        Optional<DdlDecisionReceipt> cached =
+                draftStore.loadDecisionReceipt(userId, clientRequestId);
+        if (cached.isEmpty()) {
+            return null;
+        }
+        if (!fingerprint.equals(cached.get().fingerprint())) {
+            throw idempotencyConflict();
+        }
+        return replayDecision(userId, cached.get(), zone);
+    }
+
+    private DdlTaskVO replayDecision(Long userId, DdlDecisionReceipt receipt, ZoneId zone) {
+        Long resultTaskId = parseIdOrNull(receipt.resultTaskId());
+        DdlTaskEntity task = resultTaskId == null ? null : selectOwnedTask(userId, resultTaskId);
+        return task == null ? null : DdlTaskService.toVO(task, zone);
+    }
+
+    private void saveDecisionReceipt(Long userId, String clientRequestId, String fingerprint,
+                                     Decision decision, Long taskId, Long resultTaskId) {
+        DdlDecisionReceipt receipt = DdlDecisionReceipt.of(fingerprint, decision.name(), taskId,
+                resultTaskId, ScTimeZone.now().plusHours(DRAFT_TTL_HOURS).toString());
+        // 持久化回执与业务更新同事务；Redis 缓存失败只告警，不影响幂等权威。
+        decisionReceiptStore.saveStrict(userId, clientRequestId, receipt);
+        try {
+            draftStore.saveDecisionReceipt(userId, clientRequestId, receipt);
+        } catch (RuntimeException e) {
+            log.warn("DDL 决策回执缓存写入失败 userId={}", userId);
+        }
+    }
+
+    private DdlTaskEntity selectOwnedTask(Long userId, Long taskId) {
+        DdlTaskEntity entity = ddlTaskMapper.selectByTaskIdAndUserId(taskId, userId);
+        return entity != null && Objects.equals(entity.getUserId(), userId) ? entity : null;
+    }
+
+    private static void requireSameFingerprint(DdlRequestReceipt receipt, String fingerprint) {
+        if (!Objects.equals(receipt.fingerprint(), fingerprint)) {
+            throw idempotencyConflict();
+        }
+    }
+
+    private static BusinessException idempotencyConflict() {
+        return new BusinessException(ErrorCode.IDEMPOTENCY_CONFLICT);
+    }
+
+    private static Long parseIdOrNull(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(raw);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private Map<String, Object> pythonRequest(Long userId, ResolvedUser user,
@@ -307,8 +656,9 @@ public class DdlExtractionService {
         return new CourseRef(null, name);
     }
 
-    private DdlTaskEntity buildEntity(Long userId, String clientRequestId,
-                                      String idempotencyKey, String rawText,
+    private DdlTaskEntity buildEntity(Long userId, String sourcePlatform, String sourceMsgId,
+                                      String idempotencyKey, String requestFingerprint,
+                                      String rawText,
                                       DdlExtractedPayload payload, DdlTimeFields time,
                                       CourseRef course, ResolvedUser user, LocalDateTime now) {
         DdlTaskEntity entity = new DdlTaskEntity();
@@ -326,15 +676,19 @@ public class DdlExtractionService {
         entity.setDueTime(time.dueTime());
         entity.setDueAt(time.dueAt());
         entity.setTimeInferred(time.timeInferred() ? 1 : 0);
+        entity.setTimeAmbiguityReason(limit(payload.ambiguityReason(), 512));
         entity.setUserTimezone(user.timezoneName());
         entity.setConfidence(payload.confidence());
         entity.setStatus(time.status().name());
+        entity.setStatusBeforeCompletion(null);
         entity.setFollowUpAt(time.followUpAt());
         entity.setFollowUpCount(0);
         entity.setRemindedFlags(0);
         entity.setHasSubtasks(0);
-        entity.setSourcePlatform(DdlIdempotencyKey.SOURCE_PLATFORM_WEB);
-        entity.setSourceMsgId(clientRequestId);
+        entity.setSourcePlatform(sourcePlatform);
+        entity.setSourceMsgId(sourceMsgId);
+        entity.setRequestOperation(DdlRequestFingerprint.OPERATION_EXTRACT);
+        entity.setRequestFingerprint(requestFingerprint);
         entity.setIdempotencyKey(idempotencyKey);
         entity.setContentHash(null);
         entity.setCompletedAt(null);
@@ -377,8 +731,20 @@ public class DdlExtractionService {
                 || !Objects.equals(existing.getSubmissionChannel(), candidate.getSubmissionChannel());
     }
 
-    private static String requireRawText(String raw) {
+    /**
+     * 来源消息 ID：Web 的 `client_request_id` 由上层按 8~128 校验；
+     * IM 的 `message_id` 只要求非空且不超过 `source_msg_id` 列宽（128）。
+     */
+    private static String requireSourceMsgId(String raw, String sourcePlatform) {
         String value = trimToNull(raw);
+        if (value == null || value.length() > 128) {
+            throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED,
+                    sourcePlatform + " 来源消息 ID 缺失或超过 128 字符。");
+        }
+        return value;
+    }
+
+    private static String requireRawText(String raw) {        String value = trimToNull(raw);
         if (value == null || value.length() < RAW_TEXT_MIN_LENGTH) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "raw_text 长度必须为 4~4000 字符。");
@@ -434,6 +800,12 @@ public class DdlExtractionService {
     }
 
     private record CourseRef(Long courseId, String courseName) {
+    }
+
+    /** 提取结果来源：FORCE 走 Python，路由模式直接复用已解析的 payload。 */
+    @FunctionalInterface
+    private interface PayloadSupplier {
+        DdlExtractedPayload load(ResolvedUser user, List<CourseNamespaceVO> courses);
     }
 
     private enum Decision {

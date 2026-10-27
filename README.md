@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0~P5 已验收 `DONE`；P6（TASK-601~606）已实现并处于 `IN_REVIEW`，尚未验收。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线。**P6 代码阻断（SSE ASYNC 安全链、建流前 JSON 错误、CitationVerifier 硬红线、畸形来源标签、PO-04 声明落库、citation 帧严格校验、Embedding 模型严格匹配、内联引用高亮、队列积压告警）已修复，并完成真实 Nginx→Java→Python→MySQL/Chroma + 浏览器联调。但 TASK-606 缺少真实课程 PDF、人工标注与真实供应商 Key，质量证据不成立；P6 不可验收，不得进入 P7。** 真实供应商 E2E 未执行；当前评测数字来自确定性哈希替身，不代表真实检索质量。任务状态以 `TASK_TRACKER.md` §1 为准。
+**当前进度：P0~P7 已验收 `DONE`（P7 由负责人 2026-10-28 验收，TASK-701~706 全部 `DONE`）；P8 `TODO`。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router（规则优先 + 单次 LLM 分类 + Java 确定性工具执行）。**真实栈 E2E 已用本地 mock 模型执行（API 46/46、浏览器 20/20），并完成 2026-10-28 第五轮审阅修复与 P7 验收；真实供应商模型、OneBot 入站与 P8 提醒仍未执行**；任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 
@@ -67,17 +67,26 @@ mvn -f sc-java-backend/pom.xml -B test
 ### 3.2 Python（已实测）
 
 ```bash
-# 建虚拟环境并安装（本机 Python 3.13；容器内 pin 3.11，见 ENVIRONMENT.md ENV-02）
+# 建虚拟环境（本机 Python 3.13；容器内 pin 3.11，见 ENVIRONMENT.md ENV-02）
 python3 -m venv sc-python-ai/.venv
 sc-python-ai/.venv/bin/python -m pip install -e 'sc-python-ai[dev]'
 
-# 运行测试
-sc-python-ai/.venv/bin/python -m pytest          # 需在 sc-python-ai/ 目录下执行
+# 推荐：可复现测试入口（测试依赖来自 requirements-dev.lock.txt，不污染运行时镜像）
+scripts/test_python.sh host        # 宿主 venv
+scripts/test_python.sh container   # Python 3.11 测试镜像（scholarclaw/sc-python-ai-test:1.0.0）
+scripts/test_python.sh all         # 两者都跑
+
+# 等价的手动命令
+cd sc-python-ai && .venv/bin/python -m pytest
 
 # 本地启动（仅绑定环回，不暴露到局域网；容器内由 Compose 决定绑定与端口）
 cd sc-python-ai
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
 ```
+
+**测试依赖：** 生产镜像 `scholarclaw/sc-python-ai:1.0.0` **不安装 pytest**。容器内测试用独立的
+`sc-python-ai/Dockerfile.test` 构建测试镜像，依赖固定为 `sc-python-ai/requirements-dev.lock.txt`；
+不要再用临时目录挂载 pytest 的方式作为唯一验证手段。
 
 **尚未验证：** ChromaDB 客户端已在 TASK-504 落地并通过真实容器验证；RabbitMQ 生产端、解析消费者、Java 回调与向量索引已分别在 TASK-501~504 落地，DLQ 与课程状态收敛已在 TASK-505 落地；TASK-506 已用真实 PDF 验证完整闭环，消费者默认开启。模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
 

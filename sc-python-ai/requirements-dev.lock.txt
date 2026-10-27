@@ -1,0 +1,17 @@
+# ============================================================================
+# sc-python-ai 测试依赖锁文件（与运行时依赖分离）
+#
+# 用途：`sc-python-ai/Dockerfile.test` 在运行时镜像之上安装本文件，
+# 生成可复现的测试镜像 `scholarclaw/sc-python-ai-test:1.0.0`。
+# 生产镜像 `scholarclaw/sc-python-ai:1.0.0` **不包含**这些包。
+#
+# 生成方式：在实际测试环境执行
+#   python -m pip freeze | grep -Ei '^(pytest|pytest-asyncio|pluggy|iniconfig|packaging|pygments)=='
+# 升级 pytest / pytest-asyncio 时必须同步更新本文件并在 `validation.md` 记录。
+# ============================================================================
+pytest==8.4.2
+pytest-asyncio==0.26.0
+pluggy==1.7.0
+iniconfig==2.3.1
+packaging==26.3
+Pygments==2.21.0

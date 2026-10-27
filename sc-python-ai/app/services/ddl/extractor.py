@@ -474,15 +474,26 @@ def _normalize_time_fields(
     parsed_time, time_error = _parse_time(model_payload.parsed_due_time)
 
     if precision is TimePrecision.EXACT_DATETIME:
-        if parsed_date is None or parsed_time is None:
-            raise _InvalidModelOutput(
-                "EXACT_DATETIME 必须同时提供合法的 parsed_due_date 与 parsed_due_time"
-            )
+        if model_payload.parsed_due_date is not None and parsed_date is None:
+            # 业务日期非法（如 2026-02-29 / 2026-04-31）不是模型结构错误：
+            # 必须降级为 INVALID_OR_PAST 进入待确认，而不是 502。
+            reasons.append("模型返回的截止日期非法，已转为待确认")
+            return TimePrecision.INVALID_OR_PAST, None, None
+        if model_payload.parsed_due_date is None:
+            raise _InvalidModelOutput("EXACT_DATETIME 缺少 parsed_due_date")
+        if parsed_time is None:
+            # 日期合法但时刻缺失/非法：保守降级为 DATE_ONLY，并标注待确认；
+            # 不得因为模型误判 EXACT 而让整条通知 502。
+            reasons.append("模型给出的具体时刻缺失或非法，已降级为仅日期，请核对")
+            return TimePrecision.DATE_ONLY, parsed_date, None
         return precision, parsed_date, parsed_time
 
     if precision is TimePrecision.DATE_ONLY:
+        if model_payload.parsed_due_date is not None and parsed_date is None:
+            reasons.append("模型返回的截止日期非法，已转为待确认")
+            return TimePrecision.INVALID_OR_PAST, None, None
         if parsed_date is None:
-            raise _InvalidModelOutput("DATE_ONLY 必须提供合法的 parsed_due_date")
+            raise _InvalidModelOutput("DATE_ONLY 缺少 parsed_due_date")
         if model_payload.parsed_due_time is not None:
             reasons.append("DATE_ONLY 不允许具体时刻，已保守置空")
             if time_error:

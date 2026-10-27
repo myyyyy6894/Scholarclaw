@@ -13,15 +13,40 @@ from typing import Any
 
 import pytest
 
-from app.api.internal_v1.endpoints_agent import get_ddl_extractor
+from app.api.internal_v1.endpoints_agent import get_agent_router, get_ddl_extractor
 from app.core.exceptions import UpstreamModelError
-from app.schemas.ddl_extract import DdlPayload, TimePrecision
+from app.schemas.agent_route import AgentIntent
+from app.schemas.ddl_extract import (
+    DdlExtractRequest,
+    DdlPayload,
+    ExtractionMode,
+    TimePrecision,
+)
+from app.services.agent.router import RouteResult, RouteSource
 from app.services.ddl.extractor import DdlExtractionRequest, DdlExtractionResult
 from app.services.ddl.time_parser import DdlInitialStatus, TimeResolution
 from tests.conftest import REMOTE_HOST, TEST_INTERNAL_TOKEN
 
 API_KEY = "sk-endpoint-secret-key"
 BODY_USER_ID = "10001"
+
+
+class FakeRouter:
+    def __init__(
+        self,
+        result: RouteResult | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.result = result
+        self.error = error
+        self.requests: list[DdlExtractRequest] = []
+
+    async def route(self, request: DdlExtractRequest) -> RouteResult:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        assert self.result is not None
+        return self.result
 
 
 class FakeExtractor:
@@ -119,6 +144,10 @@ def _override(client, extractor: FakeExtractor) -> None:
     _fastapi(client).dependency_overrides[get_ddl_extractor] = lambda: extractor
 
 
+def _override_router(client, agent_router: FakeRouter) -> None:
+    _fastapi(client).dependency_overrides[get_agent_router] = lambda: agent_router
+
+
 def test_force_ddl_extract_returns_contract_payload(agent_client) -> None:
     extractor = FakeExtractor(result=_result())
     _override(agent_client, extractor)
@@ -172,23 +201,104 @@ def test_force_ddl_extract_returns_contract_payload(agent_client) -> None:
     assert captured.chat_endpoint.api_key == API_KEY
 
 
-def test_auto_route_is_deterministically_not_implemented(agent_client) -> None:
+def test_force_mode_does_not_invoke_router(agent_client) -> None:
     extractor = FakeExtractor(result=_result())
+    agent_router = FakeRouter()
     _override(agent_client, extractor)
+    _override_router(agent_client, agent_router)
+
+    response = agent_client.post(
+        "/internal/ai/v1/agent/route-and-extract", json=_body()
+    )
+
+    assert response.status_code == 200
+    assert extractor.requests
+    assert agent_router.requests == []
+
+
+def test_auto_route_returns_ddl_payload_from_router(agent_client) -> None:
+    payload = _result().payload
+    agent_router = FakeRouter(
+        result=RouteResult(
+            intent=AgentIntent.DDL_EXTRACT,
+            intent_confidence=0.92,
+            ddl_payload=payload,
+            source=RouteSource.MODEL,
+        )
+    )
+    extractor = FakeExtractor()
+    _override(agent_client, extractor)
+    _override_router(agent_client, agent_router)
 
     response = agent_client.post(
         "/internal/ai/v1/agent/route-and-extract",
         json=_body(mode="AUTO_ROUTE"),
     )
 
-    assert response.status_code == 501
+    assert response.status_code == 200
     envelope = response.json()
-    assert envelope["code"] == "FEATURE_NOT_AVAILABLE"
-    assert "TASK-706" in envelope["message"]
+    assert envelope["code"] == "OK"
+    assert envelope["message"] == "Routing completed"
+    data = envelope["data"]
+    assert data["intent"] == "DDL_EXTRACT"
+    assert data["intent_confidence"] == pytest.approx(0.92)
+    assert data["ddl_payload"]["parsed_due_date"] == "2026-10-25"
+    assert "due_at" not in response.text
+    assert "time_inferred" not in response.text
+    assert API_KEY not in response.text
+
+    captured = agent_router.requests[0]
+    assert captured.mode is ExtractionMode.AUTO_ROUTE
+    assert captured.candidate_courses == ["操作系统原理", "数据库系统概念"]
+    # AUTO_ROUTE 的提取由路由器内部完成，端点不得再调用一次提取器
+    assert extractor.requests == []
+
+
+def test_auto_route_low_confidence_has_null_payload(agent_client) -> None:
+    agent_router = FakeRouter(
+        result=RouteResult(
+            intent=AgentIntent.CHITCHAT_HELP,
+            intent_confidence=0.4,
+            ddl_payload=None,
+            source=RouteSource.MODEL,
+        )
+    )
+    extractor = FakeExtractor()
+    _override(agent_client, extractor)
+    _override_router(agent_client, agent_router)
+
+    response = agent_client.post(
+        "/internal/ai/v1/agent/route-and-extract",
+        json=_body(mode="AUTO_ROUTE"),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["intent"] == "CHITCHAT_HELP"
+    assert data["intent_confidence"] == pytest.approx(0.4)
+    assert data["ddl_payload"] is None
+    assert extractor.requests == []
+
+
+def test_auto_route_router_error_maps_to_envelope(agent_client) -> None:
+    agent_router = FakeRouter(
+        error=UpstreamModelError("模型未能返回符合契约的意图分类结果，请稍后重试。", retryable=False)
+    )
+    _override(agent_client, FakeExtractor())
+    _override_router(agent_client, agent_router)
+
+    response = agent_client.post(
+        "/internal/ai/v1/agent/route-and-extract",
+        json=_body(mode="AUTO_ROUTE"),
+    )
+
+    assert response.status_code == 502
+    envelope = response.json()
+    assert envelope["code"] == "UPSTREAM_MODEL_ERROR"
     assert envelope["data"] is None
+    assert API_KEY not in response.text
     assert '"intent"' not in response.text
     assert '"ddl_payload"' not in response.text
-    assert extractor.requests == []
 
 
 def test_missing_internal_token_is_rejected(anon_agent_client) -> None:
@@ -285,6 +395,19 @@ def test_unknown_mode_is_rejected(agent_client) -> None:
     assert response.json()["code"] == "VALIDATION_ERROR"
 
 
+def test_missing_user_timezone_is_rejected(agent_client) -> None:
+    """docs/04 将 user_timezone 标为必填；缺失不得静默回退 Asia/Shanghai。"""
+    body = _body()
+    body.pop("user_timezone")
+
+    response = agent_client.post(
+        "/internal/ai/v1/agent/route-and-extract", json=body
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
 def test_missing_chat_config_is_rejected(agent_client) -> None:
     body = _body()
     body.pop("chat_config")
@@ -372,6 +495,8 @@ def test_ddl_extraction_has_no_persistence_or_mq_dependency() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     files = [
         repo_root / "app" / "services" / "ddl" / "extractor.py",
+        repo_root / "app" / "services" / "agent" / "router.py",
+        repo_root / "app" / "services" / "agent" / "intents.py",
         repo_root / "app" / "api" / "internal_v1" / "endpoints_agent.py",
     ]
     for path in files:

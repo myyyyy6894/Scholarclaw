@@ -152,6 +152,13 @@ public class DdlTimeRuleValidator {
         return trimToNull(timezone) == null ? ScTimeZone.zoneId().getId() : timezone.trim();
     }
 
+    /**
+     * 把用户时区的墙钟日期/时刻换算为应用时区 DATETIME；供草案决策重新校验一致性使用。
+     */
+    public LocalDateTime combineInAppZone(LocalDate date, LocalTime time, ZoneId userZone) {
+        return toAppZone(date, time, userZone);
+    }
+
     private DdlTimeFields resolveExact(String dueDateText, String dueTimeText,
                                        ZoneId userZone, LocalDateTime now) {
         if (dueDateText == null || dueTimeText == null) {
@@ -236,11 +243,41 @@ public class DdlTimeRuleValidator {
      *
      * <p>MySQL 的 {@code DATETIME(3)} 不携带偏移量；本系统统一按应用时区解释数据库时间，
      * 因此必须先把用户本地时间换算成同一瞬间的应用时区墙钟时间。
+     *
+     * <p><b>DST 往返校验</b>：{@link ZonedDateTime#of} 会把夏令时跳变窗口内不存在的本地时刻
+     * 静默归一化为另一个时刻（例如 `America/New_York` 的 `2027-03-14 02:30` 变成 `03:30`），
+     * 也会对回拨窗口内出现两次的本地时刻任选一个偏移量。两种情况下“用户看到的本地时刻”
+     * 与“实际保存的瞬间”不再一致，因此这里显式拒绝：
+     * <ul>
+     *   <li>{@code getValidOffsets} 为空 → 不存在时刻，抛 {@code 400 INVALID_CALENDAR_DATE}；</li>
+     *   <li>返回两个偏移量 → fall-back 重复时刻，同样拒绝并要求用户改用明确时刻；</li>
+     *   <li>换算到应用时区再换回用户时区，本地日期/时刻必须逐字段一致。</li>
+     * </ul>
+     * 手工新建、手工编辑、提取结果落库、草案应用与 `CREATE_NEW` 均通过本方法，保证同一口径。
      */
     private static LocalDateTime toAppZone(LocalDate date, LocalTime time, ZoneId userZone) {
-        return ZonedDateTime.of(date, time, userZone)
-                .withZoneSameInstant(ScTimeZone.zoneId())
-                .toLocalDateTime();
+        LocalDateTime local = LocalDateTime.of(date, time);
+        java.util.List<java.time.ZoneOffset> offsets = userZone.getRules().getValidOffsets(local);
+        if (offsets.isEmpty()) {
+            throw new BusinessException(ErrorCode.INVALID_CALENDAR_DATE,
+                    "本地时间 " + date + " " + time + " 在时区 " + userZone.getId()
+                            + " 的夏令时跳变窗口中不存在，请填写该时区真实存在的时刻。");
+        }
+        if (offsets.size() > 1) {
+            throw new BusinessException(ErrorCode.INVALID_CALENDAR_DATE,
+                    "本地时间 " + date + " " + time + " 在时区 " + userZone.getId()
+                            + " 因夏令时回拨出现两次，请填写非歧义时刻或改用其它时区。");
+        }
+        ZonedDateTime zoned = ZonedDateTime.of(local, userZone);
+        LocalDateTime appLocal = zoned.withZoneSameInstant(ScTimeZone.zoneId()).toLocalDateTime();
+        LocalDateTime roundTrip = appLocal.atZone(ScTimeZone.zoneId())
+                .withZoneSameInstant(userZone).toLocalDateTime();
+        if (!roundTrip.equals(local)) {
+            throw new BusinessException(ErrorCode.INVALID_CALENDAR_DATE,
+                    "本地时间 " + date + " " + time + " 在时区 " + userZone.getId()
+                            + " 无法稳定换算（夏令时边界），请改用其它时刻。");
+        }
+        return appLocal;
     }
 
     private static LocalDateTime followUpAt(TaskStatus status, LocalDateTime now) {

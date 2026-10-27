@@ -8,7 +8,8 @@ package com.scholarclaw.common.enums;
  *   <li>{@code VAGUE_OR_MISSING}（如"尽快交""考完再说"）绝不生成 {@code due_at}；</li>
  *   <li>{@code DATE_ONLY} 按 PO-02 默认方案取当日 {@code 23:59:59}，且必须
  *       {@code time_inferred = 1} 并在卡片显式标注；</li>
- *   <li>{@code INVALID_OR_PAST} 进入 {@code PENDING_TIME} 等待用户补充。</li>
+ *   <li>{@code INVALID_OR_PAST}：过去时间且仍有可用的公历日期时进入 {@code PENDING_CONFIRM}
+ *       （保留 {@code due_at} 供用户核对）；非法日期且没有可用日期时进入 {@code PENDING_TIME}。</li>
  * </ul>
  */
 public enum TimePrecision {

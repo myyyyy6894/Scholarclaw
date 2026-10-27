@@ -316,18 +316,88 @@ async def test_illegal_calendar_date_becomes_invalid_and_is_nulled() -> None:
     assert result.payload.has_ambiguity is True
 
 
-async def test_past_date_becomes_invalid_or_past() -> None:
+async def test_model_exact_with_invalid_calendar_date_degrades_to_invalid_or_past() -> None:
+    """模型把 2026-02-29 误判为 EXACT_DATETIME 时，必须降级而不是 502。"""
     model_payload = _payload(
-        raw_time_text="10月1日 22:00 前",
-        parsed_due_date="2026-10-01",
+        raw_time_text="2026-02-29 22:00",
+        time_precision="EXACT_DATETIME",
+        parsed_due_date="2026-02-29",
         parsed_due_time="22:00:00",
     )
     extractor, _ = _extractor(_response(_content(model_payload)))
 
-    result = await extractor.extract(_request(raw_text="10月1日 22:00 前交实验报告。"))
+    result = await extractor.extract(_request(raw_text="2026-02-29 22:00 前交实验报告。"))
 
     assert result.payload.time_precision is TimePrecision.INVALID_OR_PAST
-    assert result.payload.parsed_due_date == date(2026, 10, 1)
+    assert result.payload.parsed_due_date is None
+    assert result.payload.parsed_due_time is None
+    assert result.payload.has_ambiguity is True
+    assert "日期非法" in (result.payload.ambiguity_reason or "")
+
+
+async def test_model_date_only_with_invalid_calendar_date_degrades_to_invalid_or_past() -> None:
+    model_payload = _payload(
+        raw_time_text="2026-04-31",
+        time_precision="DATE_ONLY",
+        parsed_due_date="2026-04-31",
+        parsed_due_time=None,
+    )
+    extractor, _ = _extractor(_response(_content(model_payload)))
+
+    result = await extractor.extract(_request(raw_text="2026-04-31 交实验报告。"))
+
+    assert result.payload.time_precision is TimePrecision.INVALID_OR_PAST
+    assert result.payload.parsed_due_date is None
+    assert result.payload.has_ambiguity is True
+
+
+async def test_model_exact_missing_time_degrades_to_date_only() -> None:
+    model_payload = _payload(
+        raw_time_text="2026-10-25 前",
+        time_precision="EXACT_DATETIME",
+        parsed_due_date="2026-10-25",
+        parsed_due_time=None,
+    )
+    extractor, _ = _extractor(_response(_content(model_payload)))
+
+    result = await extractor.extract(_request(raw_text="2026-10-25 前交实验报告。"))
+
+    assert result.payload.time_precision is TimePrecision.DATE_ONLY
+    assert result.payload.parsed_due_date == date(2026, 10, 25)
+    assert result.payload.parsed_due_time is None
+    assert result.payload.has_ambiguity is True
+    assert "仅日期" in (result.payload.ambiguity_reason or "")
+
+
+async def test_model_exact_invalid_time_degrades_to_date_only() -> None:
+    model_payload = _payload(
+        raw_time_text="2026-10-25 25:99",
+        time_precision="EXACT_DATETIME",
+        parsed_due_date="2026-10-25",
+        parsed_due_time="25:99:00",
+    )
+    extractor, _ = _extractor(_response(_content(model_payload)))
+
+    result = await extractor.extract(_request(raw_text="2026-10-25 25:99 前交实验报告。"))
+
+    assert result.payload.time_precision is TimePrecision.DATE_ONLY
+    assert result.payload.parsed_due_time is None
+    assert result.payload.has_ambiguity is True
+
+
+async def test_past_date_becomes_invalid_or_past() -> None:
+    # 使用带年份的过去日期：仅含月日的过去日期会按 docs/01 跨年顺延（见时间解析测试）。
+    model_payload = _payload(
+        raw_time_text="2025年10月1日 22:00 前",
+        parsed_due_date="2025-10-01",
+        parsed_due_time="22:00:00",
+    )
+    extractor, _ = _extractor(_response(_content(model_payload)))
+
+    result = await extractor.extract(_request(raw_text="2025年10月1日 22:00 前交实验报告。"))
+
+    assert result.payload.time_precision is TimePrecision.INVALID_OR_PAST
+    assert result.payload.parsed_due_date == date(2025, 10, 1)
     assert result.payload.has_ambiguity is True
     assert "早于消息基准时间" in (result.payload.ambiguity_reason or "")
 

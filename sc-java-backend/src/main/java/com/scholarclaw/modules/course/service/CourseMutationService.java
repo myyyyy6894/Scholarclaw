@@ -209,6 +209,12 @@ public class CourseMutationService {
 
     @Transactional(rollbackFor = Exception.class)
     public void softDelete(Long userId, Long courseId) {
+        // 先锁定课程行，与 DDL 建单/编辑/确认使用的 getActiveCourseForUpdate 串行化：
+        // 删除先拿到锁时，DDL 写请求会等待并在锁释放后读到 is_deleting=1 而解绑；
+        // DDL 先拿到锁时，删除会等待其提交，随后监听器能看到新任务并解绑。避免 PO-05 并发窗口。
+        if (courseNamespaceMapper.selectActiveCourseForUpdate(userId, courseId) == null) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         int affected = courseNamespaceMapper.update(null, Wrappers.<CourseNamespaceEntity>lambdaUpdate()
                 .eq(CourseNamespaceEntity::getCourseId, courseId)
                 .eq(CourseNamespaceEntity::getUserId, userId)

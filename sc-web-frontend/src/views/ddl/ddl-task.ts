@@ -26,6 +26,16 @@ export const MAX_OPTIONAL_TEXT = 255
 
 export type EditableTimePrecision = Exclude<DdlTimePrecision, 'INVALID_OR_PAST'>
 
+/** 编辑弹窗展示的原任务时间语义快照。 */
+export interface OriginalTimeInfo {
+  precision: string
+  deadline: string
+  reason: string | null
+  timezone: string
+  /** 原时间是否属于“非法或已过期/待确认”，需要用户显式重新确认。 */
+  needsReconfirm: boolean
+}
+
 export interface DdlTaskFormState {
   courseId: string
   courseName: string
@@ -86,8 +96,54 @@ export function isPendingStatus(status: DdlTaskStatus): boolean {
 /** 待确认收件箱里的任务为什么需要用户确认（不推测具体时间）。 */
 export function pendingReason(task: Pick<DdlTask, 'status'>): string {
   return task.status === 'PENDING_TIME'
-    ? '原通知未给出可用的截止时间，已归入待确认收件箱；在补充时间前不会触发 T-24h / T-6h / 逾期提醒。'
+    ? '原通知未给出可用的截止时间，已归入待确认收件箱；补充时间前不会进入正式提醒范围，也不会生成倒计时。'
     : '时间存在跨周 / 凌晨歧义、置信度偏低或早于当前时间，请核对后确认截止时间以激活。'
+}
+
+export interface PendingCardInfo {
+  /** 解析后的公历日期 + 星期 + 时刻（用户时区）；未生成时明确说明。 */
+  deadline: string
+  rawTime: string | null
+  /** 后端持久化的确认原因；缺失时回退到通用说明。 */
+  reason: string
+  /** 是否使用了通用说明（即后端没有给出具体原因）。 */
+  genericReason: boolean
+  /** `DATE_ONLY` 是否使用了 23:59 推断；待确认卡片必须明确说明。 */
+  timeInferred: boolean
+}
+
+/**
+ * 待确认卡片的展示事实。
+ *
+ * 必须同时给出“解析后的公历日期与星期”和“原文时间表述”，跨年任务由后端
+ * `time_ambiguity_reason` 给出“已按跨年顺延至次年，请核对”，前端不得自行推断。
+ */
+export function pendingCardInfo(task: DdlTask): PendingCardInfo {
+  const rawTime = task.raw_time_text === null ? null : task.raw_time_text.trim() || null
+  const stored = task.time_ambiguity_reason === null
+    ? null
+    : task.time_ambiguity_reason.trim() || null
+  return {
+    deadline: deadlineText(task),
+    rawTime,
+    reason: stored ?? pendingReason(task),
+    genericReason: stored === null,
+    timeInferred: task.time_inferred,
+  }
+}
+
+/** 编辑弹窗展示的原任务时间信息；用于避免“保存原字段”被误认为重新确认时间。 */
+export function originalTimeInfo(task: DdlTask): OriginalTimeInfo {
+  return {
+    precision: precisionLabel(task.time_precision),
+    deadline: deadlineText(task),
+    reason: task.time_ambiguity_reason === null
+      ? null
+      : task.time_ambiguity_reason.trim() || null,
+    timezone: task.user_timezone.trim() === '' ? '时区缺失（后端未返回）' : task.user_timezone,
+    needsReconfirm:
+      task.time_precision === 'INVALID_OR_PAST' || task.status === 'PENDING_CONFIRM',
+  }
 }
 
 /** 校验粘贴的通知原文（后端要求 `4 ~ 4000` 字符）。 */
@@ -124,18 +180,42 @@ export function isUuidLike(value: string): boolean {
   return UUID_FALLBACK_PATTERN.test(value)
 }
 
+/** 产品默认时区（`01` FR-DDL-001）：缺失时区时必须显式标注，绝不静默用浏览器时区。 */
+export const DEFAULT_DISPLAY_TIMEZONE = 'Asia/Shanghai'
+
+interface DisplayZone {
+  zone: string
+  /** 展示用标签：正常时区名；缺失/非法时明确说明回退到默认时区。 */
+  label: string
+}
+
+function displayZone(timezone: string | null): DisplayZone {
+  const trimmed = timezone === null ? '' : timezone.trim()
+  if (trimmed === '') {
+    return { zone: DEFAULT_DISPLAY_TIMEZONE, label: '时区缺失，按 Asia/Shanghai 显示' }
+  }
+  try {
+    // 提前校验 IANA 名称，非法时同样标注回退，而不是让 Intl 抛错或使用浏览器时区。
+    new Intl.DateTimeFormat('zh-CN', { timeZone: trimmed })
+    return { zone: trimmed, label: trimmed }
+  } catch {
+    return {
+      zone: DEFAULT_DISPLAY_TIMEZONE,
+      label: `时区无效（${trimmed}），按 Asia/Shanghai 显示`,
+    }
+  }
+}
+
 function createFormatter(
   timezone: string | null,
   options: Intl.DateTimeFormatOptions,
 ): Intl.DateTimeFormat {
-  if (timezone !== null && timezone.trim() !== '') {
-    try {
-      return new Intl.DateTimeFormat('zh-CN', { ...options, timeZone: timezone })
-    } catch {
-      // 后端时区名异常时退回浏览器本地时区，绝不阻断页面渲染
-    }
-  }
-  return new Intl.DateTimeFormat('zh-CN', options)
+  // 任何情况下都必须显式指定 timeZone：不传会让 Intl 使用浏览器本地时区，
+  // 同一任务在不同电脑上会显示成不同时刻。
+  return new Intl.DateTimeFormat('zh-CN', {
+    ...options,
+    timeZone: displayZone(timezone).zone,
+  })
 }
 
 function partsOf(formatter: Intl.DateTimeFormat, date: Date): Record<string, string> {
@@ -155,9 +235,11 @@ function parseIso(value: string | null): Date | null {
 }
 
 /**
- * 把后端带偏移量的 `due_at` 按任务记录的用户时区展示，例如 `2026-10-16（周五）17:00`。
+ * 把后端带偏移量的 `due_at` 按任务记录的用户时区展示，
+ * 例如 `2026-10-16（周五）17:00（Asia/Shanghai）`。
  *
- * 使用 `user_timezone` 而不是浏览器时区，保证与后端计算 `due_at` 的口径一致。
+ * 使用 `user_timezone` 而不是浏览器时区，保证与后端计算 `due_at` 的口径一致；
+ * 时区缺失或非法时按产品默认 `Asia/Shanghai` 展示并明确标注。
  */
 export function formatDueAt(dueAt: string | null, timezone: string | null): string | null {
   const date = parseIso(dueAt)
@@ -175,17 +257,18 @@ export function formatDueAt(dueAt: string | null, timezone: string | null): stri
   })
   const parts = partsOf(formatter, date)
   const weekday = (parts.weekday ?? '').replace('星期', '周')
-  return `${parts.year}-${parts.month}-${parts.day}（${weekday}）${parts.hour}:${parts.minute}`
+  const zoneLabel = displayZone(timezone).label
+  return `${parts.year}-${parts.month}-${parts.day}（${weekday}）${parts.hour}:${parts.minute}（${zoneLabel}）`
 }
 
 /** 系统时间戳（`created_at` / `updated_at` / `completed_at`）的紧凑展示。 */
-export function formatTimestamp(value: string | null): string | null {
+export function formatTimestamp(value: string | null, timezone: string | null = null): string | null {
   const date = parseIso(value)
   if (date === null) {
     return null
   }
   const parts = partsOf(
-    createFormatter(null, {
+    createFormatter(timezone, {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -313,11 +396,16 @@ export function emptyTaskForm(): DdlTaskFormState {
 }
 
 export function taskFormFrom(task: DdlTask): DdlTaskFormState {
+  // INVALID_OR_PAST 必须按“是否真的没有时刻”降级，不能一律当 DATE_ONLY：
+  // 过去时间但原文有明确时刻时，编辑表单必须保留 EXACT_DATETIME，否则保存会把
+  // 原 22:00 改成 DATE_ONLY 的 23:59:59 哨兵。
   const precision: EditableTimePrecision =
     task.time_precision === 'INVALID_OR_PAST'
       ? task.due_date === null
         ? 'VAGUE_OR_MISSING'
-        : 'DATE_ONLY'
+        : task.due_time === null
+          ? 'DATE_ONLY'
+          : 'EXACT_DATETIME'
       : task.time_precision
   return {
     courseId: task.course_id ?? '',
@@ -424,7 +512,7 @@ export function buildCreatePayload(
 }
 
 /** 编辑 / 确认激活（`API-DDL-004`）请求体。 */
-export function buildUpdatePayload(form: DdlTaskFormState): {
+export function buildUpdatePayload(form: DdlTaskFormState, reconfirmTime = false): {
   course_id: string | null
   course_name: string
   task_title: string
@@ -433,6 +521,7 @@ export function buildUpdatePayload(form: DdlTaskFormState): {
   due_time: string | null
   deliverable_format: string | null
   submission_channel: string | null
+  reconfirm_time: boolean
 } {
   const time = timeFields(form)
   return {
@@ -444,6 +533,177 @@ export function buildUpdatePayload(form: DdlTaskFormState): {
     due_time: time.due_time,
     deliverable_format: optionalText(form.deliverableFormat),
     submission_channel: optionalText(form.submissionChannel),
+    reconfirm_time: reconfirmTime,
+  }
+}
+
+/**
+ * 一次“手动新建”操作的幂等身份。
+ *
+ * 与通知提取不同，手动建单只有一个提交按钮：超时重试时用户可能已经改了表单。
+ * 只有**未修改表单**的重试才允许复用原 `client_request_id`；表单变化后必须换新 ID，
+ * 否则服务端会把它当成“同一请求 ID 的不同内容”返回 409。
+ */
+export interface ManualCreateOperationState {
+  requestId: string
+  /** 上次提交时的表单指纹；未提交时为 `null`。 */
+  fingerprint: string | null
+  submitted: boolean
+}
+
+export function newManualCreateOperation(requestId: string): ManualCreateOperationState {
+  return { requestId, fingerprint: null, submitted: false }
+}
+
+/** 手动建单请求指纹：排除 `client_request_id`，只用于判断表单内容是否变化。 */
+export function manualCreateFingerprint(form: DdlTaskFormState): string {
+  const payload = buildCreatePayload(form, '')
+  return JSON.stringify({
+    course_id: payload.course_id,
+    course_name: payload.course_name,
+    task_title: payload.task_title,
+    time_precision: payload.time_precision,
+    due_date: payload.due_date,
+    due_time: payload.due_time,
+    deliverable_format: payload.deliverable_format,
+    submission_channel: payload.submission_channel,
+  })
+}
+
+export interface ManualCreateSubmit {
+  operation: ManualCreateOperationState
+  requestId: string
+  /** `true` 表示复用了上次提交的请求 ID（未修改表单的重试）。 */
+  reused: boolean
+}
+
+/**
+ * 计算本次手动建单应使用的请求 ID：
+ *
+ * * 首次提交：沿用打开弹窗时生成的 ID；
+ * * 失败/超时后未修改表单重试：复用原 ID（同一次操作的幂等重试）；
+ * * 已提交后修改表单：生成新的操作 ID，避免服务端返回 409 IDEMPOTENCY_CONFLICT。
+ */
+export function manualCreateSubmitState(
+  operation: ManualCreateOperationState,
+  form: DdlTaskFormState,
+  nextRequestId: string,
+): ManualCreateSubmit {
+  const fingerprint = manualCreateFingerprint(form)
+  if (!operation.submitted) {
+    return {
+      operation: { ...operation, fingerprint, submitted: true },
+      requestId: operation.requestId,
+      reused: false,
+    }
+  }
+  if (operation.fingerprint === fingerprint) {
+    return {
+      operation: { ...operation, submitted: true },
+      requestId: operation.requestId,
+      reused: true,
+    }
+  }
+  return {
+    operation: { requestId: nextRequestId, fingerprint, submitted: true },
+    requestId: nextRequestId,
+    reused: false,
+  }
+}
+
+/** 409 IDEMPOTENCY_CONFLICT：原 ID 已被其它内容占用，必须换新 ID 重新提交。 */
+export function resetManualCreateAfterConflict(
+  _operation: ManualCreateOperationState,
+  nextRequestId: string,
+): ManualCreateOperationState {
+  return { requestId: nextRequestId, fingerprint: null, submitted: false }
+}
+
+export interface ExtractOperationState {
+  requestId: string
+  forceCreate: boolean
+  submitted: boolean
+  rawText: string
+  courseId: string
+}
+
+/**
+ * 一次“粘贴通知提取”操作的身份状态。
+ *
+ * 规则（`04` §4.6.1 CONFLICT-01 定稿）：
+ *
+ * * 同一操作超时重试必须复用 `requestId`；
+ * * 已提交后用户改动原文/课程 → 生成新的 `requestId` 并重置 `forceCreate=false`；
+ * * `forceCreate` 只在用户点击“仍然新建”时进入，失败重试保持同一新 ID，
+ *   直到输入变化或操作成功。
+ */
+export function newExtractOperation(
+  rawText: string,
+  courseId: string,
+  requestId: string,
+): ExtractOperationState {
+  return {
+    requestId,
+    forceCreate: false,
+    submitted: false,
+    rawText: rawText.trim(),
+    courseId: courseId.trim(),
+  }
+}
+
+export function editExtractInput(
+  operation: ExtractOperationState,
+  rawText: string,
+  courseId: string,
+  nextRequestId: string,
+): ExtractOperationState {
+  const normalizedText = rawText.trim()
+  const normalizedCourse = courseId.trim()
+  if (normalizedText === operation.rawText && normalizedCourse === operation.courseId) {
+    return operation
+  }
+  if (!operation.submitted) {
+    return {
+      ...operation,
+      rawText: normalizedText,
+      courseId: normalizedCourse,
+    }
+  }
+  return {
+    requestId: nextRequestId,
+    forceCreate: false,
+    submitted: false,
+    rawText: normalizedText,
+    courseId: normalizedCourse,
+  }
+}
+
+export function markExtractSubmitted(
+  operation: ExtractOperationState,
+): ExtractOperationState {
+  return { ...operation, submitted: true }
+}
+
+/** 响应返回时若当前操作身份已变化，旧响应必须丢弃。 */
+export function isStaleExtractResponse(
+  current: ExtractOperationState,
+  submittedRequestId: string,
+): boolean {
+  return current.requestId !== submittedRequestId
+}
+
+export function forceCreateOperation(
+  operation: ExtractOperationState,
+  nextRequestId: string,
+): ExtractOperationState {
+  if (operation.forceCreate) {
+    return operation
+  }
+  return {
+    ...operation,
+    requestId: nextRequestId,
+    forceCreate: true,
+    submitted: false,
   }
 }
 
@@ -487,6 +747,17 @@ export function draftDiffRows(task: DdlTask | null, draft: TaskChangeDraft): Dra
       before: textOrDash(task?.submission_channel ?? null),
       after: textOrDash(draft.new_submission_channel),
     },
+    {
+      label: '确认原因',
+      before: textOrDash(task?.time_ambiguity_reason ?? null),
+      after: textOrDash(draft.new_time_ambiguity_reason),
+    },
+    {
+      // 截止时间必须与看板同一格式，包含用户时区标签。
+      label: '截止时间（含时区）',
+      before: task === null ? '—' : deadlineText(task),
+      after: draftNewDeadline(draft),
+    },
   ]
   return rows.map((row) => ({
     ...row,
@@ -494,14 +765,23 @@ export function draftDiffRows(task: DdlTask | null, draft: TaskChangeDraft): Dra
   }))
 }
 
-/** 草案有效期提示；过期后后端返回 `DRAFT_EXPIRED_OR_NOT_FOUND`。 */
+/** 草案有效期提示；按草案时区展示，过期后后端返回 `DRAFT_EXPIRED_OR_NOT_FOUND`。 */
 export function draftExpiryText(draft: TaskChangeDraft): string | null {
-  const expires = formatTimestamp(draft.expires_at)
+  const expires = formatTimestamp(draft.expires_at, draft.user_timezone)
   return expires === null ? null : `草案有效期至 ${expires}`
 }
 
-export function draftNewDeadline(draft: TaskChangeDraft): string {
-  return formatDueAt(draft.new_due_at, null) ?? '未生成截止时间'
+/**
+ * 草案的新截止时间必须按草案携带的**用户时区快照**展示，而不是浏览器本地时区。
+ *
+ * 时区缺失时返回明确提示，不能静默回退 `Intl` 默认时区——否则同一份草案在不同电脑上
+ * 会显示成不同时刻。`timezone` 参数仅用于草案缺少快照时复用目标任务的时区。
+ */
+export function draftNewDeadline(
+  draft: TaskChangeDraft,
+  timezone: string | null = null,
+): string {
+  return formatDueAt(draft.new_due_at, draft.user_timezone ?? timezone) ?? '未生成截止时间'
 }
 
 export function findTask(board: DdlTaskBoard, taskId: BigIntId): DdlTask | null {

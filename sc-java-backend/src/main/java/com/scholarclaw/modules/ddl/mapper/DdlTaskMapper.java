@@ -18,9 +18,30 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface DdlTaskMapper extends BaseMapper<DdlTaskEntity> {
 
-    /** 请求级幂等键回查；命中 {@code uk_ddl_idempotency_key}。 */
-    @Select("SELECT * FROM t_ddl_task WHERE idempotency_key = #{idempotencyKey} LIMIT 1")
-    DdlTaskEntity selectByIdempotencyKey(@Param("idempotencyKey") String idempotencyKey);
+    /**
+     * 请求级幂等键回查；命中 {@code uk_ddl_idempotency_key}。
+     *
+     * <p>幂等键全局唯一，但仍强制带 {@code user_id}：所有业务查询不得存在仅按业务键读取、
+     * 依赖上层复核用户归属的路径（防御纵深）。
+     */
+    @Select("""
+            SELECT * FROM t_ddl_task
+             WHERE idempotency_key = #{idempotencyKey}
+               AND user_id = #{userId}
+             LIMIT 1
+            """)
+    DdlTaskEntity selectByIdempotencyKey(@Param("idempotencyKey") String idempotencyKey,
+                                         @Param("userId") Long userId);
+
+    /** 按主键 + 用户回查（防 IDOR）。 */
+    @Select("""
+            SELECT * FROM t_ddl_task
+             WHERE task_id = #{taskId}
+               AND user_id = #{userId}
+             LIMIT 1
+            """)
+    DdlTaskEntity selectByTaskIdAndUserId(@Param("taskId") Long taskId,
+                                          @Param("userId") Long userId);
 
     /**
      * 事务内锁定任务行（{@code SELECT ... FOR UPDATE}）。
@@ -44,4 +65,13 @@ public interface DdlTaskMapper extends BaseMapper<DdlTaskEntity> {
                AND user_id = #{userId}
             """)
     int unbindCourse(@Param("userId") Long userId, @Param("courseId") Long courseId);
+
+    /** 删除课程前收集关联任务 ID，用于事务提交后清理这些任务的 Redis 变更草案。 */
+    @Select("""
+            SELECT task_id FROM t_ddl_task
+             WHERE course_id = #{courseId}
+               AND user_id = #{userId}
+            """)
+    java.util.List<Long> selectTaskIdsByCourse(@Param("userId") Long userId,
+                                               @Param("courseId") Long courseId);
 }

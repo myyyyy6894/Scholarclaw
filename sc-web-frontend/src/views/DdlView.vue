@@ -27,21 +27,34 @@ import {
   draftDiffRows,
   draftExpiryText,
   draftNewDeadline,
+  editExtractInput,
   emptyBoard,
   emptyTaskForm,
   findTask,
+  forceCreateOperation,
   formatTimestamp,
   inferredNotice,
+  isStaleExtractResponse,
+  manualCreateSubmitState,
+  markExtractSubmitted,
   newClientRequestId,
-  pendingReason,
+  newExtractOperation,
+  newManualCreateOperation,
+  originalTimeInfo,
+  pendingCardInfo,
   precisionLabel,
   rawTextError,
+  resetManualCreateAfterConflict,
   statusLabel,
   statusTagType,
   taskFormError,
   taskFormFrom,
   type Countdown,
   type DdlTaskFormState,
+  type ExtractOperationState,
+  type ManualCreateOperationState,
+  type OriginalTimeInfo,
+  type PendingCardInfo,
 } from '@/views/ddl/ddl-task'
 
 /**
@@ -69,6 +82,13 @@ const countdowns = computed<Record<string, Countdown | null>>(() => {
   const result: Record<string, Countdown | null> = {}
   for (const task of board.value.active_tasks) {
     result[task.task_id] = countdown(task, nowMs.value)
+  }
+  return result
+})
+const pendingInfos = computed<Record<string, PendingCardInfo>>(() => {
+  const result: Record<string, PendingCardInfo> = {}
+  for (const task of board.value.pending_inbox_tasks) {
+    result[task.task_id] = pendingCardInfo(task)
   }
   return result
 })
@@ -121,20 +141,36 @@ async function refreshAll(): Promise<void> {
 const extractVisible = ref(false)
 const extractText = ref('')
 const extractCourseId = ref('')
-const extractRequestId = ref('')
+const extractOperation = ref<ExtractOperationState>(
+  newExtractOperation('', '', newClientRequestId()),
+)
 const extractBusy = ref(false)
 const semanticHint = ref<DdlTask | null>(null)
 
 function openExtractDialog(): void {
   extractText.value = ''
   extractCourseId.value = courseFilter.value
-  extractRequestId.value = newClientRequestId()
+  extractOperation.value = newExtractOperation(
+    '',
+    courseFilter.value,
+    newClientRequestId(),
+  )
   semanticHint.value = null
   extractVisible.value = true
 }
 
-// 用户改动原文后，之前的语义重复提示不再对应当前内容，必须收起
-watch(extractText, () => {
+// 已提交后改动原文/课程 → 新的操作身份（新 requestId、forceCreate 归零）；
+// 仅切换输入不会悄悄复用旧请求 ID，也不会保留旧的“仍然新建”状态。
+watch([extractText, extractCourseId], () => {
+  const next = editExtractInput(
+    extractOperation.value,
+    extractText.value,
+    extractCourseId.value,
+    newClientRequestId(),
+  )
+  if (next !== extractOperation.value) {
+    extractOperation.value = next
+  }
   semanticHint.value = null
 })
 
@@ -144,19 +180,28 @@ async function submitExtract(forceCreate: boolean): Promise<void> {
     notifyWarning(error)
     return
   }
+  let operation = extractOperation.value
   if (forceCreate) {
-    // “仍然新建”是一次全新操作：换新幂等 ID，并跳过 14 天语义重复检测
-    extractRequestId.value = newClientRequestId('req_ddl_force')
+    // “仍然新建”是全新操作：仅在尚未处于 force 状态时换新幂等 ID；
+    // 失败重试复用这个新 ID，直到输入变化或成功。
+    operation = forceCreateOperation(operation, newClientRequestId('req_ddl_force'))
     semanticHint.value = null
   }
+  operation = markExtractSubmitted(operation)
+  extractOperation.value = operation
+  const submittedRequestId = operation.requestId
   extractBusy.value = true
   try {
     const result = await extractDdlTask({
-      raw_text: extractText.value.trim(),
-      client_request_id: extractRequestId.value,
-      force_create: forceCreate,
-      course_id: extractCourseId.value === '' ? null : extractCourseId.value,
+      raw_text: operation.rawText,
+      client_request_id: operation.requestId,
+      force_create: operation.forceCreate,
+      course_id: operation.courseId === '' ? null : operation.courseId,
     })
+    // 慢响应期间用户已改变输入（操作身份变化）→ 丢弃旧响应，避免把旧结果套到新输入上。
+    if (isStaleExtractResponse(extractOperation.value, submittedRequestId)) {
+      return
+    }
 
     if (result.extract_outcome === 'SEMANTIC_DUPLICATE_HINT') {
       semanticHint.value = result.task
@@ -213,6 +258,11 @@ function openDraftFromBoard(draft: TaskChangeDraft): void {
   openDraftDialog(findTask(board.value, draft.target_task_id), draft)
 }
 
+/** 草案截止时间按草案自带的用户时区快照展示，不依赖目标任务是否在当前筛选结果中。 */
+function draftDeadline(draft: TaskChangeDraft): string {
+  return draftNewDeadline(draft)
+}
+
 async function decideDraft(decision: DraftDecision): Promise<void> {
   if (draftPayload.value === null) {
     return
@@ -244,17 +294,16 @@ async function decideDraft(decision: DraftDecision): Promise<void> {
 
 const createVisible = ref(false)
 const createForm = ref<DdlTaskFormState>(emptyTaskForm())
-const createRequestId = ref('')
+const createOperation = ref<ManualCreateOperationState>(
+  newManualCreateOperation(newClientRequestId('req_ddl_manual')),
+)
 const createBusy = ref(false)
 
 function openCreateDialog(): void {
   createForm.value = emptyTaskForm()
-  createClientRequestId()
+  // 每次新建都是独立操作；同一操作内的失败重试由 manualCreateSubmitState 复用 ID。
+  createOperation.value = newManualCreateOperation(newClientRequestId('req_ddl_manual'))
   createVisible.value = true
-}
-
-function createClientRequestId(): void {
-  createRequestId.value = newClientRequestId('req_ddl_manual')
 }
 
 async function submitCreate(): Promise<void> {
@@ -263,16 +312,32 @@ async function submitCreate(): Promise<void> {
     notifyWarning(error)
     return
   }
+  // 未修改表单的重试复用原请求 ID；已提交后修改表单则换新 ID，避免 409 IDEMPOTENCY_CONFLICT。
+  const prepared = manualCreateSubmitState(
+    createOperation.value,
+    createForm.value,
+    newClientRequestId('req_ddl_manual'),
+  )
+  createOperation.value = prepared.operation
   createBusy.value = true
   try {
-    const task = await createDdlTask(
-      buildCreatePayload(createForm.value, createRequestId.value),
-    )
+    const task = await createDdlTask(buildCreatePayload(createForm.value, prepared.requestId))
     createVisible.value = false
     notifySuccess(`已创建任务 ${task.display_code}（${statusLabel(task.status)}）。`)
     await refreshAll()
   } catch (err) {
-    notifyError(err)
+    if (err instanceof ApiError && err.code === 'IDEMPOTENCY_CONFLICT') {
+      // 原 ID 已被其它内容占用：明确告知这是新操作，并生成新 ID 供用户重新提交。
+      createOperation.value = resetManualCreateAfterConflict(
+        createOperation.value,
+        newClientRequestId('req_ddl_manual'),
+      )
+      notifyWarning(
+        '该请求编号已被其他内容占用（IDEMPOTENCY_CONFLICT）。已生成新的操作编号，请确认表单后重新提交。',
+      )
+    } else {
+      notifyError(err)
+    }
   } finally {
     createBusy.value = false
   }
@@ -283,13 +348,20 @@ const editForm = ref<DdlTaskFormState>(emptyTaskForm())
 const editTask = ref<DdlTask | null>(null)
 const editBusy = ref(false)
 
+const editOriginalTime = computed<OriginalTimeInfo | null>(() =>
+  editTask.value === null ? null : originalTimeInfo(editTask.value),
+)
+
 const editHint = computed(() => {
   const task = editTask.value
   if (task === null) {
     return ''
   }
   if (task.status === 'PENDING_TIME' || task.status === 'PENDING_CONFIRM') {
-    return '补充明确的截止日期后保存，任务会自动激活并开始梯度提醒。'
+    return '补充明确的截止日期后保存，任务会激活并进入可提醒范围（T-24h / T-6h 等调度属 P8，尚未接入）。'
+  }
+  if (task.status === 'COMPLETED') {
+    return '已完成任务只更新字段，仍保持完成状态；如需重新计时，请先取消完成勾选。'
   }
   if (task.status === 'OVERDUE') {
     return '将截止时间改到未来即可恢复为进行中；修改会按新剩余时长重置提醒位。'
@@ -303,7 +375,7 @@ function openEditDialog(task: DdlTask): void {
   editVisible.value = true
 }
 
-async function submitEdit(): Promise<void> {
+async function submitEdit(reconfirmTime = false): Promise<void> {
   const task = editTask.value
   if (task === null) {
     return
@@ -315,7 +387,10 @@ async function submitEdit(): Promise<void> {
   }
   editBusy.value = true
   try {
-    const updated = await updateDdlTask(task.task_id, buildUpdatePayload(editForm.value))
+    const updated = await updateDdlTask(
+      task.task_id,
+      buildUpdatePayload(editForm.value, reconfirmTime),
+    )
     editVisible.value = false
     notifySuccess(`任务 ${updated.display_code} 已保存（${statusLabel(updated.status)}）。`)
     await refreshAll()
@@ -408,6 +483,15 @@ async function cancelTask(task: DdlTask): Promise<void> {
       </div>
     </div>
 
+    <el-alert
+      class="sc-card-gap"
+      type="info"
+      :closable="false"
+      show-icon
+      title="提醒调度尚未接入（P8）"
+      description="当前页面管理任务状态与截止时间；T-24h / T-6h / 逾期与待确认跟进提醒属于 TASK-801/802，尚未实现。"
+    />
+
     <el-card class="sc-card-gap" shadow="never">
       <div class="sc-ddl-toolbar">
         <el-select
@@ -463,7 +547,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
               任务 #T{{ draft.target_task_id }} 收到新的截止时间或交付要求
             </div>
             <div class="sc-ddl-muted">
-              新截止：{{ draftNewDeadline(draft) }}
+              新截止：{{ draftDeadline(draft) }}
               <span v-if="draftExpiryText(draft) !== null"> · {{ draftExpiryText(draft) }}</span>
             </div>
             <div v-if="draft.raw_time_text !== null" class="sc-ddl-muted">
@@ -480,7 +564,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
         <template #header>
           <div class="sc-ddl-section__header">
             <span>待确认收件箱（{{ board.pending_inbox_tasks.length }}）</span>
-            <span class="sc-ddl-muted">补充时间后才会开始提醒</span>
+            <span class="sc-ddl-muted">补充时间后进入可提醒状态（调度属 P8）</span>
           </div>
         </template>
         <el-empty
@@ -506,10 +590,16 @@ async function cancelTask(task: DdlTask): Promise<void> {
             <div class="sc-ddl-muted">
               {{ task.course_name }} · 时间精度：{{ precisionLabel(task.time_precision) }}
             </div>
-            <div v-if="task.raw_time_text !== null" class="sc-ddl-muted">
-              原文时间：{{ task.raw_time_text }}
+            <div class="sc-ddl-inbox__time">
+              <div>解析截止：{{ pendingInfos[task.task_id]?.deadline ?? '未生成截止时间' }}</div>
+              <div v-if="pendingInfos[task.task_id]?.rawTime !== null">
+                原文时间：{{ pendingInfos[task.task_id]?.rawTime }}
+              </div>
+              <div v-if="pendingInfos[task.task_id]?.timeInferred">
+                原通知未注明具体时刻，暂按当日 23:59 统计
+              </div>
             </div>
-            <p class="sc-ddl-inbox__reason">{{ pendingReason(task) }}</p>
+            <p class="sc-ddl-inbox__reason">{{ pendingInfos[task.task_id]?.reason }}</p>
             <div class="sc-ddl-inbox__actions">
               <el-button type="primary" size="small" @click="openEditDialog(task)">
                 补充时间 / 编辑
@@ -635,13 +725,16 @@ async function cancelTask(task: DdlTask): Promise<void> {
           <el-table-column label="截止时间" min-width="200">
             <template #default="{ row }">{{ deadlineText(row) }}</template>
           </el-table-column>
-          <el-table-column label="完成时间" width="160">
+          <el-table-column label="完成时间" width="180">
             <template #default="{ row }">
-              {{ formatTimestamp(row.completed_at) ?? '—' }}
+              {{ formatTimestamp(row.completed_at, row.user_timezone) ?? '—' }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="120" align="right">
+          <el-table-column label="操作" width="150" align="right">
             <template #default="{ row }">
+              <el-button text type="primary" size="small" @click="openEditDialog(row)">
+                编辑
+              </el-button>
               <el-button
                 text
                 size="small"
@@ -660,6 +753,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
       v-model="extractVisible"
       title="粘贴通知提取 DDL"
       width="680px"
+      :show-close="!extractBusy"
       :close-on-click-modal="!extractBusy"
       :close-on-press-escape="!extractBusy"
     >
@@ -671,6 +765,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
             :rows="8"
             maxlength="4000"
             show-word-limit
+            :disabled="extractBusy"
             placeholder="粘贴群通知原文，例如：各位同学，本周五（10月16日）下午5点前请将实验报告与源码以 学号_姓名.zip 发至学习通作业区。"
           />
         </el-form-item>
@@ -681,6 +776,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
             filterable
             placeholder="不指定时由后端按提取到的课程名匹配已有课程"
             class="sc-ddl-form__control"
+            :disabled="extractBusy"
           >
             <el-option
               v-for="course in courses"
@@ -704,12 +800,12 @@ async function cancelTask(task: DdlTask): Promise<void> {
       <template #footer>
         <el-button :disabled="extractBusy" @click="extractVisible = false">关闭</el-button>
         <el-button
-          v-if="semanticHint !== null"
+          v-if="semanticHint !== null || extractOperation.forceCreate"
           type="primary"
           :loading="extractBusy"
           @click="submitExtract(true)"
         >
-          仍然新建
+          {{ semanticHint !== null ? '仍然新建' : '仍然新建（重试）' }}
         </el-button>
         <el-button v-else type="primary" :loading="extractBusy" @click="submitExtract(false)">
           开始提取
@@ -766,6 +862,15 @@ async function cancelTask(task: DdlTask): Promise<void> {
         </div>
 
         <el-alert
+          v-if="draftPayload.new_time_ambiguity_reason !== null"
+          class="sc-ddl-dialog__notice"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="draftPayload.new_time_ambiguity_reason"
+        />
+
+        <el-alert
           v-if="draftPayload.new_time_inferred"
           type="info"
           :closable="false"
@@ -804,10 +909,16 @@ async function cancelTask(task: DdlTask): Promise<void> {
       :close-on-click-modal="!editBusy"
       :close-on-press-escape="!editBusy"
     >
-      <DdlTaskForm v-model="editForm" :courses="courses" :activate-hint="editHint" />
+      <DdlTaskForm
+        v-model="editForm"
+        :courses="courses"
+        :activate-hint="editHint"
+        :original-time="editOriginalTime"
+        @reconfirm="submitEdit(true)"
+      />
       <template #footer>
         <el-button :disabled="editBusy" @click="editVisible = false">取消</el-button>
-        <el-button type="primary" :loading="editBusy" @click="submitEdit">保存</el-button>
+        <el-button type="primary" :loading="editBusy" @click="submitEdit(false)">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -966,6 +1077,19 @@ async function cancelTask(task: DdlTask): Promise<void> {
   color: #6f5a2e;
   font-size: 12px;
   line-height: 1.7;
+}
+
+.sc-ddl-inbox__time {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #1d2b45;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.sc-ddl-dialog__notice {
+  margin-top: 8px;
 }
 
 .sc-ddl-inbox__actions {

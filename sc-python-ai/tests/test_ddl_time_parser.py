@@ -169,22 +169,96 @@ def test_month_day_in_december_rolls_to_next_year_with_ambiguity() -> None:
     assert resolution.due_at.isoformat() == "2027-01-05T23:59:59+08:00"
     assert resolution.time_inferred is True
     assert refined.has_ambiguity is True
-    assert "跨年顺延" in (refined.ambiguity_reason or "")
+    assert "跨年顺延至 2027-01-05" in (refined.ambiguity_reason or "")
+    assert "早于" not in (refined.ambiguity_reason or "")
     assert resolution.initial_status is DdlInitialStatus.PENDING_CONFIRM
 
 
-def test_same_month_past_date_is_not_rolled_to_next_year() -> None:
+def test_cross_year_roll_removes_stale_past_reason() -> None:
     refined, _ = _resolve(
-        "10月1日 22:00 前交实验报告",
+        "1月5日交实验报告",
         _payload(
-            raw_time_text="10月1日 22:00 前",
-            parsed_due_date=date(2026, 10, 1),
+            raw_time_text="1月5日",
+            time_precision=TimePrecision.INVALID_OR_PAST,
+            parsed_due_date=date(2026, 1, 5),
+            has_ambiguity=True,
+            ambiguity_reason="解析出的截止时间早于消息基准时间",
+        ),
+        reference="2026-12-20T10:00:00+08:00",
+    )
+
+    reason = refined.ambiguity_reason or ""
+    assert "跨年顺延至 2027-01-05" in reason
+    assert "早于" not in reason
+
+
+def test_month_day_more_than_24h_past_rolls_to_next_year() -> None:
+    # docs/01：仅含月日且按当年计算早于 reference_time 超过 24 小时 → 顺延次年。
+    refined, resolution = _resolve(
+        "1月5日交实验报告",
+        _payload(
+            raw_time_text="1月5日",
+            time_precision=TimePrecision.DATE_ONLY,
+            parsed_due_date=date(2026, 1, 5),
+        ),
+        reference="2026-01-10T10:00:00+08:00",
+    )
+
+    assert refined.parsed_due_date == date(2027, 1, 5)
+    assert resolution.due_at is not None
+    assert resolution.due_at.isoformat() == "2027-01-05T23:59:59+08:00"
+    assert resolution.time_inferred is True
+    assert refined.has_ambiguity is True
+    assert "跨年顺延至 2027-01-05" in (refined.ambiguity_reason or "")
+    assert resolution.initial_status is DdlInitialStatus.PENDING_CONFIRM
+
+
+def test_explicit_year_past_date_is_not_rolled_to_next_year() -> None:
+    refined, _ = _resolve(
+        "2025年10月1日 22:00 前交实验报告",
+        _payload(
+            raw_time_text="2025年10月1日 22:00 前",
+            parsed_due_date=date(2025, 10, 1),
             parsed_due_time=time(22, 0),
         ),
     )
 
     assert refined.time_precision is TimePrecision.INVALID_OR_PAST
-    assert refined.parsed_due_date == date(2026, 10, 1)
+    assert refined.parsed_due_date == date(2025, 10, 1)
+
+
+def test_month_day_within_24h_is_past_without_rolling() -> None:
+    # 参考日 10:00 收到“昨天 23:59”不足 24 小时，不触发跨年顺延。
+    refined, _ = _resolve(
+        "1月9日交实验报告",
+        _payload(
+            raw_time_text="1月9日",
+            time_precision=TimePrecision.DATE_ONLY,
+            parsed_due_date=date(2026, 1, 9),
+        ),
+        reference="2026-01-10T10:00:00+08:00",
+    )
+
+    assert refined.time_precision is TimePrecision.INVALID_OR_PAST
+    assert refined.parsed_due_date == date(2026, 1, 9)
+
+
+def test_invalid_calendar_date_april_31_has_no_due_date() -> None:
+    refined, resolution = _resolve(
+        "4月31日交实验报告",
+        _payload(
+            raw_time_text="4月31日",
+            time_precision=TimePrecision.INVALID_OR_PAST,
+            parsed_due_date=date(2026, 4, 30),
+        ),
+    )
+
+    assert refined.time_precision is TimePrecision.INVALID_OR_PAST
+    assert refined.parsed_due_date is None
+    assert refined.parsed_due_time is None
+    assert resolution.due_at is None
+    assert resolution.initial_status is DdlInitialStatus.PENDING_TIME
+    assert "日期非法" in (refined.ambiguity_reason or "")
 
 
 def test_relative_tomorrow_is_resolved_in_user_timezone_not_host_timezone() -> None:

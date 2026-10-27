@@ -86,7 +86,7 @@ class DdlTaskControllerTest {
     @DisplayName("手动建单返回 201，ID 为十进制字符串，字段为 snake_case")
     void createReturnsCreatedEnvelope() throws Exception {
         when(ddlTaskService.createManualTask(eq(USER_ID), any(CreateDdlTaskRequest.class)))
-                .thenReturn(taskVO());
+                .thenReturn(new DdlTaskService.DdlTaskCreationResult(taskVO(), true));
 
         mockMvc.perform(post("/api/v1/ddl/tasks")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -108,6 +108,24 @@ class DdlTaskControllerTest {
                 .andExpect(jsonPath("$.data.status").value("ACTIVE"));
 
         verify(ddlTaskService).createManualTask(eq(USER_ID), any(CreateDdlTaskRequest.class));
+    }
+
+    @Test
+    @DisplayName("同一 client_request_id 的幂等重放返回 200，不伪装成新建 201")
+    void createReplayReturnsOk() throws Exception {
+        when(ddlTaskService.createManualTask(eq(USER_ID), any(CreateDdlTaskRequest.class)))
+                .thenReturn(new DdlTaskService.DdlTaskCreationResult(taskVO(), false));
+
+        mockMvc.perform(post("/api/v1/ddl/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"client_request_id":"req_manual_001","course_name":"操作系统原理",
+                                 "task_title":"提交实验二报告","time_precision":"EXACT_DATETIME",
+                                 "due_date":"2099-12-31","due_time":"22:00",
+                                 "deliverable_format":"zip","submission_channel":"学习通"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.task_id").value("103"));
     }
 
     @Test
@@ -291,7 +309,9 @@ class DdlTaskControllerTest {
                 TASK_ID, "提交实验二报告（延期）", "EXACT_DATETIME",
                 "2099-12-31", "23:59:00",
                 OffsetDateTime.parse("2099-12-31T23:59:00+08:00"), false,
+                null,
                 "zip", "学习通", "延期通知", "12月31日 23:59",
+                "Asia/Shanghai",
                 OffsetDateTime.parse("2026-10-16T11:40:00+08:00"));
         when(ddlExtractionService.extract(eq(USER_ID), any(ExtractDdlTaskRequest.class)))
                 .thenReturn(new DdlExtractVO(
@@ -331,6 +351,7 @@ class DdlTaskControllerTest {
                 "22:00:00",
                 OffsetDateTime.parse("2099-12-31T22:00:00+08:00"),
                 false,
+                null,
                 "Asia/Shanghai",
                 new BigDecimal("1.000"),
                 "ACTIVE",

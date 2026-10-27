@@ -202,7 +202,7 @@ class DdlTimeParser:
             cross_year_rolled = False
             if due_date is not None and not date_result.has_year and not date_result.is_relative:
                 due_date, cross_year_rolled, roll_failed = _maybe_roll_year(
-                    due_date, local_reference
+                    due_date, local_reference, due_time
                 )
                 if cross_year_rolled:
                     reasons.append("已按跨年顺延至次年，请核对")
@@ -267,6 +267,18 @@ class DdlTimeParser:
         ):
             precision = TimePrecision.INVALID_OR_PAST
             reasons.append("解析出的截止时间早于消息基准时间")
+
+        if cross_year_rolled and due_date is not None:
+            # 跨年顺延成功后，“早于基准时间/过去”已不成立，必须移除模型或早前步骤留下的
+            # 矛盾原因，并改为带顺延后年份的准确表述。
+            reasons = [
+                reason
+                for reason in reasons
+                if "早于" not in reason and "过去" not in reason and "跨年顺延" not in reason
+            ]
+            reasons.append(
+                f"按当年计算已过期，已跨年顺延至 {due_date.isoformat()}，请核对"
+            )
 
         due_at, time_inferred = _compute_due_at(precision, due_date, due_time, tz)
         if due_at is not None:
@@ -566,13 +578,20 @@ def _parse_number(raw: str) -> int | None:
 
 
 def _maybe_roll_year(
-    value: date, local_reference: datetime
+    value: date, local_reference: datetime, due_time: time | None = None
 ) -> tuple[date, bool, bool]:
-    """按 PRD 做跨年顺延；仅在明显跨年窗口生效，避免把同月过去日期推到次年。"""
-    if value >= local_reference.date() - timedelta(days=1):
-        return value, False, False
-    # 参考月与解析月相差 6 个月以上才视为“明显跨年”（12 月收到 1 月 5 日等）。
-    if (local_reference.month - value.month) < 6:
+    """按 docs/01 §相对日期规则做跨年顺延。
+
+    原文仅含月日（没有年份、也不是相对日期）时：若按当年计算出的截止时刻早于
+    ``reference_time`` **超过 24 小时**，自动顺延至次年。超过 24 小时而不是“只要过去”，
+    是为了容忍消息延迟与当日边界；与参考月相差多少个月无关。
+
+    返回 ``(date, rolled, roll_failed)``；次年没有该日期（如 2028-02-29 → 2029-02-29）
+    时 ``roll_failed=True``，由调用方保留原日期并标注歧义。
+    """
+    effective_time = due_time if due_time is not None else DATE_ONLY_SENTINEL
+    due_moment = datetime.combine(value, effective_time, tzinfo=local_reference.tzinfo)
+    if local_reference - due_moment <= timedelta(hours=24):
         return value, False, False
     try:
         rolled = value.replace(year=value.year + 1)

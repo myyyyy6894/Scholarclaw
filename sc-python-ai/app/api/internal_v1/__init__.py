@@ -4,8 +4,8 @@
 后续任务在各自 `endpoints_*.py` 中追加路由并**必须**加上 `require_internal_token` 依赖：
 
 * `endpoints_probe.py`（TASK-302，已实现）：`POST /model/probe`
-* `endpoints_agent.py`（TASK-701，已实现）：`POST /agent/route-and-extract`
-  （仅 `FORCE_DDL_EXTRACT`；`AUTO_ROUTE` 属 TASK-706，返回 `501 FEATURE_NOT_AVAILABLE`）
+* `endpoints_agent.py`（TASK-701/706，已实现）：`POST /agent/route-and-extract`
+  （`FORCE_DDL_EXTRACT` 直接提取；`AUTO_ROUTE` 规则优先意图路由 + 单次 LLM 分类）
 * `endpoints_rag.py`（TASK-504/604/605）：`DELETE /rag/vectors`、`POST /rag/qa-stream`
 """
 

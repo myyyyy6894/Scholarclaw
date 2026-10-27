@@ -127,6 +127,27 @@ class CourseMutationServiceTest {
         verify(mapper, never()).update(any(), any());
     }
 
+    @Test
+    @DisplayName("软删除先锁定课程行，再更新；课程不存在时 404 且不执行 UPDATE")
+    void softDeleteLocksCourseRowBeforeUpdate() {
+        when(mapper.selectActiveCourseForUpdate(10001L, 2001L)).thenReturn(course(1));
+        when(mapper.update(any(), any())).thenReturn(1);
+
+        service.softDelete(10001L, 2001L);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(mapper);
+        order.verify(mapper).selectActiveCourseForUpdate(10001L, 2001L);
+        order.verify(mapper).update(any(), any());
+
+        when(mapper.selectActiveCourseForUpdate(10001L, 2001L)).thenReturn(null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.softDelete(10001L, 2001L))
+                .isInstanceOf(com.scholarclaw.common.exception.BusinessException.class)
+                .satisfies(ex -> assertThat(
+                        ((com.scholarclaw.common.exception.BusinessException) ex).getErrorCode())
+                        .isEqualTo(com.scholarclaw.common.exception.ErrorCode.RESOURCE_NOT_FOUND));
+    }
+
     private static CourseNamespaceEntity course(int version) {
         CourseNamespaceEntity course = new CourseNamespaceEntity();
         course.setCourseId(2001L);

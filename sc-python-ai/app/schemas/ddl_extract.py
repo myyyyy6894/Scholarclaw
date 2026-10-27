@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from enum import StrEnum
-from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -63,7 +62,7 @@ class DdlExtractRequest(BaseModel):
     mode: ExtractionMode
     raw_text: str = Field(min_length=1, max_length=MAX_RAW_TEXT_LENGTH)
     reference_time: datetime
-    user_timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=64)
+    user_timezone: str = Field(min_length=1, max_length=64)
     candidate_courses: list[str] = Field(
         default_factory=list, max_length=MAX_CANDIDATE_COURSES
     )
@@ -137,11 +136,3 @@ class DdlPayload(BaseModel):
     ambiguity_reason: str | None = Field(
         default=None, max_length=MAX_AMBIGUITY_REASON_LENGTH
     )
-
-
-class RouteAndExtractData(BaseModel):
-    """`data` 节点：当前阶段仅支持 `DDL_EXTRACT`。"""
-
-    intent: Literal["DDL_EXTRACT"] = "DDL_EXTRACT"
-    intent_confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
-    ddl_payload: DdlPayload

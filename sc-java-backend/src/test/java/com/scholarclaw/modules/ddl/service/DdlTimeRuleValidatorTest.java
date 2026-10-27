@@ -186,4 +186,61 @@ class DdlTimeRuleValidatorTest {
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(expected));
     }
+
+    // ------------------------------ DST 边界 ------------------------------
+
+    private static final ZoneId NEW_YORK = ZoneId.of("America/New_York");
+
+    @Test
+    @DisplayName("DST 跳变窗口内不存在的本地时刻 → 400 INVALID_CALENDAR_DATE，不得静默归一化")
+    void nonexistentLocalTimeIsRejected() {
+        // America/New_York 2027-03-14 02:00 -> 03:00，02:30 不存在。
+        assertThatThrownBy(() -> validator.resolve(
+                "EXACT_DATETIME", "2027-03-14", "02:30", NEW_YORK, NOW))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.INVALID_CALENDAR_DATE));
+    }
+
+    @Test
+    @DisplayName("DST 回拨导致同一本地时刻出现两次 → 拒绝，要求用户改用非歧义时刻")
+    void ambiguousLocalTimeIsRejected() {
+        // America/New_York 2027-11-07 01:00-02:00 重复，01:30 有两个偏移量。
+        assertThatThrownBy(() -> validator.resolve(
+                "EXACT_DATETIME", "2027-11-07", "01:30", NEW_YORK, NOW))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.INVALID_CALENDAR_DATE));
+    }
+
+    @Test
+    @DisplayName("DST 跳变后的正常时刻仍按真实偏移量换算到应用时区")
+    void normalLocalTimeAfterDstIsConverted() {
+        DdlTimeRuleValidator.DdlTimeFields fields = validator.resolve(
+                "EXACT_DATETIME", "2027-03-14", "03:30", NEW_YORK, NOW);
+
+        // 03:30 EDT (UTC-4) = 07:30 UTC = 15:30 Asia/Shanghai。
+        assertThat(fields.dueAt()).isEqualTo(LocalDateTime.of(2027, 3, 14, 15, 30));
+        assertThat(fields.status()).isEqualTo(TaskStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("默认 Asia/Shanghai 无 DST，正常时刻不受影响")
+    void defaultZoneHasNoDstAmbiguity() {
+        DdlTimeRuleValidator.DdlTimeFields fields = validator.resolve(
+                "EXACT_DATETIME", "2027-03-14", "02:30", SHANGHAI, NOW);
+
+        assertThat(fields.dueAt()).isEqualTo(LocalDateTime.of(2027, 3, 14, 2, 30));
+    }
+
+    @Test
+    @DisplayName("提取结果落库同样拒绝不存在时刻，不能写入另一个本地时刻")
+    void extractedFieldRejectsNonexistentLocalTime() {
+        assertThatThrownBy(() -> validator.resolveExtracted(TimePrecision.EXACT_DATETIME,
+                LocalDate.of(2027, 3, 14), LocalTime.of(2, 30), false,
+                new java.math.BigDecimal("0.960"), NEW_YORK, NOW))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.INVALID_CALENDAR_DATE));
+    }
 }

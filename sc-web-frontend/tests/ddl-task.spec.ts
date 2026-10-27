@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
 import type { DdlTask, DdlTaskBoard, TaskChangeDraft } from '@/api/ddl'
@@ -10,8 +12,18 @@ import {
   draftDiffRows,
   draftExpiryText,
   draftNewDeadline,
+  emptyBoard,
+  isStaleExtractResponse,
+  editExtractInput,
   emptyTaskForm,
   findTask,
+  forceCreateOperation,
+  manualCreateSubmitState,
+  markExtractSubmitted,
+  newExtractOperation,
+  newManualCreateOperation,
+  originalTimeInfo,
+  pendingCardInfo,
   formatDueAt,
   formatTimestamp,
   humanizeDuration,
@@ -24,6 +36,7 @@ import {
   pendingReason,
   precisionLabel,
   rawTextError,
+  resetManualCreateAfterConflict,
   statusLabel,
   statusTagType,
   taskFormError,
@@ -49,6 +62,7 @@ function task(overrides: Partial<DdlTask> = {}): DdlTask {
     due_time: '17:00:00',
     due_at: '2026-10-16T17:00:00+08:00',
     time_inferred: false,
+    time_ambiguity_reason: null,
     user_timezone: 'Asia/Shanghai',
     confidence: 0.96,
     status: 'ACTIVE',
@@ -74,10 +88,12 @@ function draft(overrides: Partial<TaskChangeDraft> = {}): TaskChangeDraft {
     new_due_time: '23:59:00',
     new_due_at: '2026-10-18T23:59:00+08:00',
     new_time_inferred: false,
+    new_time_ambiguity_reason: null,
     new_deliverable_format: '学号_姓名.zip',
     new_submission_channel: '学习通作业区',
     raw_source_text: '通知：操作系统实验二延期到 10 月 18 日 23:59 截止。',
     raw_time_text: '10 月 18 日 23:59',
+    user_timezone: 'Asia/Shanghai',
     expires_at: '2026-10-16T12:00:00+08:00',
     ...overrides,
   }
@@ -139,20 +155,28 @@ describe('client request id', () => {
 describe('time display', () => {
   it('按任务记录的用户时区展示截止时间与星期', () => {
     expect(formatDueAt('2026-10-16T17:00:00+08:00', 'Asia/Shanghai')).toBe(
-      '2026-10-16（周五）17:00',
+      '2026-10-16（周五）17:00（Asia/Shanghai）',
     )
-    expect(formatDueAt('2026-10-16T17:00:00+08:00', 'UTC')).toBe('2026-10-16（周五）09:00')
+    expect(formatDueAt('2026-10-16T17:00:00+08:00', 'UTC')).toBe(
+      '2026-10-16（周五）09:00（UTC）',
+    )
   })
 
   it('缺失或非法时间返回 null，不补造', () => {
     expect(formatDueAt(null, 'Asia/Shanghai')).toBeNull()
     expect(formatDueAt('not-a-date', 'Asia/Shanghai')).toBeNull()
-    expect(formatDueAt('2026-10-16T17:00:00+08:00', 'Not/AZone')).not.toBeNull()
+    expect(formatDueAt('2026-10-16T17:00:00+08:00', 'Not/AZone')).toBe(
+      '2026-10-16（周五）17:00（时区无效（Not/AZone），按 Asia/Shanghai 显示）',
+    )
+    // 缺失时区必须显式标注默认值，而不是静默使用浏览器时区。
+    expect(formatDueAt('2026-10-16T17:00:00+08:00', null)).toBe(
+      '2026-10-16（周五）17:00（时区缺失，按 Asia/Shanghai 显示）',
+    )
   })
 
   it('没有 due_at 时明确显示未生成截止时间', () => {
     expect(deadlineText(task({ due_at: null, status: 'PENDING_TIME' }))).toBe('未生成截止时间')
-    expect(deadlineText(task())).toBe('2026-10-16（周五）17:00')
+    expect(deadlineText(task())).toBe('2026-10-16（周五）17:00（Asia/Shanghai）')
   })
 
   it('只有 DATE_ONLY 才提示按 23:59 统计', () => {
@@ -162,6 +186,7 @@ describe('time display', () => {
 
   it('系统时间戳格式稳定', () => {
     expect(formatTimestamp('2026-10-15T11:40:02+08:00')).toMatch(/^2026-10-15 \d{2}:40$/)
+    expect(formatTimestamp('2026-10-15T11:40:02+08:00', 'UTC')).toMatch(/^2026-10-15 03:40$/)
     expect(formatTimestamp(null)).toBeNull()
   })
 
@@ -295,6 +320,13 @@ describe('request payload builders', () => {
       taskFormFrom(task({ time_precision: 'INVALID_OR_PAST', due_date: null, due_time: null }))
         .timePrecision,
     ).toBe('VAGUE_OR_MISSING')
+    // 过去时间但原文有明确时刻：必须保留 EXACT_DATETIME，不能降级为 DATE_ONLY
+    const pastExact = taskFormFrom(task({ time_precision: 'INVALID_OR_PAST' }))
+    expect(pastExact.timePrecision).toBe('EXACT_DATETIME')
+    expect(pastExact.dueTime).toBe('17:00:00')
+    expect(
+      taskFormFrom(task({ time_precision: 'INVALID_OR_PAST', due_time: null })).timePrecision,
+    ).toBe('DATE_ONLY')
     expect(taskFormFrom(task({ due_time: '17:00' })).dueTime).toBe('17:00:00')
   })
 })
@@ -303,7 +335,7 @@ describe('draft comparison', () => {
   it('只标记真实变化的字段', () => {
     const rows = draftDiffRows(task(), draft())
     const changed = rows.filter((row) => row.changed).map((row) => row.label)
-    expect(changed).toEqual(['任务标题', '截止日期', '截止时刻'])
+    expect(changed).toEqual(['任务标题', '截止日期', '截止时刻', '截止时间（含时区）'])
     expect(rows.find((row) => row.label === '交付物格式')?.changed).toBe(false)
   })
 
@@ -315,7 +347,138 @@ describe('draft comparison', () => {
 
   it('草案有效期与新截止时间可读', () => {
     expect(draftExpiryText(draft())).toMatch(/^草案有效期至 2026-10-16 \d{2}:00$/)
-    expect(draftNewDeadline(draft())).toBe('2026-10-18（周日）23:59')
+    expect(draftNewDeadline(draft())).toBe('2026-10-18（周日）23:59（Asia/Shanghai）')
+  })
+})
+
+describe('pending confirmation card', () => {
+  it('周末“下周一”展示公历日期、星期与后端确认原因', () => {
+    const info = pendingCardInfo(task({
+      status: 'PENDING_CONFIRM',
+      due_date: '2026-10-26',
+      due_time: '22:00:00',
+      due_at: '2026-10-26T22:00:00+08:00',
+      raw_time_text: '下周一 22:00',
+      time_ambiguity_reason: '周六/周日收到“下周一”，已按下一周周一换算，请核对',
+    }))
+
+    expect(info.deadline).toBe('2026-10-26（周一）22:00（Asia/Shanghai）')
+    expect(info.rawTime).toBe('下周一 22:00')
+    expect(info.reason).toContain('下周一')
+    expect(info.genericReason).toBe(false)
+  })
+
+  it('凌晨跨日展示换算后的公历日期与星期', () => {
+    const info = pendingCardInfo(task({
+      status: 'PENDING_CONFIRM',
+      due_date: '2026-10-16',
+      due_time: '02:00:00',
+      due_at: '2026-10-16T02:00:00+08:00',
+      raw_time_text: '今晚 2 点',
+      time_ambiguity_reason: '凌晨 00:00-04:00 收到“今天/明天/今晚”，日期可能跨日，请核对',
+    }))
+
+    expect(info.deadline).toBe('2026-10-16（周五）02:00（Asia/Shanghai）')
+    expect(info.reason).toContain('跨日')
+  })
+
+  it('跨年顺延展示顺延年份与核对提示', () => {
+    const info = pendingCardInfo(task({
+      status: 'PENDING_CONFIRM',
+      due_date: '2027-01-05',
+      due_time: '22:00:00',
+      due_at: '2027-01-05T22:00:00+08:00',
+      raw_time_text: '1月5日 22:00',
+      time_ambiguity_reason: '已按跨年顺延至次年，请核对',
+    }))
+
+    expect(info.deadline).toBe('2027-01-05（周二）22:00（Asia/Shanghai）')
+    expect(info.reason).toContain('跨年顺延')
+  })
+
+  it('PENDING_TIME 不补造截止时间，并给出通用原因', () => {
+    const info = pendingCardInfo(task({
+      status: 'PENDING_TIME',
+      time_precision: 'VAGUE_OR_MISSING',
+      due_date: null,
+      due_time: null,
+      due_at: null,
+      raw_time_text: '尽快',
+      time_ambiguity_reason: null,
+    }))
+
+    expect(info.deadline).toBe('未生成截止时间')
+    expect(info.rawTime).toBe('尽快')
+    expect(info.reason).toContain('未给出可用的截止时间')
+    expect(info.genericReason).toBe(true)
+  })
+})
+
+describe('draft deadline timezone', () => {
+  it('优先使用草案自带的用户时区快照', () => {
+    expect(draftNewDeadline(draft(), 'Asia/Shanghai')).toBe('2026-10-18（周日）23:59（Asia/Shanghai）')
+    // 即使调用方传了别的时区，草案快照仍然优先，避免同一草案在不同电脑显示不同时刻。
+    expect(draftNewDeadline(draft(), 'America/New_York')).toBe(
+      '2026-10-18（周日）23:59（Asia/Shanghai）',
+    )
+  })
+
+  it('草案快照缺失时使用调用方提供的目标时区，而不是浏览器时区', () => {
+    expect(draftNewDeadline(draft({ user_timezone: null }), 'America/New_York'))
+      .toBe('2026-10-18（周日）11:59（America/New_York）')
+    // 草案与调用方都没有时区时，必须显式标注按默认时区显示，不能静默使用浏览器时区。
+    expect(draftNewDeadline(draft({ user_timezone: null }), null))
+      .toBe('2026-10-18（周日）23:59（时区缺失，按 Asia/Shanghai 显示）')
+  })
+})
+
+describe('extract operation state machine', () => {
+  it('未提交时修改输入保留同一请求 ID', () => {
+    const operation = newExtractOperation(' 原文 A ', ' 2001 ', 'req_1')
+    expect(operation.rawText).toBe('原文 A')
+    expect(operation.courseId).toBe('2001')
+
+    const edited = editExtractInput(operation, '原文 B', '2001', 'req_2')
+    expect(edited.requestId).toBe('req_1')
+    expect(edited.rawText).toBe('原文 B')
+    expect(edited.forceCreate).toBe(false)
+  })
+
+  it('已提交后修改输入生成新 ID 并重置 forceCreate', () => {
+    const submitted = markExtractSubmitted(
+      forceCreateOperation(newExtractOperation('原文 A', '', 'req_1'), 'req_force_1'),
+    )
+    expect(submitted.forceCreate).toBe(true)
+    expect(submitted.requestId).toBe('req_force_1')
+
+    const edited = editExtractInput(submitted, '原文 B', '', 'req_2')
+    expect(edited.requestId).toBe('req_2')
+    expect(edited.forceCreate).toBe(false)
+    expect(edited.submitted).toBe(false)
+  })
+
+  it('force 操作失败重试复用同一新 ID', () => {
+    const submitted = markExtractSubmitted(newExtractOperation('原文 A', '', 'req_1'))
+    const forced = forceCreateOperation(submitted, 'req_force_1')
+    const retried = forceCreateOperation(forced, 'req_force_2')
+
+    expect(retried).toBe(forced)
+    expect(retried.requestId).toBe('req_force_1')
+    expect(retried.forceCreate).toBe(true)
+  })
+
+  it('输入与 force 未变化时复用同一请求 ID', () => {
+    const operation = markExtractSubmitted(newExtractOperation('原文 A', '2001', 'req_1'))
+    expect(editExtractInput(operation, '原文 A', '2001', 'req_2')).toBe(operation)
+    expect(operation.requestId).toBe('req_1')
+  })
+
+  it('慢响应期间输入已变化：旧请求 ID 的响应必须判定为过期', () => {
+    const submitted = markExtractSubmitted(newExtractOperation('原文 A', '2001', 'req_1'))
+    const edited = editExtractInput(submitted, '原文 B', '2001', 'req_2')
+
+    expect(isStaleExtractResponse(submitted, submitted.requestId)).toBe(false)
+    expect(isStaleExtractResponse(edited, submitted.requestId)).toBe(true)
   })
 })
 
@@ -344,5 +507,196 @@ describe('board helpers', () => {
     expect(findTask(board, '3')?.status).toBe('OVERDUE')
     expect(findTask(board, '4')?.status).toBe('COMPLETED')
     expect(findTask(board, '999')).toBeNull()
+  })
+})
+
+describe('pending DATE_ONLY card', () => {
+  it('DATE_ONLY 待确认卡片标记 23:59 推断说明', () => {
+    const pending = task({
+      status: 'PENDING_CONFIRM',
+      time_precision: 'DATE_ONLY',
+      due_time: null,
+      due_at: '2026-10-18T23:59:59+08:00',
+      time_inferred: true,
+    })
+
+    const info = pendingCardInfo(pending)
+
+    expect(info.timeInferred).toBe(true)
+    expect(info.deadline).toContain('2026-10-18')
+    expect(info.deadline).toContain('23:59')
+    expect(inferredNotice(pending)).toContain('23:59')
+  })
+
+  it('非推断任务不显示 23:59 说明', () => {
+    expect(pendingCardInfo(task({ time_inferred: false })).timeInferred).toBe(false)
+    expect(inferredNotice(task({ time_inferred: false }))).toBeNull()
+  })
+})
+
+describe('draft timezone snapshot', () => {
+  it('草案截止时间按草案自带的用户时区展示，而不是浏览器时区', () => {
+    const newYork = draft({ user_timezone: 'America/New_York' })
+
+    expect(draftNewDeadline(newYork, null)).toBe('2026-10-18（周日）11:59（America/New_York）')
+  })
+
+  it('草案没有时区快照时不得静默使用浏览器时区', () => {
+    const missing = draft({ user_timezone: null })
+
+    expect(draftNewDeadline(missing, null)).toBe(
+      '2026-10-18（周日）23:59（时区缺失，按 Asia/Shanghai 显示）',
+    )
+  })
+
+  it('目标课程被过滤掉时仍可显示草案时间（不依赖 board 中的目标任务）', () => {
+    const filteredBoard: DdlTaskBoard = {
+      pending_inbox_tasks: [],
+      pending_change_drafts: [draft()],
+      active_tasks: [],
+      completed_tasks: [],
+    }
+
+    expect(findTask(filteredBoard, '102')).toBeNull()
+    expect(draftNewDeadline(filteredBoard.pending_change_drafts[0], null)).toBe(
+      '2026-10-18（周日）23:59（Asia/Shanghai）',
+    )
+  })
+})
+
+describe('completed task editing', () => {
+  it('已完成任务可以进入编辑表单，字段完整回填', () => {
+    const completed = task({
+      status: 'COMPLETED',
+      completed_at: '2026-10-17T09:30:00+08:00',
+    })
+
+    const form = taskFormFrom(completed)
+
+    expect(form.taskTitle).toBe(completed.task_title)
+    expect(form.timePrecision).toBe('EXACT_DATETIME')
+    expect(form.dueDate).toBe('2026-10-16')
+    expect(buildUpdatePayload(form).due_time).toBe('17:00:00')
+  })
+
+  it('已完成任务表格提供编辑入口（模板回归）', () => {
+    const source = readFileSync(
+      new URL('../src/views/DdlView.vue', import.meta.url),
+      'utf8',
+    )
+    const completedSection = source.slice(source.indexOf('已完成（最近'))
+    const operationColumn = completedSection.slice(0, completedSection.indexOf('</el-table>'))
+
+    expect(operationColumn).toContain('openEditDialog(row)')
+    expect(operationColumn).toContain('取消')
+  })
+})
+
+
+describe('manual create request-id lifecycle', () => {
+  const form = (): DdlTaskFormState => ({
+    ...emptyTaskForm(),
+    courseId: '2001',
+    courseName: '操作系统原理',
+    taskTitle: '提交实验二报告',
+    timePrecision: 'EXACT_DATETIME',
+    dueDate: '2099-10-30',
+    dueTime: '22:00:00',
+  })
+
+  it('首次提交使用打开弹窗时生成的请求 ID', () => {
+    const operation = newManualCreateOperation('req_first')
+    const prepared = manualCreateSubmitState(operation, form(), 'req_next')
+
+    expect(prepared.requestId).toBe('req_first')
+    expect(prepared.reused).toBe(false)
+    expect(prepared.operation.submitted).toBe(true)
+  })
+
+  it('超时后未修改表单重试复用原请求 ID', () => {
+    const first = manualCreateSubmitState(
+      newManualCreateOperation('req_first'), form(), 'req_next')
+    const retry = manualCreateSubmitState(first.operation, form(), 'req_next')
+
+    expect(retry.requestId).toBe('req_first')
+    expect(retry.reused).toBe(true)
+  })
+
+  it('超时后修改表单重试生成新的请求 ID', () => {
+    const first = manualCreateSubmitState(
+      newManualCreateOperation('req_first'), form(), 'req_next')
+    const changed = { ...form(), taskTitle: '提交实验三报告' }
+    const retry = manualCreateSubmitState(first.operation, changed, 'req_next')
+
+    expect(retry.requestId).toBe('req_next')
+    expect(retry.reused).toBe(false)
+  })
+
+  it('409 IDEMPOTENCY_CONFLICT 后重置为新的操作 ID', () => {
+    const first = manualCreateSubmitState(
+      newManualCreateOperation('req_first'), form(), 'req_next')
+    const reset = resetManualCreateAfterConflict(first.operation, 'req_after_conflict')
+
+    expect(reset.requestId).toBe('req_after_conflict')
+    expect(reset.submitted).toBe(false)
+    expect(reset.fingerprint).toBeNull()
+  })
+
+  it('buildUpdatePayload 默认不携带重新确认标记', () => {
+    const payload = buildUpdatePayload(taskFormFrom(task()))
+    expect(payload.reconfirm_time).toBe(false)
+
+    const reconfirmed = buildUpdatePayload(taskFormFrom(task()), true)
+    expect(reconfirmed.reconfirm_time).toBe(true)
+  })
+})
+
+describe('edit dialog original time snapshot', () => {
+  it('INVALID_OR_PAST 需要用户显式重新确认，并展示原精度/原因/时区', () => {
+    const info = originalTimeInfo(task({
+      time_precision: 'INVALID_OR_PAST',
+      status: 'PENDING_CONFIRM',
+      due_at: '2026-10-01T22:00:00+08:00',
+      due_date: '2026-10-01',
+      due_time: '22:00:00',
+      time_ambiguity_reason: '时间被判定为非法或已过去，需人工确认',
+    }))
+
+    expect(info.precision).toBe('非法或已过期')
+    expect(info.needsReconfirm).toBe(true)
+    expect(info.timezone).toBe('Asia/Shanghai')
+    expect(info.reason).toContain('需人工确认')
+    expect(info.deadline).toBe('2026-10-01（周四）22:00（Asia/Shanghai）')
+  })
+
+  it('普通进行中任务不需要重新确认', () => {
+    const info = originalTimeInfo(task())
+    expect(info.needsReconfirm).toBe(false)
+    expect(info.timezone).toBe('Asia/Shanghai')
+  })
+})
+
+
+describe('board rendering states', () => {
+  it('空看板返回四个空分组，计数全为 0', () => {
+    const board = emptyBoard()
+    expect(board.pending_inbox_tasks).toEqual([])
+    expect(board.pending_change_drafts).toEqual([])
+    expect(board.active_tasks).toEqual([])
+    expect(board.completed_tasks).toEqual([])
+    expect(boardCounts(board)).toEqual({
+      pending: 0, drafts: 0, active: 0, overdue: 0, completed: 0,
+    })
+  })
+
+  it('加载、空、错误三种状态在模板中可区分', () => {
+    const source = readFileSync(
+      new URL('../src/views/DdlView.vue', import.meta.url),
+      'utf8',
+    )
+    expect(source).toContain('DDL 看板加载失败')
+    expect(source).toContain('<el-skeleton')
+    expect(source).toContain('<el-empty')
+    expect(source).toContain(':description="loadError"')
   })
 })

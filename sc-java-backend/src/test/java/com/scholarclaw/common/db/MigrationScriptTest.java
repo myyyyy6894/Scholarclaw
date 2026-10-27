@@ -96,6 +96,29 @@ class MigrationScriptTest {
     }
 
     @Test
+    @DisplayName("V1.0.3 包含 P7 修复所需的列、决策回执表、历史原因清理与强化约束")
+    void p7ReviewFixMigrationIsComplete() throws IOException {
+        String sql = MigrationScript.fromResource(
+                new ClassPathResource("db/migration/V1.0.3__p7_review_fixes.sql")).sql();
+
+        assertThat(sql).contains("request_operation").contains("request_fingerprint")
+                .contains("status_before_completion")
+                .contains("CREATE TABLE IF NOT EXISTS `t_ddl_decision_receipt`")
+                .contains("uk_ddl_decision_receipt")
+                .contains("UPDATE `t_ddl_task`")
+                .contains("time_ambiguity_reason` = NULL")
+                .contains("DROP CHECK `chk_ddl_time_invariants`")
+                .contains("ADD CONSTRAINT `chk_ddl_time_invariants`")
+                .contains("`status` <> 'PENDING_CONFIRM' OR `due_at` IS NOT NULL");
+
+        String rollback = new ClassPathResource(
+                "db/rollback/U1.0.3__rollback_p7_review_fixes.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(rollback).contains("DROP TABLE IF EXISTS `t_ddl_decision_receipt`")
+                .contains("DROP COLUMN `status_before_completion`");
+    }
+
+    @Test
     @DisplayName("非法文件名或非法版本号直接报错，不做猜测")
     void rejectsInvalidScripts() {
         assertThatThrownBy(() -> MigrationScript.fromResource(

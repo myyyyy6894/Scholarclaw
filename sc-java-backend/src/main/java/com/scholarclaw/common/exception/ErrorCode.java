@@ -81,6 +81,8 @@ public enum ErrorCode {
             "当前资源状态不允许执行该操作，请刷新后重试。"),
     REQUEST_IN_PROGRESS("REQUEST_IN_PROGRESS", HttpStatus.CONFLICT, null,
             "相同请求正在处理中，请勿重复提交。"),
+    IDEMPOTENCY_CONFLICT("IDEMPOTENCY_CONFLICT", HttpStatus.CONFLICT, null,
+            "同一 client_request_id 已用于不同的请求内容，请生成新的请求 ID 后重试。"),
 
     // ---------- 非 HTTP 映射：异步文档解析与 IM 渠道 ----------
     E_RAG_01("E-RAG-01", null, "SCAN_PDF_OCR_NOT_ENABLED",

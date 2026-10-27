@@ -7,6 +7,7 @@ import {
   MAX_OPTIONAL_TEXT,
   MAX_TITLE,
   type DdlTaskFormState,
+  type OriginalTimeInfo,
 } from '@/views/ddl/ddl-task'
 
 /**
@@ -25,6 +26,12 @@ const props = defineProps<{
   courses: CourseNamespace[]
   /** 编辑态用于提示“补充时间后会自动激活”。 */
   activateHint?: string
+  /** 编辑态：原任务的时间语义快照；保存原字段不会改变截止时间/时区。 */
+  originalTime?: OriginalTimeInfo | null
+}>()
+
+const emit = defineEmits<{
+  (event: 'reconfirm'): void
 }>()
 
 function asText(value: string | null | undefined): string {
@@ -69,6 +76,32 @@ function onCourseChange(value: string | null | undefined): void {
 
 <template>
   <el-form label-position="top" class="sc-ddl-form">
+    <div v-if="props.originalTime" class="sc-ddl-origin">
+      <div class="sc-ddl-origin__title">原任务时间（保存非时间字段不会改变这些值）</div>
+      <div>原时间精度：{{ props.originalTime.precision }}</div>
+      <div>原截止时间：{{ props.originalTime.deadline }}</div>
+      <div>原用户时区：{{ props.originalTime.timezone }}</div>
+      <div v-if="props.originalTime.reason">原确认原因：{{ props.originalTime.reason }}</div>
+      <el-alert
+        v-if="props.originalTime.needsReconfirm"
+        class="sc-ddl-form__hint"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="原时间非法或已过期，仅修改标题/交付要求不会改变截止时间"
+        description="如需激活任务，请显式修改截止日期与时刻后保存，或点击下方“确认当前时间并激活”。"
+      />
+      <el-button
+        v-if="props.originalTime.needsReconfirm"
+        size="small"
+        type="warning"
+        plain
+        @click="emit('reconfirm')"
+      >
+        确认当前时间并激活
+      </el-button>
+    </div>
+
     <el-alert
       v-if="activateHint"
       class="sc-ddl-form__hint"
@@ -190,5 +223,24 @@ function onCourseChange(value: string | null | undefined): void {
   color: #7b8794;
   font-size: 12px;
   line-height: 1.7;
+}
+
+.sc-ddl-origin {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #f0e2c8;
+  border-radius: 10px;
+  background: #fffdf7;
+  color: #6f5a2e;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.sc-ddl-origin__title {
+  color: #4c3a17;
+  font-weight: 600;
 }
 </style>

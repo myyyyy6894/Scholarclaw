@@ -38,15 +38,23 @@ public class DdlTaskEntity {
     private LocalTime dueTime;
     private LocalDateTime dueAt;
     private Integer timeInferred;
+    /** 待确认原因（跨年顺延/周末下周一/凌晨跨日/低置信度等），供 Web 卡片如实展示。 */
+    private String timeAmbiguityReason;
     private String userTimezone;
     private BigDecimal confidence;
     private String status;
+    /** 标记完成前的状态快照；取消完成时据此恢复，避免待确认任务被恢复成 ACTIVE。 */
+    private String statusBeforeCompletion;
     private LocalDateTime followUpAt;
     private Integer followUpCount;
     private Integer remindedFlags;
     private Integer hasSubtasks;
     private String sourcePlatform;
     private String sourceMsgId;
+    /** 请求级幂等操作类型：MANUAL_CREATE / EXTRACT / DRAFT_CREATE_NEW。 */
+    private String requestOperation;
+    /** 请求级幂等指纹：sha256(操作类型 + 规范化请求内容)。 */
+    private String requestFingerprint;
     private String idempotencyKey;
     private String contentHash;
     private LocalDateTime completedAt;
@@ -173,6 +181,14 @@ public class DdlTaskEntity {
         this.timeInferred = timeInferred;
     }
 
+    public String getTimeAmbiguityReason() {
+        return timeAmbiguityReason;
+    }
+
+    public void setTimeAmbiguityReason(String timeAmbiguityReason) {
+        this.timeAmbiguityReason = timeAmbiguityReason;
+    }
+
     public String getUserTimezone() {
         return userTimezone;
     }
@@ -195,6 +211,14 @@ public class DdlTaskEntity {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getStatusBeforeCompletion() {
+        return statusBeforeCompletion;
+    }
+
+    public void setStatusBeforeCompletion(String statusBeforeCompletion) {
+        this.statusBeforeCompletion = statusBeforeCompletion;
     }
 
     public LocalDateTime getFollowUpAt() {
@@ -243,6 +267,22 @@ public class DdlTaskEntity {
 
     public void setSourceMsgId(String sourceMsgId) {
         this.sourceMsgId = sourceMsgId;
+    }
+
+    public String getRequestOperation() {
+        return requestOperation;
+    }
+
+    public void setRequestOperation(String requestOperation) {
+        this.requestOperation = requestOperation;
+    }
+
+    public String getRequestFingerprint() {
+        return requestFingerprint;
+    }
+
+    public void setRequestFingerprint(String requestFingerprint) {
+        this.requestFingerprint = requestFingerprint;
     }
 
     public String getIdempotencyKey() {

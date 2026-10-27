@@ -27,6 +27,7 @@ public record DdlTaskVO(
         String dueTime,
         OffsetDateTime dueAt,
         boolean timeInferred,
+        String timeAmbiguityReason,
         String userTimezone,
         BigDecimal confidence,
         String status,

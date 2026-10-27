@@ -17,9 +17,12 @@ public record TaskChangeDraftVO(
         String newDueTime,
         OffsetDateTime newDueAt,
         boolean newTimeInferred,
+        String newTimeAmbiguityReason,
         String newDeliverableFormat,
         String newSubmissionChannel,
         String rawSourceText,
         String rawTimeText,
+        /** 草案新截止时间所属的用户时区快照；前端不得在缺失时静默使用浏览器时区。 */
+        String userTimezone,
         OffsetDateTime expiresAt) {
 }

@@ -17,6 +17,7 @@ import com.scholarclaw.modules.ddl.service.DdlExtractionService;
 import com.scholarclaw.modules.ddl.service.DdlTaskService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -26,7 +27,6 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -56,12 +56,17 @@ public class DdlTaskController {
                         SecurityContextUtils.requireCurrentUserId(), request));
     }
 
+    /**
+     * `API-DDL-002`：手动新建；新建成功返回 `201`，同一 `client_request_id` 的幂等重放返回 `200`。
+     */
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public Result<DdlTaskVO> create(@Valid @RequestBody CreateDdlTaskRequest request) {
-        return Result.ok("DDL 任务创建成功",
-                ddlTaskService.createManualTask(
-                        SecurityContextUtils.requireCurrentUserId(), request));
+    public ResponseEntity<Result<DdlTaskVO>> create(
+            @Valid @RequestBody CreateDdlTaskRequest request) {
+        DdlTaskService.DdlTaskCreationResult result = ddlTaskService.createManualTask(
+                SecurityContextUtils.requireCurrentUserId(), request);
+        HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
+        return ResponseEntity.status(status)
+                .body(Result.ok("DDL 任务创建成功", result.task()));
     }
 
     @GetMapping

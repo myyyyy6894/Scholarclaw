@@ -241,7 +241,81 @@ python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380  
 python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380 --apply
 ```
 
-## 7. 安全约束
+## 7. P8 Web + QQ（OneBot 协议替身）联调（TASK-805）
+
+**边界：** 本脚本使用 `p8_mock_onebot.py` 模拟 NapCat Action API，**不是真实 QQ 账号**；
+NapCat 容器仍未纳入 Compose。它验证的是 Java 侧 OneBot 协议处理、站内通知、出站令牌桶/
+抖动/重试/降级与 Web 通知中心，不证明真实 QQ 平台可用。
+
+前置：最新 Java/Web 镜像已构建（`mvn -DskipTests package`、`npm run build`、
+`docker compose build sc-java-backend sc-web-nginx`）。
+
+```bash
+# 1) 模型替身 + OneBot Action 替身（内部网络；OneBot 额外映射 127.0.0.1:19090 供测试读取调用记录）
+docker run -d --name sc-p7-mock --network scholarclaw-internal \
+  -v "$PWD/scripts/e2e/p7_mock_model.py:/mock.py:ro" \
+  scholarclaw/sc-python-ai:1.0.0 python /mock.py --port 11434
+docker run -d --name sc-p8-mock-onebot --network scholarclaw-internal \
+  -p 127.0.0.1:19090:19090 \
+  -v "$PWD/scripts/e2e/p8_mock_onebot.py:/onebot.py:ro" \
+  scholarclaw/sc-python-ai:1.0.0 python /onebot.py --port 19090
+MOCK_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' sc-p7-mock)
+ONEBOT_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' sc-p8-mock-onebot)
+
+# 2) 临时 env：开启模型白名单、IM 推送、OneBot Action，并缩短调度/抖动（仅测试）
+cp .env /tmp/sc-p8-e2e.env
+chmod 600 /tmp/sc-p8-e2e.env
+cat >> /tmp/sc-p8-e2e.env <<EOF
+SC_ALLOW_LOCAL_MODEL_BASE_URL=true
+SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://$MOCK_IP:11434
+SC_IM_PUSH_ENABLED=true
+SC_ONEBOT_ACCESS_TOKEN=p8-e2e-token
+SC_ONEBOT_BASE_URL=http://$ONEBOT_IP:19090
+SC_NOTIFICATION_OUTBOUND_INITIAL_DELAY_MS=2000
+SC_NOTIFICATION_OUTBOUND_INTERVAL_MS=2000
+SC_NOTIFICATION_OUTBOUND_RETRY_DELAY_SECONDS=1
+SC_IM_JITTER_MIN_MS=0
+SC_IM_JITTER_MAX_MS=0
+SC_IM_RATE_DELAY_MIN_MS=1000
+SC_IM_RATE_DELAY_MAX_MS=1000
+SC_DDL_REMINDER_INITIAL_DELAY_MS=2000
+SC_DDL_REMINDER_INTERVAL_MS=3000
+EOF
+
+docker compose --env-file /tmp/sc-p8-e2e.env up -d --force-recreate sc-java-backend sc-web-nginx
+
+# 3) P8 API：Webhook/白名单/去重/转发/文件/通知/IM 出站/fallback
+sc-python-ai/.venv/bin/python scripts/e2e/p8_api_e2e.py \
+  --base-url http://127.0.0.1 \
+  --model-base-url "http://$MOCK_IP:11434/v1" \
+  --onebot-admin-url http://127.0.0.1:19090 \
+  --onebot-token p8-e2e-token
+
+# 4) 停止 OneBot 替身，验证 QQ 离线时 Web 仍可用（通知中心/DDL）
+docker stop sc-p8-mock-onebot
+/tmp/sc-e2e-venv/bin/python scripts/e2e/p8_browser_e2e.py --base-url http://127.0.0.1
+```
+
+P8 API 覆盖：错误令牌 401、未绑定发送者静默丢弃、meta ACK、私聊/群 @ 文本、单层转发、
+嵌套转发 `E-IM-03`、重复消息 `DUPLICATE_IGNORED`、无 Embedding 文件下载前拦截、合法文件
+默认课程入库、T-6h 提醒→站内通知→IM `SENT_IM`、未绑定用户 `FALLBACK_WEB_ONLY`、
+协议端失败 3 次后 `FALLBACK_WEB_ONLY`。浏览器覆盖：通知角标/标题/全部已读、未读归零、
+DDL 页面在 QQ 离线时正常加载、无 console error。
+
+清理（恢复原 `.env` 并删除替身）：
+
+```bash
+docker stop sc-p8-mock-onebot sc-p7-mock
+docker rm sc-p8-mock-onebot sc-p7-mock
+cp .env /tmp/sc-p8-e2e-restore.env
+docker compose --env-file /tmp/sc-p8-e2e-restore.env up -d --force-recreate sc-java-backend
+rm -f /tmp/sc-p8-e2e.env /tmp/sc-p8-e2e-restore.env
+```
+
+**诚实边界：** 真实 NapCat/真实 QQ、真实供应商模型、真实平台风控与限流行为仍未验证；
+限流/重试/降级在单测与真实 Redis Lua/MySQL 上有证据，但本脚本不会对真实 QQ 产生消息。
+
+## 8. 安全约束
 
 * 脚本中的 API Key 固定为 `sk-*-not-a-real-key`，只进入被 SSRF 前置拦截的请求体，不会出站；
 * 不读取、不打印 `.env` 中的任何真实密钥；

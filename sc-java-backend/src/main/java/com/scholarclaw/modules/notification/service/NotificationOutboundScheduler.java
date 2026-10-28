@@ -11,6 +11,7 @@ import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -119,7 +120,9 @@ public class NotificationOutboundScheduler {
 
     /** 执行一次扫描；公开方法供测试直接驱动，不依赖 @Scheduled。 */
     public DispatchSummary dispatchOnce() {
-        LocalDateTime now = LocalDateTime.now(clock);
+        // 必须截断到毫秒：t_notification_log 的时间列是 DATETIME(3)，而 LocalDateTime.now()
+        // 带纳秒；若用纳秒值做租约等值条件，MySQL 存的是毫秒，markSent/markRetry 会匹配不到。
+        LocalDateTime now = LocalDateTime.now(clock).truncatedTo(ChronoUnit.MILLIS);
         List<NotificationLogEntity> candidates =
                 mapper.selectOutboundCandidates(now, batchSize);
         int sent = 0;

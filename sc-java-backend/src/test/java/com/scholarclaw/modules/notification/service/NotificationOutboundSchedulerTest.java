@@ -240,6 +240,29 @@ class NotificationOutboundSchedulerTest {
     }
 
     @Test
+    @DisplayName("纳秒时钟：租约截断到毫秒，避免 DATETIME(3) 等值条件匹配失败")
+    void truncatesClockNanosToMillisForLease() {
+        LocalDateTime nanosNow = NOW.plusNanos(123_456_789);
+        LocalDateTime now = nanosNow.truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        LocalDateTime lease = now.plusSeconds(60);
+        NotificationLogEntity candidate = candidate(NOTIFICATION_ID, "DDL_T24H", 0);
+        candidate.setScheduledPushAt(now);
+        when(mapper.selectOutboundCandidates(now, 10)).thenReturn(List.of(candidate));
+        when(mapper.claimOutbound(NOTIFICATION_ID, now, lease, now)).thenReturn(1);
+        NotificationOutboundScheduler nanosScheduler = new NotificationOutboundScheduler(
+                mapper, userConfigService, policy, rateLimiter, jitter, oneBotApiClient,
+                Clock.fixed(nanosNow.atZone(ZONE).toInstant(), ZONE),
+                true, true, 10, 60, 30);
+
+        nanosScheduler.dispatchOnce();
+
+        verify(mapper).claimOutbound(NOTIFICATION_ID, now, lease, now);
+        verify(mapper).markSent(NOTIFICATION_ID, lease, now);
+        verify(mapper, never()).markSent(eq(NOTIFICATION_ID), any(),
+                eq(nanosNow));
+    }
+
+    @Test
     @DisplayName("调度注解显式声明时区（ENV-01）")
     void scheduledAnnotationDeclaresZone() throws Exception {
         Scheduled scheduled = NotificationOutboundScheduler.class

@@ -147,6 +147,25 @@ sc:
       core-size: ${SC_ONEBOT_EXECUTOR_CORE_SIZE:2}
       max-size: ${SC_ONEBOT_EXECUTOR_MAX_SIZE:4}
       queue-capacity: ${SC_ONEBOT_EXECUTOR_QUEUE_CAPACITY:200}
+  # 站内通知 IM 出站（TASK-804）：扫描 PENDING_IM / RATE_LIMITED_DELAYED。
+  # SC_IM_PUSH_ENABLED=false 时调度器仍会把残留待推送记录降级为 FALLBACK_WEB_ONLY。
+  notification:
+    outbound:
+      enabled: ${SC_NOTIFICATION_OUTBOUND_ENABLED:true}
+      initial-delay-ms: ${SC_NOTIFICATION_OUTBOUND_INITIAL_DELAY_MS:30000}
+      interval-ms: ${SC_NOTIFICATION_OUTBOUND_INTERVAL_MS:10000}
+      batch-size: ${SC_NOTIFICATION_OUTBOUND_BATCH_SIZE:5}
+      lease-seconds: ${SC_NOTIFICATION_OUTBOUND_LEASE_SECONDS:60}
+      retry-delay-seconds: ${SC_NOTIFICATION_OUTBOUND_RETRY_DELAY_SECONDS:30}
+    im:
+      rate-capacity: ${SC_IM_RATE_CAPACITY:15}
+      rate-per-minute: ${SC_IM_RATE_PER_MINUTE:10}
+      rate-key-ttl-seconds: ${SC_IM_RATE_KEY_TTL_SECONDS:120}
+      redis-degraded-wait-ms: ${SC_IM_RATE_DEGRADED_WAIT_MS:10000}
+      jitter-min-ms: ${SC_IM_JITTER_MIN_MS:1500}
+      jitter-max-ms: ${SC_IM_JITTER_MAX_MS:3500}
+      rate-delay-min-ms: ${SC_IM_RATE_DELAY_MIN_MS:5000}
+      rate-delay-max-ms: ${SC_IM_RATE_DELAY_MAX_MS:15000}
   # DDL 定时提醒（TASK-801）：T-24h / T-6h / 逾期 / 待确认跟进。
   # 调度器每轮获取 Redis sc:lock:job:ddl_reminder；提醒位由 t_ddl_task 条件更新最终防重。
   ddl:

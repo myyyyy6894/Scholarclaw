@@ -14,8 +14,22 @@ describe('home task lists', () => {
     expect(UPCOMING_TASKS.some((item) => item.task === 'TASK-705')).toBe(false)
   })
 
+  it('TASK-802 已实现且不再标记为 upcoming', () => {
+    expect(IMPLEMENTED_CAPABILITIES.some((item) => item.includes('TASK-802'))).toBe(true)
+    expect(UPCOMING_TASKS.some((item) => item.task === 'TASK-802')).toBe(false)
+  })
+
+  it('TASK-706 已实现且不再标记为 upcoming', () => {
+    expect(IMPLEMENTED_CAPABILITIES.some((item) => item.includes('TASK-706'))).toBe(true)
+    expect(UPCOMING_TASKS.some((item) => item.task === 'TASK-706')).toBe(false)
+  })
+
   it('upcoming 只保留确实未实现的任务', () => {
-    expect(UPCOMING_TASKS.map((item) => item.task)).toEqual(['TASK-706'])
+    expect(UPCOMING_TASKS.map((item) => item.task)).toEqual([
+      'TASK-803',
+      'TASK-804',
+      'TASK-805',
+    ])
   })
 
   it('已实现清单与 upcoming 任务号不重叠', () => {

@@ -13,6 +13,9 @@ import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeParentChunkEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.modules.notification.service.NotificationBizType;
+import com.scholarclaw.modules.notification.service.NotificationCreateCommand;
+import com.scholarclaw.modules.notification.service.NotificationService;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
@@ -40,17 +43,20 @@ public class KnowledgeIngestResultService {
     private final CourseService courseService;
     private final KnowledgeFailureService failureService;
     private final ApplicationEventPublisher eventPublisher;
+    private final NotificationService notificationService;
 
     public KnowledgeIngestResultService(KnowledgeDocMapper docMapper,
                                         KnowledgeParentChunkMapper parentChunkMapper,
                                         CourseService courseService,
                                         KnowledgeFailureService failureService,
-                                        ApplicationEventPublisher eventPublisher) {
+                                        ApplicationEventPublisher eventPublisher,
+                                        NotificationService notificationService) {
         this.docMapper = docMapper;
         this.parentChunkMapper = parentChunkMapper;
         this.courseService = courseService;
         this.failureService = failureService;
         this.eventPublisher = eventPublisher;
+        this.notificationService = notificationService;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -121,8 +127,46 @@ public class KnowledgeIngestResultService {
             parentChunkMapper.insert(toEntity(headerUserId, doc.getCourseId(), docId,
                     request.parseVersion(), item));
         }
-        refreshCourse(doc, request.courseIndexVersion());
+        boolean becameActive = refreshCourse(doc, request.courseIndexVersion());
+        createReadyNotifications(headerUserId, doc, course, request);
+        if (becameActive) {
+            createCourseRebuildDoneNotification(headerUserId, doc, course,
+                    request.courseIndexVersion());
+        }
         return result(docId, true, false);
+    }
+
+    /**
+     * 文档入库成功与课程重建完成通知（TASK-802）。
+     *
+     * <p>与文档 READY、父块、课程状态处于同一本地事务；通知插入失败会让整个回调回滚，
+     * Python 重试后重新产生通知，不会出现“课件已 READY 但用户永远收不到结果”。
+     */
+    private void createReadyNotifications(Long userId, KnowledgeDocEntity doc,
+                                          CourseNamespaceEntity course,
+                                          IngestResultRequest request) {
+        String docName = doc.getDocName() == null ? "未命名课件" : doc.getDocName();
+        notificationService.createInTx(new NotificationCreateCommand(
+                userId,
+                NotificationBizType.DOC_INGEST_READY,
+                doc.getDocId(),
+                "✅ 课件《" + docName + "》解析入库成功",
+                "已归档至【" + course.getCourseName() + "】知识库（共 "
+                        + request.pageCount() + " 页 / " + request.chunkCount()
+                        + " 个切片，索引版本 v" + request.courseIndexVersion() + "）。",
+                null));
+    }
+
+    private void createCourseRebuildDoneNotification(Long userId, KnowledgeDocEntity doc,
+                                                     CourseNamespaceEntity course,
+                                                     int indexVersion) {
+        notificationService.createInTx(new NotificationCreateCommand(
+                userId,
+                NotificationBizType.COURSE_REBUILD_DONE,
+                doc.getCourseId(),
+                "🔄 【" + course.getCourseName() + "】索引重建完成",
+                "课程知识库已重新构建完成（索引版本 v" + indexVersion + "），现在可以继续提问。",
+                null));
     }
 
     /**
@@ -151,9 +195,9 @@ public class KnowledgeIngestResultService {
         return deleting || staleVersion || courseVersionChanged;
     }
 
-    private void refreshCourse(KnowledgeDocEntity doc, int indexVersion) {
+    private boolean refreshCourse(KnowledgeDocEntity doc, int indexVersion) {
         // 与文档/父块同一事务：失败则整体回滚，由 Python 重试回调，避免状态分叉
-        courseService.refreshIndexStatus(doc.getUserId(), doc.getCourseId(), indexVersion);
+        return courseService.refreshIndexStatus(doc.getUserId(), doc.getCourseId(), indexVersion);
     }
 
     private void validateReadyRequest(CourseNamespaceEntity course, Long docId,

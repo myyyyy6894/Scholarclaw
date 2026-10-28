@@ -20,6 +20,9 @@ import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeParentChunkEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeDocMapper;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.modules.notification.service.NotificationBizType;
+import com.scholarclaw.modules.notification.service.NotificationCreateCommand;
+import com.scholarclaw.modules.notification.service.NotificationService;
 import com.scholarclaw.support.MybatisTableInfoTestSupport;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
@@ -40,6 +43,7 @@ class KnowledgeIngestResultServiceTest {
     private KnowledgeFailureService failureService;
     private CourseService courseService;
     private ApplicationEventPublisher eventPublisher;
+    private NotificationService notificationService;
     private KnowledgeIngestResultService service;
 
     @BeforeAll
@@ -55,8 +59,9 @@ class KnowledgeIngestResultServiceTest {
         failureService = mock(KnowledgeFailureService.class);
         courseService = mock(CourseService.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        notificationService = mock(NotificationService.class);
         service = new KnowledgeIngestResultService(docMapper, parentChunkMapper,
-                courseService, failureService, eventPublisher);
+                courseService, failureService, eventPublisher, notificationService);
     }
 
     @Test
@@ -79,6 +84,35 @@ class KnowledgeIngestResultServiceTest {
         assertThat(chunk.getValue().getParentChunkId()).isEqualTo("pc_50001_v1_1");
         assertThat(chunk.getValue().getCharLength()).isEqualTo(4);
         assertThat(chunk.getValue().getUserId()).isEqualTo(USER_ID);
+        ArgumentCaptor<NotificationCreateCommand> notification =
+                ArgumentCaptor.forClass(NotificationCreateCommand.class);
+        verify(notificationService).createInTx(notification.capture());
+        assertThat(notification.getValue().bizType()).isEqualTo(NotificationBizType.DOC_INGEST_READY);
+        assertThat(notification.getValue().bizId()).isEqualTo(DOC_ID);
+        assertThat(notification.getValue().title()).contains("第5章_事务处理.pdf");
+        assertThat(notification.getValue().content()).contains("数据库系统概念");
+    }
+
+    @Test
+    @DisplayName("课程从重建态收敛为 ACTIVE 时另发一次重建完成通知")
+    void notifiesCourseRebuildDoneWhenBecameActive() {
+        KnowledgeDocEntity parsing = doc("PARSING");
+        KnowledgeDocEntity ready = doc("READY");
+        when(docMapper.selectById(DOC_ID)).thenReturn(parsing, ready);
+        when(courseService.getActiveCourse(USER_ID, COURSE_ID)).thenReturn(course());
+        when(docMapper.update(any(), any())).thenReturn(1);
+        when(courseService.refreshIndexStatus(USER_ID, COURSE_ID, 1)).thenReturn(true);
+
+        service.apply(USER_ID, DOC_ID, request("READY"));
+
+        ArgumentCaptor<NotificationCreateCommand> notifications =
+                ArgumentCaptor.forClass(NotificationCreateCommand.class);
+        verify(notificationService, org.mockito.Mockito.times(2))
+                .createInTx(notifications.capture());
+        assertThat(notifications.getAllValues())
+                .extracting(NotificationCreateCommand::bizType)
+                .containsExactly(NotificationBizType.DOC_INGEST_READY,
+                        NotificationBizType.COURSE_REBUILD_DONE);
     }
 
     @Test
@@ -225,6 +259,7 @@ class KnowledgeIngestResultServiceTest {
         doc.setStatus(status);
         doc.setParseVersion(1);
         doc.setCourseIndexVersion(1);
+        doc.setDocName("第5章_事务处理.pdf");
         return doc;
     }
 
@@ -232,6 +267,7 @@ class KnowledgeIngestResultServiceTest {
         CourseNamespaceEntity course = new CourseNamespaceEntity();
         course.setCourseId(COURSE_ID);
         course.setUserId(USER_ID);
+        course.setCourseName("数据库系统概念");
         course.setEmbeddingProvider("OPENAI_COMPATIBLE");
         course.setEmbeddingModel("BAAI/bge-m3");
         course.setEmbeddingDim(1024);

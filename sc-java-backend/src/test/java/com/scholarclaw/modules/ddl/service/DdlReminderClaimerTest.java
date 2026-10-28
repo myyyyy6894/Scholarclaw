@@ -1,9 +1,11 @@
 package com.scholarclaw.modules.ddl.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,6 +14,9 @@ import static org.mockito.Mockito.when;
 
 import com.scholarclaw.modules.ddl.entity.DdlTaskEntity;
 import com.scholarclaw.modules.ddl.mapper.DdlTaskMapper;
+import com.scholarclaw.modules.notification.service.DdlReminderNotification;
+import com.scholarclaw.modules.notification.service.NotificationBizType;
+import com.scholarclaw.modules.notification.service.NotificationService;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -19,6 +24,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 /** TASK-801 提醒领取的位掩码、状态流转、并发 CAS 与免打扰行为。 */
 class DdlReminderClaimerTest {
@@ -32,12 +38,14 @@ class DdlReminderClaimerTest {
     private static final String TRACE_ID = "tr_cron_0123456789ab";
 
     private DdlTaskMapper mapper;
+    private NotificationService notificationService;
     private DdlReminderClaimer claimer;
 
     @BeforeEach
     void setUp() {
         mapper = mock(DdlTaskMapper.class);
-        claimer = new DdlReminderClaimer(mapper, new DdlReminderPolicy());
+        notificationService = mock(NotificationService.class);
+        claimer = new DdlReminderClaimer(mapper, new DdlReminderPolicy(), notificationService);
     }
 
     @Test
@@ -61,6 +69,11 @@ class DdlReminderClaimerTest {
         verify(mapper).markT24Reminded(TASK_ID, USER_ID, task.getDueAt(), NOW);
         verify(mapper, never()).markT6Reminded(anyLong(), anyLong(), any(), any());
         verify(mapper, never()).markOverdueReminded(anyLong(), anyLong(), any(), any());
+        DdlReminderNotification notification = capturedNotification();
+        assertThat(notification.bizType()).isEqualTo(NotificationBizType.DDL_T24H);
+        assertThat(notification.taskId()).isEqualTo(TASK_ID);
+        assertThat(notification.dueAtUserZone()).isEqualTo(task.getDueAt());
+        assertThat(notification.traceId()).isEqualTo(TRACE_ID);
     }
 
     @Test
@@ -76,6 +89,7 @@ class DdlReminderClaimerTest {
                 .extracting(DdlReminderDispatch::type).isEqualTo(DdlReminderType.DDL_T6H);
         verify(mapper).markT6Reminded(TASK_ID, USER_ID, task.getDueAt(), NOW);
         verify(mapper, never()).markT24Reminded(anyLong(), anyLong(), any(), any());
+        assertThat(capturedNotification().bizType()).isEqualTo(NotificationBizType.DDL_T6H);
     }
 
     @Test
@@ -108,6 +122,7 @@ class DdlReminderClaimerTest {
         verify(mapper).markOverdueReminded(TASK_ID, USER_ID, task.getDueAt(), NOW);
         verify(mapper, never()).markT24Reminded(anyLong(), anyLong(), any(), any());
         verify(mapper, never()).markT6Reminded(anyLong(), anyLong(), any(), any());
+        assertThat(capturedNotification().bizType()).isEqualTo(NotificationBizType.DDL_OVERDUE);
     }
 
     @Test
@@ -136,6 +151,9 @@ class DdlReminderClaimerTest {
         });
         verify(mapper).markFollowUpReminded(TASK_ID, USER_ID,
                 task.getFollowUpAt(), 0, NOW.plusHours(24), NOW);
+        DdlReminderNotification notification = capturedNotification();
+        assertThat(notification.bizType()).isEqualTo(NotificationBizType.DDL_FOLLOW_UP);
+        assertThat(notification.followUpCount()).isEqualTo(1);
     }
 
     @Test
@@ -215,6 +233,37 @@ class DdlReminderClaimerTest {
         assertThat(dispatch.dueAtUserZone())
                 .isEqualTo(LocalDateTime.of(2026, 10, 28, 8, 0));
         assertThat(dispatch.userTimezone()).isEqualTo("America/New_York");
+    }
+
+    @Test
+    @DisplayName("站内通知写入失败时异常向上抛出，让提醒位一起回滚")
+    void notificationFailurePropagatesForRollback() {
+        DdlTaskEntity task = activeTask(NOW.plusHours(10));
+        when(mapper.markT24Reminded(TASK_ID, USER_ID, task.getDueAt(), NOW)).thenReturn(1);
+        doThrow(new IllegalStateException("notification insert failed"))
+                .when(notificationService).createDdlReminderInTx(any());
+
+        assertThatThrownBy(() -> claimer.claim(
+                task, NOW, SHANGHAI, DND_START, DND_END, TRACE_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("notification insert failed");
+    }
+
+    @Test
+    @DisplayName("条件更新失败或未到触发时刻时不写站内通知")
+    void noNotificationWhenNothingClaimed() {
+        DdlTaskEntity task = activeTask(NOW.plusHours(10));
+        when(mapper.markT24Reminded(TASK_ID, USER_ID, task.getDueAt(), NOW)).thenReturn(0);
+
+        assertThat(claimer.claim(task, NOW, SHANGHAI, DND_START, DND_END, TRACE_ID)).isEmpty();
+        verifyNoInteractions(notificationService);
+    }
+
+    private DdlReminderNotification capturedNotification() {
+        ArgumentCaptor<DdlReminderNotification> captor =
+                ArgumentCaptor.forClass(DdlReminderNotification.class);
+        verify(notificationService).createDdlReminderInTx(captor.capture());
+        return captor.getValue();
     }
 
     private static DdlTaskEntity activeTask(LocalDateTime dueAt) {

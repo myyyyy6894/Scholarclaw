@@ -177,9 +177,13 @@ public class CourseService implements UserCourseCountProvider {
                 result.reindexingDocCount());
     }
 
-    /** 解析回调/文档删除后收敛课程索引状态（TASK-505，TASK-506 复核修复）。 */
-    public void refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
-        courseMutationService.refreshIndexStatus(userId, courseId, indexVersion);
+    /**
+     * 解析回调/文档删除后收敛课程索引状态（TASK-505，TASK-506 复核修复）。
+     *
+     * @return 本次是否把课程从重建态收敛为 {@code ACTIVE}（供 TASK-802 通知使用）
+     */
+    public boolean refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
+        return courseMutationService.refreshIndexStatus(userId, courseId, indexVersion);
     }
 
     /** 失败文档重试/重建时把 `REBUILD_FAILED` 拉回 `REBUILDING`。 */

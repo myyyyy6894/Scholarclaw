@@ -379,13 +379,21 @@ public class KnowledgeDocService {
     }
 
     public KnowledgeDocEntity requireOwnedDoc(Long userId, Long docId) {
-        KnowledgeDocEntity doc = docMapper.selectOne(Wrappers.<KnowledgeDocEntity>lambdaQuery()
-                .eq(KnowledgeDocEntity::getDocId, docId)
-                .eq(KnowledgeDocEntity::getUserId, userId));
+        KnowledgeDocEntity doc = findOwnedDoc(userId, docId);
         if (doc == null) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         return doc;
+    }
+
+    /** 按主键 + 用户查询；不存在返回 {@code null}（供通知等辅助路径使用，不抛 404）。 */
+    public KnowledgeDocEntity findOwnedDoc(Long userId, Long docId) {
+        if (userId == null || docId == null) {
+            return null;
+        }
+        return docMapper.selectOne(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getDocId, docId)
+                .eq(KnowledgeDocEntity::getUserId, userId));
     }
 
     /**

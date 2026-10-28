@@ -4,6 +4,10 @@ import com.scholarclaw.common.event.DocumentVectorCleanupEvent;
 import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.modules.notification.service.NotificationBizType;
+import com.scholarclaw.modules.notification.service.NotificationCreateCommand;
+import com.scholarclaw.modules.notification.service.NotificationService;
+import java.util.regex.Pattern;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,19 +22,24 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class KnowledgeFailureService {
 
+    private static final Pattern SAFE_ERROR_CODE = Pattern.compile("[A-Za-z0-9_-]{1,64}");
+
     private final KnowledgeDocService docService;
     private final KnowledgeParentChunkMapper parentChunkMapper;
     private final CourseService courseService;
     private final ApplicationEventPublisher eventPublisher;
+    private final NotificationService notificationService;
 
     public KnowledgeFailureService(KnowledgeDocService docService,
                                    KnowledgeParentChunkMapper parentChunkMapper,
                                    CourseService courseService,
-                                   ApplicationEventPublisher eventPublisher) {
+                                   ApplicationEventPublisher eventPublisher,
+                                   NotificationService notificationService) {
         this.docService = docService;
         this.parentChunkMapper = parentChunkMapper;
         this.courseService = courseService;
         this.eventPublisher = eventPublisher;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -47,7 +56,31 @@ public class KnowledgeFailureService {
         eventPublisher.publishEvent(
                 new DocumentVectorCleanupEvent(userId, courseId, docId, parseVersion));
         courseService.refreshIndexStatus(userId, courseId, courseIndexVersion);
+        createFailedNotification(userId, docId, errorCode);
         return new FailureOutcome(true, false, "FAILED");
+    }
+
+    /**
+     * 解析失败站内通知（TASK-802）。
+     *
+     * <p>与失败状态在同一事务；通知写入失败会回滚 {@code FAILED}，让回调/巡检重试。
+     * 只暴露稳定的错误码，不回传 Python 原始错误信息，避免内部细节进入用户通知。
+     */
+    private void createFailedNotification(Long userId, Long docId, String rawErrorCode) {
+        KnowledgeDocEntity doc = docService.findOwnedDoc(userId, docId);
+        if (doc == null) {
+            return;
+        }
+        String errorCode = rawErrorCode != null && SAFE_ERROR_CODE.matcher(rawErrorCode).matches()
+                ? rawErrorCode : "UNKNOWN_ERROR";
+        String docName = doc.getDocName() == null ? "未命名课件" : doc.getDocName();
+        notificationService.createInTx(new NotificationCreateCommand(
+                userId,
+                NotificationBizType.DOC_INGEST_FAILED,
+                docId,
+                "❌ 课件《" + docName + "》解析入库失败",
+                "课件解析失败（错误码：" + errorCode + "），请在文档列表中重试或更换文件。",
+                null));
     }
 
     /**

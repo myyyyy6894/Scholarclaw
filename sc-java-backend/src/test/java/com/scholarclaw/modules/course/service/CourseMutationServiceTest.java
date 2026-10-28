@@ -55,13 +55,12 @@ class CourseMutationServiceTest {
                 .thenReturn(Map.of(2001L, new CourseDocumentStatsProvider.CourseDocumentStats(
                         0, 2, 0, 2)));
 
-        service.refreshIndexStatus(10001L, 2001L, 2);
-
+        assertThat(service.refreshIndexStatus(10001L, 2001L, 2)).isFalse();
         verify(mapper).update(any(), any());
     }
 
     @Test
-    @DisplayName("全部 READY 时收敛为 ACTIVE")
+    @DisplayName("全部 READY 时收敛为 ACTIVE 并返回 true（供重建完成通知）")
     void activatesWhenAllReady() {
         when(mapper.selectOne(any())).thenReturn(course(2));
         when(provider.statsByCourse(10001L, Map.of(2001L, 2)))
@@ -69,13 +68,12 @@ class CourseMutationServiceTest {
                         2, 0, 0, 2)));
         when(mapper.update(any(), any())).thenReturn(1);
 
-        service.refreshIndexStatus(10001L, 2001L, 2);
-
+        assertThat(service.refreshIndexStatus(10001L, 2001L, 2)).isTrue();
         verify(mapper).update(any(), any());
     }
 
     @Test
-    @DisplayName("存在失败文档时收敛为 REBUILD_FAILED")
+    @DisplayName("存在失败文档时收敛为 REBUILD_FAILED，不返回 true")
     void marksRebuildFailed() {
         when(mapper.selectOne(any())).thenReturn(course(2));
         when(provider.statsByCourse(10001L, Map.of(2001L, 2)))
@@ -83,13 +81,12 @@ class CourseMutationServiceTest {
                         1, 0, 1, 2)));
         when(mapper.update(any(), any())).thenReturn(1);
 
-        service.refreshIndexStatus(10001L, 2001L, 2);
-
+        assertThat(service.refreshIndexStatus(10001L, 2001L, 2)).isFalse();
         verify(mapper).update(any(), any());
     }
 
     @Test
-    @DisplayName("REBUILD_FAILED 在失败文档全部重试成功后收敛 ACTIVE")
+    @DisplayName("REBUILD_FAILED 在失败文档全部重试成功后收敛 ACTIVE 并返回 true")
     void recoversFromRebuildFailed() {
         CourseNamespaceEntity failed = course(2);
         failed.setIndexStatus(IndexStatus.REBUILD_FAILED.name());
@@ -99,13 +96,21 @@ class CourseMutationServiceTest {
                         2, 0, 0, 2)));
         when(mapper.update(any(), any())).thenReturn(1);
 
-        service.refreshIndexStatus(10001L, 2001L, 2);
-
+        assertThat(service.refreshIndexStatus(10001L, 2001L, 2)).isTrue();
         verify(mapper).update(any(), any());
     }
 
     @Test
-    @DisplayName("版本已变化时不再更新课程状态")
+    @DisplayName("并发下条件更新影响 0 行时不报告重建完成")
+    void doesNotReportRebuildDoneWhenUpdateLosesRace() {
+        when(mapper.selectOne(any())).thenReturn(course(2));
+        when(provider.statsByCourse(10001L, Map.of(2001L, 2)))
+                .thenReturn(Map.of(2001L, new CourseDocumentStatsProvider.CourseDocumentStats(
+                        2, 0, 0, 2)));
+        when(mapper.update(any(), any())).thenReturn(0);
+
+        assertThat(service.refreshIndexStatus(10001L, 2001L, 2)).isFalse();
+    }
     void ignoresStaleVersion() {
         when(mapper.selectOne(any())).thenReturn(course(3));
 

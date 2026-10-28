@@ -155,25 +155,28 @@ public class CourseMutationService {
      * <p>允许从 `REBUILDING` 或 `REBUILD_FAILED` 基于真实统计收敛：仍有解析中文档则回到
      * `REBUILDING`；全部就绪或空课程 → `ACTIVE`；仍有失败 → `REBUILD_FAILED`。
      * 版本条件避免旧回调把新课程误置。使用条件更新而不是行锁，避免与课程切换的锁顺序冲突。
+     *
+     * @return 本次调用是否把课程从重建态收敛为 {@code ACTIVE}（用于 TASK-802 的“重建完成”通知；
+     *         并发下只有真正完成状态更新的那一次返回 true）
      */
     @Transactional(rollbackFor = Exception.class)
-    public void refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
+    public boolean refreshIndexStatus(Long userId, Long courseId, int indexVersion) {
         CourseNamespaceEntity current = courseNamespaceMapper.selectOne(
                 Wrappers.<CourseNamespaceEntity>lambdaQuery()
                         .eq(CourseNamespaceEntity::getCourseId, courseId)
                         .eq(CourseNamespaceEntity::getUserId, userId)
                         .eq(CourseNamespaceEntity::getIsDeleting, 0));
         if (current == null || !Objects.equals(current.getIndexVersion(), indexVersion)) {
-            return;
+            return false;
         }
         String currentStatus = current.getIndexStatus();
         if (!IndexStatus.REBUILDING.name().equals(currentStatus)
                 && !IndexStatus.REBUILD_FAILED.name().equals(currentStatus)) {
-            return;
+            return false;
         }
         CourseDocumentStatsProvider providerPort = statsProvider.getIfAvailable();
         if (providerPort == null) {
-            return;
+            return false;
         }
         CourseDocumentStats stats = providerPort
                 .statsByCourse(userId, Map.of(courseId, indexVersion))
@@ -185,14 +188,17 @@ public class CourseMutationService {
             status = stats.total() == 0 || stats.ready() >= stats.total()
                     ? IndexStatus.ACTIVE.name() : IndexStatus.REBUILD_FAILED.name();
         }
-        courseNamespaceMapper.update(null, Wrappers.<CourseNamespaceEntity>lambdaUpdate()
-                .eq(CourseNamespaceEntity::getCourseId, courseId)
-                .eq(CourseNamespaceEntity::getUserId, userId)
-                .eq(CourseNamespaceEntity::getIndexVersion, indexVersion)
-                .in(CourseNamespaceEntity::getIndexStatus,
-                        IndexStatus.REBUILDING.name(), IndexStatus.REBUILD_FAILED.name())
-                .set(CourseNamespaceEntity::getIndexStatus, status)
-                .set(CourseNamespaceEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
+        int updated = courseNamespaceMapper.update(null,
+                Wrappers.<CourseNamespaceEntity>lambdaUpdate()
+                        .eq(CourseNamespaceEntity::getCourseId, courseId)
+                        .eq(CourseNamespaceEntity::getUserId, userId)
+                        .eq(CourseNamespaceEntity::getIndexVersion, indexVersion)
+                        .in(CourseNamespaceEntity::getIndexStatus,
+                                IndexStatus.REBUILDING.name(), IndexStatus.REBUILD_FAILED.name())
+                        .set(CourseNamespaceEntity::getIndexStatus, status)
+                        .set(CourseNamespaceEntity::getUpdatedAt,
+                                ScTimeZone.now().toLocalDateTime()));
+        return updated == 1 && IndexStatus.ACTIVE.name().equals(status);
     }
 
     /** 失败文档重新进入解析时把课程从 `REBUILD_FAILED` 拉回 `REBUILDING`，为后续收敛提供起点。 */

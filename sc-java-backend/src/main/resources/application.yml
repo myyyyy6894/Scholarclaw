@@ -131,6 +131,10 @@ sc:
   # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
   # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。
   timezone: ${SC_TIMEZONE:Asia/Shanghai}
+  # 站内通知初始出站状态（TASK-802）：关闭或未绑定 IM 时直接 FALLBACK_WEB_ONLY；
+  # 真正的令牌桶限流与发送属 TASK-804。该开关与 compose 的 SC_IM_PUSH_ENABLED 一致。
+  im:
+    push-enabled: ${SC_IM_PUSH_ENABLED:false}
   # DDL 定时提醒（TASK-801）：T-24h / T-6h / 逾期 / 待确认跟进。
   # 调度器每轮获取 Redis sc:lock:job:ddl_reminder；提醒位由 t_ddl_task 条件更新最终防重。
   ddl:

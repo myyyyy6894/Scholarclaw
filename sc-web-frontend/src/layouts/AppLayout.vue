@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { logout } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifyWarning } from '@/utils/notify'
+import NotificationCenter from '@/views/notifications/NotificationCenter.vue'
 
 /**
  * 全局工作台外壳（`06` TASK-103 / TASK-404）。
@@ -131,7 +132,10 @@ async function doLogout(): Promise<void> {
           <h1>{{ pageMeta.title }}</h1>
           <p v-if="pageMeta.subtitle">{{ pageMeta.subtitle }}</p>
         </div>
-        <span class="sc-topbar__badge">MVP · P7</span>
+        <div class="sc-topbar__actions">
+          <NotificationCenter />
+          <span class="sc-topbar__badge">MVP · P8</span>
+        </div>
       </header>
       <main class="sc-content">
         <div class="sc-page">
@@ -331,6 +335,13 @@ async function doLogout(): Promise<void> {
   margin: 6px 0 0;
   color: var(--sc-muted);
   font-size: 13px;
+}
+
+.sc-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
 }
 
 .sc-topbar__badge {

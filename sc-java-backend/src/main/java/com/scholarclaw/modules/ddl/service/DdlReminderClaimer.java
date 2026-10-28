@@ -3,6 +3,9 @@ package com.scholarclaw.modules.ddl.service;
 import com.scholarclaw.common.enums.TaskStatus;
 import com.scholarclaw.modules.ddl.entity.DdlTaskEntity;
 import com.scholarclaw.modules.ddl.mapper.DdlTaskMapper;
+import com.scholarclaw.modules.notification.service.DdlReminderNotification;
+import com.scholarclaw.modules.notification.service.NotificationBizType;
+import com.scholarclaw.modules.notification.service.NotificationService;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -20,8 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code UPDATE}，只有 {@code affected_rows == 1} 才视为本次调度领取成功。这样即便多个
  * 实例同时扫描（Redis 任务锁降级或过期），数据库仍保证同一梯度最多被领取一次。
  *
- * <p><b>TASK-802 接线点：</b>通知落库必须在本方法内部、同一事务内完成（{@code 02} §6.3 步骤 5~7）。
- * 通知插入失败应让事务回滚，使提醒位恢复未领取状态，下一轮自动重试；严禁在事务提交后再发送，
+ * <p><b>通知落库：</b>领取成功后在同一事务内调用 {@code NotificationService} 写入站内信；
+ * 通知插入失败会抛出并回滚提醒位/跟进计数，下一轮自动重试。严禁把通知发送挪到事务提交后，
  * 否则会出现“位已置位但站内信永久丢失”的不可恢复缺口。
  */
 @Service
@@ -31,10 +34,13 @@ public class DdlReminderClaimer {
 
     private final DdlTaskMapper ddlTaskMapper;
     private final DdlReminderPolicy policy;
+    private final NotificationService notificationService;
 
-    public DdlReminderClaimer(DdlTaskMapper ddlTaskMapper, DdlReminderPolicy policy) {
+    public DdlReminderClaimer(DdlTaskMapper ddlTaskMapper, DdlReminderPolicy policy,
+                              NotificationService notificationService) {
         this.ddlTaskMapper = ddlTaskMapper;
         this.policy = policy;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -72,8 +78,10 @@ public class DdlReminderClaimer {
             int updated = ddlTaskMapper.markOverdueReminded(
                     task.getTaskId(), task.getUserId(), dueAt, now);
             if (updated == 1) {
-                return List.of(dispatch(task, DdlReminderType.DDL_OVERDUE, now, userZone,
-                        0, traceId));
+                DdlReminderDispatch dispatch = dispatch(
+                        task, DdlReminderType.DDL_OVERDUE, now, userZone, 0, traceId);
+                notifyReminder(dispatch);
+                return List.of(dispatch);
             }
             return List.of();
         }
@@ -85,8 +93,10 @@ public class DdlReminderClaimer {
             int updated = ddlTaskMapper.markT6Reminded(
                     task.getTaskId(), task.getUserId(), dueAt, now);
             if (updated == 1) {
-                return List.of(dispatch(task, DdlReminderType.DDL_T6H, now, userZone,
-                        0, traceId));
+                DdlReminderDispatch dispatch = dispatch(
+                        task, DdlReminderType.DDL_T6H, now, userZone, 0, traceId);
+                notifyReminder(dispatch);
+                return List.of(dispatch);
             }
             return List.of();
         }
@@ -96,8 +106,10 @@ public class DdlReminderClaimer {
             int updated = ddlTaskMapper.markT24Reminded(
                     task.getTaskId(), task.getUserId(), dueAt, now);
             if (updated == 1) {
-                return List.of(dispatch(task, DdlReminderType.DDL_T24H, now, userZone,
-                        0, traceId));
+                DdlReminderDispatch dispatch = dispatch(
+                        task, DdlReminderType.DDL_T24H, now, userZone, 0, traceId);
+                notifyReminder(dispatch);
+                return List.of(dispatch);
             }
         }
         return List.of();
@@ -126,9 +138,29 @@ public class DdlReminderClaimer {
             return List.of();
         }
         List<DdlReminderDispatch> dispatches = new ArrayList<>(1);
-        dispatches.add(dispatch(task, DdlReminderType.DDL_FOLLOW_UP, now, userZone,
-                count + 1, traceId));
+        DdlReminderDispatch dispatch = dispatch(
+                task, DdlReminderType.DDL_FOLLOW_UP, now, userZone, count + 1, traceId);
+        notifyReminder(dispatch);
+        dispatches.add(dispatch);
         return dispatches;
+    }
+
+    /**
+     * 在当前领取事务内写站内通知；失败必须抛出，让提醒位与跟进计数一起回滚，
+     * 下一轮调度重新领取，绝不出现“已标记提醒但站内信丢失”。
+     */
+    private void notifyReminder(DdlReminderDispatch dispatch) {
+        notificationService.createDdlReminderInTx(new DdlReminderNotification(
+                dispatch.userId(),
+                dispatch.taskId(),
+                NotificationBizType.fromCode(dispatch.type().bizType()),
+                dispatch.courseName(),
+                dispatch.taskTitle(),
+                dispatch.dueAtUserZone(),
+                dispatch.userTimezone(),
+                dispatch.timeInferred(),
+                dispatch.followUpCount(),
+                dispatch.traceId()));
     }
 
     private DdlReminderDispatch dispatch(DdlTaskEntity task, DdlReminderType type,

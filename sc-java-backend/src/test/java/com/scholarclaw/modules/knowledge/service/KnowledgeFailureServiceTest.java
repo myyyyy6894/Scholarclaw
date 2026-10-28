@@ -12,9 +12,13 @@ import com.scholarclaw.common.event.DocumentVectorCleanupEvent;
 import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
 import com.scholarclaw.modules.knowledge.mapper.KnowledgeParentChunkMapper;
+import com.scholarclaw.modules.notification.service.NotificationBizType;
+import com.scholarclaw.modules.notification.service.NotificationCreateCommand;
+import com.scholarclaw.modules.notification.service.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
 class KnowledgeFailureServiceTest {
@@ -23,6 +27,7 @@ class KnowledgeFailureServiceTest {
     private KnowledgeParentChunkMapper parentChunkMapper;
     private CourseService courseService;
     private ApplicationEventPublisher eventPublisher;
+    private NotificationService notificationService;
     private KnowledgeFailureService service;
 
     @BeforeEach
@@ -31,14 +36,19 @@ class KnowledgeFailureServiceTest {
         parentChunkMapper = mock(KnowledgeParentChunkMapper.class);
         courseService = mock(CourseService.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        notificationService = mock(NotificationService.class);
         service = new KnowledgeFailureService(docService, parentChunkMapper,
-                courseService, eventPublisher);
+                courseService, eventPublisher, notificationService);
     }
 
     @Test
-    @DisplayName("失败收敛：置 FAILED、清父块、登记向量清理、刷新课程")
+    @DisplayName("失败收敛：置 FAILED、清父块、登记向量清理、刷新课程并写站内通知")
     void convergesFailureAtomically() {
         when(docService.markFailed(50001L, 3, "E-RAG-02", "failed")).thenReturn(true);
+        KnowledgeDocEntity failedDoc = new KnowledgeDocEntity();
+        failedDoc.setDocId(50001L);
+        failedDoc.setDocName("第5章_事务处理.pdf");
+        when(docService.findOwnedDoc(10001L, 50001L)).thenReturn(failedDoc);
 
         KnowledgeFailureService.FailureOutcome outcome =
                 service.fail(10001L, 2001L, 50001L, 3, 2, "E-RAG-02", "failed");
@@ -47,6 +57,13 @@ class KnowledgeFailureServiceTest {
         verify(parentChunkMapper).deleteByDoc(10001L, 50001L);
         verify(eventPublisher).publishEvent(any(DocumentVectorCleanupEvent.class));
         verify(courseService).refreshIndexStatus(10001L, 2001L, 2);
+        ArgumentCaptor<NotificationCreateCommand> notification =
+                ArgumentCaptor.forClass(NotificationCreateCommand.class);
+        verify(notificationService).createInTx(notification.capture());
+        assertThat(notification.getValue().bizType()).isEqualTo(NotificationBizType.DOC_INGEST_FAILED);
+        assertThat(notification.getValue().bizId()).isEqualTo(50001L);
+        assertThat(notification.getValue().title()).contains("第5章_事务处理.pdf");
+        assertThat(notification.getValue().content()).contains("E-RAG-02");
     }
 
     @Test
@@ -70,5 +87,6 @@ class KnowledgeFailureServiceTest {
         verify(docService).findOwnedDocForUpdate(10001L, 50001L);
         verify(eventPublisher).publishEvent(any(DocumentVectorCleanupEvent.class));
         verify(parentChunkMapper, never()).deleteByDoc(any(), any());
+        verify(notificationService, never()).createInTx(any());
     }
 }

@@ -131,6 +131,17 @@ sc:
   # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
   # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。
   timezone: ${SC_TIMEZONE:Asia/Shanghai}
+  # DDL 定时提醒（TASK-801）：T-24h / T-6h / 逾期 / 待确认跟进。
+  # 调度器每轮获取 Redis sc:lock:job:ddl_reminder；提醒位由 t_ddl_task 条件更新最终防重。
+  ddl:
+    reminder:
+      enabled: ${SC_DDL_REMINDER_ENABLED:true}
+      initial-delay-ms: ${SC_DDL_REMINDER_INITIAL_DELAY_MS:60000}
+      interval-ms: ${SC_DDL_REMINDER_INTERVAL_MS:60000}
+      # 单类候选（正式梯度 / 跟进）每轮上限；下一分钟继续处理剩余任务。
+      batch-size: ${SC_DDL_REMINDER_BATCH_SIZE:200}
+      # 必须大于正常扫描耗时；扫描超时会告警，数据库条件更新仍保证不重复领取。
+      lock-ttl-seconds: ${SC_DDL_REMINDER_LOCK_TTL_SECONDS:50}
   internal:
     # Java <-> Python 内部调用鉴权令牌（02 §13.2：仅注入 sc-java-backend 与 sc-python-ai）。
     # 默认留空表示“未注入”：此时 InternalTokenAuthFilter 对所有 /internal/** 请求一律拒绝（fail-closed），

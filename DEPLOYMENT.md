@@ -220,7 +220,7 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 | 容器日志轮转 | **未配置** `logging` 上限。长期运行建议加 `logging.options.max-size`，否则可能持续占用磁盘 |
 | 数据库迁移 | ✅ **已执行（TASK-201）**：7 张 MVP 表 + 版本表 `sc_schema_migration` 已建，结构核对 473 项全一致（见 §13）。`v1.1` 扩展表按约束未建；`03` §10.3 的增量回滚脚本与 `03` §7.4 的只读最小权限账号仍未落地 |
 | Java 与数据层连接 | Java 容器已收到 DB/Redis/MQ 凭据，但**代码尚未引入相应客户端**（TASK-201 之后）。健康检查对这三者目前只做 **TCP 可达性**验证：证明网络通、进程在监听，**不证明**凭据正确或数据库可读写 |
-| OneBot / NapCat 容器 | **有意未纳入**编排（文档标注为可选）。镜像 tag 需在 TASK-803 落地时一并确认 |
+| OneBot / NapCat 容器 | **有意未纳入**编排（文档标注为可选）。TASK-803 已实现入站适配器与 `OneBotApiClient`；NapCat 镜像 tag 与真实 QQ 联调仍待 TASK-805 确认 |
 | 内部通信验证 | ✅ 已完成（TASK-105 + 2026-10-19 复核）：契约、环回例外范围、日志关联与脱敏、只读挂载、**双向 `/health` 常驻验证**、依赖故障判定均已实测，见 `INTERNAL_API_VERIFICATION.md`。**Python → Java 的「业务」内部调用（`API-INT-JAVA-001/002/003`）尚未实现**（属 TASK-503），当前 Python → Java 只覆盖健康检查 |
 | Python 依赖锁定范围 | `sc-python-ai/requirements.lock.txt` 锁的是**运行时**依赖（16 个包，全部固定版本）。两点边界：① 不含制品哈希（`pip freeze` 拿不到哈希，无法防"同名同版本被重传"）；② 开发/测试依赖（`pytest`、`pytest-asyncio`）仍是版本区间，未纳入锁文件——等引入 CI 时再评估 |
 | `data.peers` 的覆盖面 | 只有 `sc-java-backend` 会上报 `peers.python_ai`；`sc-python-ai` 的 `peers` 恒为空（Python → Java 方向由容器 healthcheck 承担，避免两个健康接口互调形成无限递归）。若日后希望 Python 也上报该观测，需先为健康接口定义"禁止递归"的显式契约 |

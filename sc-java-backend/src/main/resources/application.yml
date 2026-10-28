@@ -135,6 +135,18 @@ sc:
   # 真正的令牌桶限流与发送属 TASK-804。该开关与 compose 的 SC_IM_PUSH_ENABLED 一致。
   im:
     push-enabled: ${SC_IM_PUSH_ENABLED:false}
+  # OneBot 11 入站 Webhook 与 Action API（TASK-803）。
+  # access-token 同时用于 NapCat 上报鉴权与出站 Action 调用；未注入时 Webhook 失败关闭。
+  onebot:
+    base-url: ${SC_ONEBOT_BASE_URL:}
+    access-token: ${SC_ONEBOT_ACCESS_TOKEN:}
+    # 额外发送者白名单（逗号分隔 QQ 号）；为空时只要求 t_user_config 绑定 ACTIVE 用户。
+    allowed-senders: ${SC_ONEBOT_ALLOWED_SENDERS:}
+    action-timeout-ms: ${SC_ONEBOT_ACTION_TIMEOUT_MS:5000}
+    executor:
+      core-size: ${SC_ONEBOT_EXECUTOR_CORE_SIZE:2}
+      max-size: ${SC_ONEBOT_EXECUTOR_MAX_SIZE:4}
+      queue-capacity: ${SC_ONEBOT_EXECUTOR_QUEUE_CAPACITY:200}
   # DDL 定时提醒（TASK-801）：T-24h / T-6h / 逾期 / 待确认跟进。
   # 调度器每轮获取 Redis sc:lock:job:ddl_reminder；提醒位由 t_ddl_task 条件更新最终防重。
   ddl:

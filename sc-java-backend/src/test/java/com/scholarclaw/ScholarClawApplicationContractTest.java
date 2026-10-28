@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
@@ -35,7 +36,9 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
         // JwtService 失败关闭：密钥缺失会拒绝启动，测试给一个 >=32 字节的值
         "sc.jwt.secret=unit-test-only-jwt-secret-0123456789abcdef",
         // AesGcmCryptoService 失败关闭：主密钥缺失会拒绝启动，测试给一个 32 字节 Base64
-        "sc.master-key=dW5pdC10ZXN0LW1hc3Rlci1rZXktMzItYnl0ZXMhISE="
+        "sc.master-key=dW5pdC10ZXN0LW1hc3Rlci1rZXktMzItYnl0ZXMhISE=",
+        // TASK-803：OneBot Webhook 走独立 Bearer 令牌，不套 JWT
+        "sc.onebot.access-token=test-onebot-token"
 })
 @AutoConfigureMockMvc
 class ScholarClawApplicationContractTest {
@@ -146,5 +149,34 @@ class ScholarClawApplicationContractTest {
         int status = mockMvc.perform(get("/internal/ai/v1/model/probe")).andReturn().getResponse().getStatus();
 
         assertThat(status).isEqualTo(403);
+    }
+
+    @Test
+    @DisplayName("OneBot Webhook 不套 JWT：无令牌由 channel 返回 401 空响应，而非安全链信封")
+    void oneBotWebhookUsesItsOwnTokenInsteadOfJwt() throws Exception {
+        MvcResult result = mockMvc.perform(post("/webhooks/onebot/v11")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"post_type\":\"meta_event\"}"))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(401);
+        assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("OneBot Webhook：正确 Bearer 令牌的 meta_event 返回协议 ACK")
+    void oneBotWebhookAcceptsValidTokenAndAcksMetaEvent() throws Exception {
+        MvcResult result = mockMvc.perform(post("/webhooks/onebot/v11")
+                        .header("Authorization", "Bearer test-onebot-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"post_type\":\"meta_event\",\"meta_event_type\":\"heartbeat\"}"))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(body).contains("\"status\":\"ok\"")
+                .contains("\"retcode\":0")
+                .contains("\"inbound_status\":\"RECEIVED\"")
+                .doesNotContain("\"code\":");
     }
 }

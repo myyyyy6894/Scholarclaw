@@ -51,6 +51,9 @@ public class SecurityConfig {
                         // 这里只放行二次分派，首次 REQUEST 仍必须通过 JWT。
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login").permitAll()
+                        // OneBot Webhook 使用 Bearer <SC_ONEBOT_ACCESS_TOKEN>，由 channel 模块
+                        // 常量时间校验；不能套 JWT 规则（NapCat 没有用户 JWT）。
+                        .requestMatchers("/webhooks/onebot/v11").permitAll()
                         // 内部接口由 InternalTokenAuthFilter 保护（Python 没有 JWT，不能套 Bearer 规则）
                         .requestMatchers("/internal/**").permitAll()
                         .requestMatchers("/error").permitAll()

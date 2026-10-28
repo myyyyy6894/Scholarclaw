@@ -52,6 +52,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        // OneBot Webhook 使用 Authorization: Bearer <SC_ONEBOT_ACCESS_TOKEN>，不是 JWT；
+        // 若在这里尝试验签会把合法 Webhook 直接判成 401。渠道令牌由 channel 模块校验。
+        return "/webhooks/onebot/v11".equals(request.getRequestURI());
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String header = request.getHeader(HEADER);

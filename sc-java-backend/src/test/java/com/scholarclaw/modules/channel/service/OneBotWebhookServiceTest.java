@@ -155,6 +155,46 @@ class OneBotWebhookServiceTest {
         verify(channelAdapter).process(any(), eq(10001L));
     }
 
+    @Test
+    @DisplayName("NapCat X-Signature：对原始 body 校验 HMAC-SHA1 后正常处理")
+    void acceptsNapcatSignature() throws Exception {
+        String body = """
+                {"post_type":"message","message_type":"private","message_id":188992211,\
+                "user_id":24681012,"time":1760509200,\
+                "message":[{"type":"text","data":{"text":"/list"}}]}
+                """;
+        byte[] raw = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        WebhookDecision decision = service.accept(null,
+                "sha1=" + hmacSha1Hex(TOKEN, raw), raw,
+                new ObjectMapper().readTree(raw));
+
+        assertThat(decision.ack().inboundStatus())
+                .isEqualTo(InboundStatus.RECEIVED.name());
+        verify(channelAdapter).process(any(), eq(10001L));
+    }
+
+    @Test
+    @DisplayName("NapCat X-Signature：body 被篡改时 401")
+    void rejectsTamperedNapcatSignature() throws Exception {
+        byte[] raw = privateText().toString()
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String signature = "sha1=" + hmacSha1Hex(TOKEN,
+                "{\"post_type\":\"message\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        WebhookDecision decision = service.accept(null, signature, raw, privateText());
+
+        assertThat(decision.httpStatus()).isEqualTo(401);
+        verify(channelAdapter, never()).process(any(), any());
+    }
+
+    private static String hmacSha1Hex(String token, byte[] body) throws Exception {
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA1");
+        mac.init(new javax.crypto.spec.SecretKeySpec(
+                token.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA1"));
+        return java.util.HexFormat.of().formatHex(mac.doFinal(body));
+    }
+
     private JsonNode privateText() {
         try {
             return json("""

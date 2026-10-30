@@ -32,8 +32,10 @@ import org.springframework.stereotype.Component;
  * </ol>
  *
  * <p><b>投递语义：</b>IM 侧是“至少一次”。若进程在“已发送、未写 SENT_IM”之间崩溃，
- * 租约到期后会重试并可能产生重复；站内信与业务状态不受影响。绝不先写 SENT_IM 再发送，
- * 否则会永久丢消息。
+ * 或 {@code markSent} 写入失败，租约到期后会重试并可能产生重复；站内信与业务状态不受影响。
+ * 绝不先写 SENT_IM 再发送，否则会永久丢消息。OneBot 11 的 {@code send_private_msg} 没有
+ * 调用方可指定的幂等键，因此**不能证明严格恰好一次**；验收口径必须按“正常路径至少一次投递
+ * + 本地去重”理解。
  */
 @Component
 public class NotificationOutboundScheduler {
@@ -226,17 +228,19 @@ public class NotificationOutboundScheduler {
             return Outcome.SKIPPED;
         }
 
+        // 发送与状态写入必须分开捕获：markSent 抛异常时消息已经送达，不能再走
+        // “发送失败 → 重试/降级”分支，否则会把已送达消息当失败重发。
         try {
             oneBotApiClient.sendPrivateMsg(targetUid, candidate.getContent());
-            int updated = mapper.markSent(candidate.getNotificationId(), leaseUntil, now);
-            if (updated != 1) {
-                log.warn("IM 已发送但状态更新失败，租约到期后可能重复 notificationId={}",
-                        candidate.getNotificationId());
-            }
-            return Outcome.SENT;
         } catch (RuntimeException e) {
             return handleSendFailure(candidate, leaseUntil, now, e);
         }
+        int updated = mapper.markSent(candidate.getNotificationId(), leaseUntil, now);
+        if (updated != 1) {
+            log.warn("IM 已发送但状态更新未生效，租约到期后可能重复 notificationId={}",
+                    candidate.getNotificationId());
+        }
+        return Outcome.SENT;
     }
 
     private Outcome handleSendFailure(NotificationLogEntity candidate, LocalDateTime leaseUntil,

@@ -221,10 +221,16 @@ public class NotificationService {
                     "⏰ [T-24h 提醒] " + prefix + subject,
                     "任务 " + taskRef + " 距离截止时间（" + due + "）不足 24 小时，"
                             + "请及时完成提交。" + inferred);
-            case DDL_T6H -> new NotificationContent(
-                    "🚨 [T-6h 紧急提醒] " + prefix + subject,
-                    "任务 " + taskRef + " 距离截止时间（" + due + "）不足 6 小时，"
-                            + "请尽快完成提交。" + inferred);
+            case DDL_T6H -> data.advancedForDnd()
+                    ? new NotificationContent(
+                            "🚨 [T-6h 提前提醒] " + prefix + subject,
+                            "任务 " + taskRef + " 的截止时间（" + due + "）。"
+                                    + "本提醒为 T-6h 阶段提醒，因夜间免打扰提前发送，"
+                                    + "请及时安排提交。" + inferred)
+                    : new NotificationContent(
+                            "🚨 [T-6h 紧急提醒] " + prefix + subject,
+                            "任务 " + taskRef + " 距离截止时间（" + due + "）不足 6 小时，"
+                                    + "请尽快完成提交。" + inferred);
             case DDL_OVERDUE -> new NotificationContent(
                     "⚠️ [逾期提醒] " + prefix + subject,
                     "任务 " + taskRef + " 已超过截止时间（" + due + "），"

@@ -23,6 +23,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
+import json
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -64,6 +67,22 @@ def webhook(client: httpx.Client, payload: dict, token: str | None = None):
     response = client.post(BASE + "/webhooks/onebot/v11",
                            headers={"Authorization": f"Bearer {token or ONEBOT_TOKEN}"},
                            json=payload)
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    return response.status_code, body, response.text
+
+
+def webhook_signed(client: httpx.Client, payload: dict, token: str | None = None):
+    """按 NapCat HTTP 客户端默认方式发送：X-Signature = sha1=HMAC-SHA1(token, rawBody)。"""
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    secret = (token or ONEBOT_TOKEN).encode()
+    signature = "sha1=" + hmac.new(secret, raw, hashlib.sha1).hexdigest()
+    response = client.post(BASE + "/webhooks/onebot/v11",
+                           headers={"Content-Type": "application/json",
+                                    "X-Signature": signature},
+                           content=raw)
     try:
         body = response.json()
     except Exception:
@@ -158,6 +177,12 @@ def find_notification(client: httpx.Client, token: str, task_id: str):
     return None
 
 
+def ddl_title_count(body, title: str) -> int:
+    board = data_of(body) or {}
+    tasks = (board.get("active_tasks") or []) + (board.get("pending_inbox_tasks") or [])
+    return sum(1 for item in tasks if item.get("task_title") == title)
+
+
 def main() -> int:
     global BASE, MOCK, ONEBOT_ADMIN, ONEBOT_TOKEN
     parser = argparse.ArgumentParser(description="P8 Web+OneBot real-stack API E2E")
@@ -201,6 +226,33 @@ def main() -> int:
     check("meta_event → RECEIVED",
           status == 200 and (body or {}).get("inbound_status") == "RECEIVED", body)
 
+    # 1b. NapCat HTTP 客户端默认方式：X-Signature HMAC-SHA1（不带 Bearer）
+    status, body, _ = webhook_signed(client, {"post_type": "meta_event",
+                                              "meta_event_type": "heartbeat"})
+    check("X-Signature 签名 meta_event → RECEIVED", status == 200
+          and (body or {}).get("inbound_status") == "RECEIVED", body)
+    bad = {
+        "post_type": "message", "message_type": "private", "message_id": "p8-sig-bad",
+        "user_id": int(im_a), "time": int(time.time()),
+        "message": [{"type": "text", "data": {"text": "/list"}}],
+    }
+    raw = json.dumps(bad, ensure_ascii=False, separators=(",", ":")).encode()
+    response = client.post(BASE + "/webhooks/onebot/v11",
+                           headers={"Content-Type": "application/json",
+                                    "X-Signature": "sha1=" + "0" * 40},
+                           content=raw)
+    check("X-Signature 错误签名 → 401", response.status_code == 401,
+          (response.status_code, response.text))
+
+    onebot_reset(client)
+    signed = dict(bad)
+    signed["message_id"] = "p8-sig-ok"
+    status, body, _ = webhook_signed(client, signed)
+    check("X-Signature 签名私聊 → RECEIVED", status == 200
+          and (body or {}).get("inbound_status") == "RECEIVED", body)
+    check("X-Signature 签名私聊收到回复", wait_for(
+        lambda: bool(onebot_calls(client))), onebot_calls(client))
+
     # 2. 去重与私聊文本
     payload = {
         "post_type": "message", "message_type": "private", "message_id": "p8-dup-1",
@@ -222,11 +274,40 @@ def main() -> int:
     check("重复消息不再次回复", len(onebot_calls(client)) == len(first_calls or []),
           onebot_calls(client))
 
-    # 3. 群聊 @ 规则
+    # 2b. 同一 platform message_id 重复上报：业务副作用只能发生一次
     onebot_reset(client)
+    ddl_text = "请在 2099年12月31日 22:00 前提交实验报告"
+    ddl_payload = {
+        "post_type": "message", "message_type": "private", "message_id": "p8-ddl-dup-1",
+        "user_id": int(im_a), "self_id": 987654321, "time": int(time.time()),
+        "message": [{"type": "text", "data": {"text": ddl_text}}],
+    }
+    status, body, _ = webhook(client, ddl_payload)
+    check("DDL 文本首次上报 → RECEIVED", status == 200
+          and (body or {}).get("inbound_status") == "RECEIVED", body)
+    wait_for(lambda: any(item["action"] == "send_private_msg"
+                         and "#T" in str(item["body"].get("message"))
+                         for item in onebot_calls(client)), timeout=30)
+    status, body, _ = call(client, "GET", "/api/v1/ddl/tasks", user_a["token"])
+    before = ddl_title_count(body, "提交实验二报告")
+    check("首次上报创建 DDL 任务", status == 200 and before == 1, (status, body))
+
+    status, body, _ = webhook(client, ddl_payload)
+    check("重复 platform message_id → DUPLICATE_IGNORED", status == 200
+          and (body or {}).get("inbound_status") == "DUPLICATE_IGNORED", body)
+    time.sleep(1.5)
+    status, body, _ = call(client, "GET", "/api/v1/ddl/tasks", user_a["token"])
+    after = ddl_title_count(body, "提交实验二报告")
+    check("重复上报不产生第二个 DDL 任务", status == 200 and after == before,
+          (status, body))
+
+    # 3. 群聊 @ 规则：回复必须回到原群，不能私聊发送者
+    onebot_reset(client)
+    group_id = 7654321
     group_no_at = {
         "post_type": "message", "message_type": "group", "message_id": "p8-group-no-at",
-        "user_id": int(im_a), "self_id": 987654321, "time": int(time.time()),
+        "user_id": int(im_a), "self_id": 987654321, "group_id": group_id,
+        "time": int(time.time()),
         "message": [{"type": "text", "data": {"text": "/list"}}],
     }
     status, body, _ = webhook(client, group_no_at)
@@ -243,7 +324,16 @@ def main() -> int:
     ]
     status, body, _ = webhook(client, group_at)
     check("群聊 @ 机器人 → 处理", status == 200, body)
-    check("群聊 @ 收到回复", wait_for(lambda: bool(onebot_calls(client))), onebot_calls(client))
+    group_calls = wait_for(lambda: (lambda c: c if any(
+        item["action"] == "send_group_msg" for item in c) else None)(
+            onebot_calls(client)), timeout=25)
+    check("群聊 @ 回复使用 send_group_msg 且 group_id 正确", bool(group_calls) and any(
+        item["action"] == "send_group_msg"
+        and str(item["body"].get("group_id")) == str(group_id)
+        for item in group_calls), group_calls)
+    check("群聊 @ 不私聊发送者", not any(
+        item["action"] == "send_private_msg"
+        and str(item["body"].get("user_id")) == im_a for item in group_calls), group_calls)
 
     # 4. 单层转发与嵌套转发
     onebot_reset(client)
@@ -316,6 +406,46 @@ def main() -> int:
         docs = data_of(body) or []
         check("文件进入文档列表", status == 200
               and any(d.get("doc_name") == "p8_e2e.pdf" for d in docs), body)
+
+    # 6b. 文件段只有 data.file（没有 name/file_name）
+    onebot_reset(client)
+    file_only = {
+        "post_type": "message", "message_type": "private", "message_id": "p8-file-only",
+        "user_id": int(im_a), "time": int(time.time()),
+        "message": [{"type": "file", "data": {
+            "file": "p8_only_file.pdf", "file_size": 123}}],
+    }
+    status, body, _ = webhook(client, file_only)
+    check("仅有 data.file 的文件事件 → ACK", status == 200, body)
+    only_calls = wait_for(lambda: (lambda c: c if any(
+        item["action"] == "get_file" for item in c) and any(
+        item["action"] == "send_private_msg"
+        and "p8_only_file.pdf" in str(item["body"].get("message"))
+        for item in c) else None)(onebot_calls(client)), timeout=30)
+    check("仅有 data.file 仍调用 get_file", bool(only_calls) and any(
+        item["action"] == "get_file" for item in only_calls), only_calls)
+    check("仅有 data.file 的回执使用解析后的文件名", bool(only_calls), only_calls)
+
+    # 6c. 文件 URL SSRF：云元数据与回环地址必须被拒绝，不能发起下载
+    for label, url in (
+            ("云元数据", "http://169.254.169.254/latest/meta-data/iam"),
+            ("回环", "http://127.0.0.1:19090/__calls"),
+    ):
+        onebot_reset(client)
+        payload = {
+            "post_type": "message", "message_type": "private",
+            "message_id": "p8-file-ssrf-" + ("meta" if label == "云元数据" else "loop"),
+            "user_id": int(im_a),
+            "time": int(time.time()),
+            "message": [{"type": "file", "data": {
+                "url": url, "name": "meta.pdf", "file_size": 10}}],
+        }
+        status, body, _ = webhook(client, payload)
+        calls = wait_for(lambda: (lambda c: c if any(
+            item["action"] == "send_private_msg"
+            and "拉取文件失败" in str(item["body"].get("message"))
+            for item in c) else None)(onebot_calls(client)), timeout=25)
+        check(f"{label}文件 URL 被 SSRF 拦截", status == 200 and bool(calls), calls)
 
     # 7. DDL 提醒 → 站内通知 → IM 发送
     onebot_reset(client)

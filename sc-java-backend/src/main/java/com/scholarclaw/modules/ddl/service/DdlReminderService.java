@@ -28,6 +28,10 @@ import org.springframework.stereotype.Service;
  *       且 {@code follow_up_count < 2} 的任务：温和跟进。</li>
  * </ol>
  *
+ * <p><b>分页：</b>两类候选都按 {@code (时间, task_id)} keyset 分页遍历到取空，绝不只扫第一页。
+ * 已发 T-24h、尚未到 T-6h 的任务会持续命中条件；若只取 {@code LIMIT batch-size} 的第一页，
+ * 候选数超过批大小后排在后面的任务会长期收不到提醒。
+ *
  * <p>免打扰窗口、时区换算与提醒位竞态都下沉到 {@link DdlReminderPolicy} 与
  * {@link DdlReminderClaimer}：本类只负责读取用户偏好、隔离单任务失败并汇总结果。
  * 单条任务失败不会中断整轮扫描；失败原因以 {@code ERROR} 日志输出，任务保持未领取状态，
@@ -67,9 +71,8 @@ public class DdlReminderService {
      */
     public ReminderScanResult scan(LocalDateTime now, String traceId) {
         List<DdlTaskEntity> candidates = new ArrayList<>();
-        candidates.addAll(ddlTaskMapper.selectActiveReminderCandidates(
-                now, now.plusHours(DdlReminderPolicy.T24_HOURS), batchSize));
-        candidates.addAll(ddlTaskMapper.selectFollowUpCandidates(now, batchSize));
+        candidates.addAll(loadActiveCandidates(now, now.plusHours(DdlReminderPolicy.T24_HOURS)));
+        candidates.addAll(loadFollowUpCandidates(now));
 
         int claimed = 0;
         int unclaimed = 0;
@@ -135,6 +138,68 @@ public class DdlReminderService {
 
         return new ReminderScanResult(candidates.size(), claimed, unclaimed, failed,
                 List.copyOf(dispatches));
+    }
+
+    /**
+     * 按 {@code (due_at, task_id)} keyset 遍历完整正式梯度候选集。
+     *
+     * <p>用“上一页最后一条”推进游标，而不是 OFFSET：提醒领取会修改 {@code reminded_flags}，
+     * OFFSET 在结果集变化时会跳行/重行；keyset 只依赖不会被领取修改的 {@code due_at} 与主键。
+     */
+    private List<DdlTaskEntity> loadActiveCandidates(LocalDateTime now, LocalDateTime horizon) {
+        List<DdlTaskEntity> all = new ArrayList<>();
+        LocalDateTime afterDueAt = null;
+        long afterTaskId = 0L;
+        while (true) {
+            List<DdlTaskEntity> page = ddlTaskMapper.selectActiveReminderCandidates(
+                    now, horizon, afterDueAt, afterTaskId, batchSize);
+            if (page == null || page.isEmpty()) {
+                return all;
+            }
+            all.addAll(page);
+            DdlTaskEntity last = page.get(page.size() - 1);
+            if (last.getDueAt() == null || last.getTaskId() == null
+                    || (afterDueAt != null && !last.getDueAt().isAfter(afterDueAt)
+                    && last.getTaskId() <= afterTaskId)) {
+                // 防御异常 Mapper：游标未前进时立即终止，避免死循环。
+                log.error("ACTIVE 提醒候选分页游标未前进，提前终止 afterDueAt={} afterTaskId={}",
+                        afterDueAt, afterTaskId);
+                return all;
+            }
+            if (page.size() < batchSize) {
+                return all;
+            }
+            afterDueAt = last.getDueAt();
+            afterTaskId = last.getTaskId();
+        }
+    }
+
+    /** 按 {@code (follow_up_at, task_id)} keyset 遍历完整跟进候选集。 */
+    private List<DdlTaskEntity> loadFollowUpCandidates(LocalDateTime now) {
+        List<DdlTaskEntity> all = new ArrayList<>();
+        LocalDateTime afterFollowUpAt = null;
+        long afterTaskId = 0L;
+        while (true) {
+            List<DdlTaskEntity> page = ddlTaskMapper.selectFollowUpCandidates(
+                    now, afterFollowUpAt, afterTaskId, batchSize);
+            if (page == null || page.isEmpty()) {
+                return all;
+            }
+            all.addAll(page);
+            DdlTaskEntity last = page.get(page.size() - 1);
+            if (last.getFollowUpAt() == null || last.getTaskId() == null
+                    || (afterFollowUpAt != null && !last.getFollowUpAt().isAfter(afterFollowUpAt)
+                    && last.getTaskId() <= afterTaskId)) {
+                log.error("跟进提醒候选分页游标未前进，提前终止 afterFollowUpAt={} afterTaskId={}",
+                        afterFollowUpAt, afterTaskId);
+                return all;
+            }
+            if (page.size() < batchSize) {
+                return all;
+            }
+            afterFollowUpAt = last.getFollowUpAt();
+            afterTaskId = last.getTaskId();
+        }
     }
 
     /**

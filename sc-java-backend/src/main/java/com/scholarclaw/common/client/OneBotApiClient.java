@@ -5,9 +5,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import com.scholarclaw.common.security.OneBotFileUrlSecurity;
+import com.scholarclaw.common.security.OneBotFileUrlSecurity.ValidatedTarget;
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ProxySelector;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -18,10 +25,16 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -49,23 +62,33 @@ public class OneBotApiClient {
 
     public static final long MAX_FILE_BYTES = 52_428_800L;
     private static final int MAX_ACTION_BODY_BYTES = 64 * 1024;
+    /** get_file 可能把整个文件以 base64 放在 JSON 里，必须按文件上限放宽。 */
+    private static final int MAX_FILE_ACTION_BODY_BYTES =
+            (int) (MAX_FILE_BYTES * 4 / 3) + 1024 * 1024;
     private static final Pattern CQ_CODE = Pattern.compile("\\[CQ:[^\\]]+]");
 
     private final String baseUrl;
     private final String accessToken;
     private final Duration actionTimeout;
+    private final Duration fileActionTimeout;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final OneBotFileUrlSecurity fileUrlSecurity;
 
+    @Autowired
     public OneBotApiClient(
             @Value("${sc.onebot.base-url:}") String baseUrl,
             @Value("${sc.onebot.access-token:}") String accessToken,
             @Value("${sc.onebot.action-timeout-ms:5000}") long actionTimeoutMs,
-            ObjectMapper objectMapper) {
+            @Value("${sc.onebot.file-timeout-ms:30000}") long fileTimeoutMs,
+            ObjectMapper objectMapper,
+            OneBotFileUrlSecurity fileUrlSecurity) {
         this.baseUrl = trimTrailingSlash(baseUrl);
         this.accessToken = accessToken == null ? "" : accessToken.trim();
         this.actionTimeout = Duration.ofMillis(Math.max(1000, actionTimeoutMs));
+        this.fileActionTimeout = Duration.ofMillis(Math.max(1000, fileTimeoutMs));
         this.objectMapper = objectMapper;
+        this.fileUrlSecurity = fileUrlSecurity;
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(5))
@@ -73,6 +96,18 @@ public class OneBotApiClient {
                 // OneBot/NapCat 位于内部网络；不能被宿主代理环境变量带偏（RISK-28）。
                 .proxy(ProxySelector.of(null))
                 .build();
+    }
+
+    /** 兼容直接构造（单测/旧调用）：默认不放行任何私网文件 Origin。 */
+    public OneBotApiClient(String baseUrl, String accessToken, long actionTimeoutMs,
+                           ObjectMapper objectMapper) {
+        this(baseUrl, accessToken, actionTimeoutMs, 30_000, objectMapper,
+                new OneBotFileUrlSecurity("", InetAddress::getAllByName));
+    }
+
+    public OneBotApiClient(String baseUrl, String accessToken, long actionTimeoutMs,
+                           ObjectMapper objectMapper, OneBotFileUrlSecurity fileUrlSecurity) {
+        this(baseUrl, accessToken, actionTimeoutMs, 30_000, objectMapper, fileUrlSecurity);
     }
 
     public boolean isConfigured() {
@@ -94,6 +129,66 @@ public class OneBotApiClient {
                 ErrorCode.INTERNAL_ERROR, "OneBot 回复发送失败，请稍后在 Web 工作台操作。");
         requireOk(response, ErrorCode.INTERNAL_ERROR,
                 "OneBot 回复发送失败，请稍后在 Web 工作台操作。");
+    }
+
+    /**
+     * 发送群聊文本（群聊 {@code @} 回复必须回到原群，而不是私聊发送者）。
+     *
+     * <p>调用方负责把 {@code @} 片段从正文中剥离；本方法只发送纯文本。
+     */
+    public void sendGroupMsg(Long groupId, String text) {
+        if (groupId == null || groupId <= 0) {
+            throw new IllegalArgumentException("OneBot 群聊目标群号非法");
+        }
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("group_id", groupId);
+        body.put("message", text.trim());
+        JsonNode response = postAction("send_group_msg", body,
+                ErrorCode.INTERNAL_ERROR, "OneBot 群聊回复发送失败，请稍后在 Web 工作台操作。");
+        requireOk(response, ErrorCode.INTERNAL_ERROR,
+                "OneBot 群聊回复发送失败，请稍后在 Web 工作台操作。");
+    }
+
+    /**
+     * 仅通过 {@code get_file} 解析文件名，不下载内容。
+     *
+     * <p>用于事件只带 {@code file_id}、没有 {@code name/file_name} 的情况：先拿到协议端
+     * 返回的 {@code file_name} 做扩展名白名单校验，再决定是否下载。调用方必须先完成
+     * DB-07 Embedding 前置检查；本方法不会触发文件内容传输。
+     */
+    public String resolveFileName(String fileReference) {
+        if (fileReference == null || fileReference.isBlank()) {
+            return null;
+        }
+        String reference = fileReference.trim();
+        if (reference.startsWith("base64://")) {
+            return null;
+        }
+        if (isHttpUrl(reference)) {
+            try {
+                URI uri = URI.create(reference);
+                String path = uri.getPath();
+                if (path == null || path.isBlank() || path.endsWith("/")) {
+                    return null;
+                }
+                String segment = path.substring(path.lastIndexOf('/') + 1);
+                return segment.isBlank() ? null : segment;
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("file_id", reference);
+        body.put("file", reference);
+        JsonNode response = postAction("get_file", body,
+                ErrorCode.E_IM_02, ErrorCode.E_IM_02.defaultMessage(),
+                fileActionTimeout, MAX_FILE_ACTION_BODY_BYTES);
+        JsonNode data = requireOk(response, ErrorCode.E_IM_02,
+                ErrorCode.E_IM_02.defaultMessage());
+        return firstText(data, "file_name", "name");
     }
 
     /**
@@ -146,20 +241,32 @@ public class OneBotApiClient {
             return download(reference, fallbackName, null);
         }
 
-        Map<String, Object> body = Map.of("file_id", reference);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("file_id", reference);
+        body.put("file", reference);
         JsonNode response = postAction("get_file", body,
-                ErrorCode.E_IM_02, ErrorCode.E_IM_02.defaultMessage());
+                ErrorCode.E_IM_02, ErrorCode.E_IM_02.defaultMessage(),
+                fileActionTimeout, MAX_FILE_ACTION_BODY_BYTES);
         JsonNode data = requireOk(response, ErrorCode.E_IM_02,
                 ErrorCode.E_IM_02.defaultMessage());
         String fileName = firstText(data, "file_name", "name");
         if (fileName == null) {
             fileName = fallbackName;
         }
-        String file = firstText(data, "file", "url");
         long size = firstLong(data, "file_size", "size");
         if (size > MAX_FILE_BYTES) {
             throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
         }
+        // NapCat enableLocalFile2Url=true 时，get_file 会额外返回 base64 字段；
+        // 这样协议端不必把本机路径暴露给 Java，也不依赖文件 URL / SSRF 白名单。
+        String base64 = firstText(data, "base64");
+        if (base64 != null) {
+            if ((long) base64.length() > MAX_FILE_BYTES * 4 / 3 + 4) {
+                throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
+            }
+            return decodeBase64(base64, fileName);
+        }
+        String file = firstText(data, "file", "url");
         if (file == null) {
             throw new BusinessException(ErrorCode.E_IM_02);
         }
@@ -205,57 +312,268 @@ public class OneBotApiClient {
 
     private DownloadedFile decodeBase64(String encoded, String fileName) {
         try {
-            byte[] content = Base64.getDecoder().decode(encoded);
+            String value = encoded == null ? "" : encoded.trim();
+            if (value.startsWith("base64://")) {
+                value = value.substring("base64://".length());
+            } else if (value.startsWith("data:")) {
+                int comma = value.indexOf(',');
+                if (comma < 0) {
+                    throw new IllegalArgumentException("data URI 缺少逗号");
+                }
+                value = value.substring(comma + 1);
+            }
+            byte[] content = Base64.getDecoder().decode(value);
             return checkedFile(fileName, content, null);
         } catch (IllegalArgumentException e) {
             throw new BusinessException(ErrorCode.E_IM_02);
         }
     }
 
+    /**
+     * 下载已经过 SSRF 校验的 HTTP(S) 文件。
+     *
+     * <p><b>为什么不用 {@link HttpClient}：</b>需要把连接钉扎到 {@link OneBotFileUrlSecurity}
+     * 已解析并校验的 IP，避免“校验时是公网、建连时被 DNS rebinding 指向内网”。这里使用
+     * HTTP/1.1 原始连接（禁止代理/重定向、{@code Connection: close}、{@code Accept-Encoding: identity}），
+     * 目标地址只从钉扎列表中选择；HTTPS 使用默认信任库并强制主机名校验。
+     */
     private DownloadedFile download(String url, String fileName, Long declaredSize) {
         if (declaredSize != null && declaredSize > MAX_FILE_BYTES) {
             throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
         }
-        URI uri;
+        ValidatedTarget target = fileUrlSecurity.validate(url);
+        Socket raw = connectPinned(target);
         try {
-            uri = URI.create(url);
-        } catch (IllegalArgumentException e) {
-            throw new BusinessException(ErrorCode.E_IM_02);
-        }
-        if (!"http".equalsIgnoreCase(uri.getScheme())
-                && !"https".equalsIgnoreCase(uri.getScheme())) {
-            throw new BusinessException(ErrorCode.E_IM_02);
-        }
-        try {
-            HttpRequest request = HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofSeconds(20))
-                    .GET()
-                    .build();
-            HttpResponse<InputStream> response = httpClient.send(
-                    request, HttpResponse.BodyHandlers.ofInputStream());
-            if (response.statusCode() != 200) {
-                closeQuietly(response.body());
-                throw new BusinessException(ErrorCode.E_IM_02);
-            }
-            long length = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
-            if (length > MAX_FILE_BYTES) {
-                closeQuietly(response.body());
-                throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
-            }
-            try (InputStream input = response.body()) {
-                byte[] content = input.readNBytes((int) MAX_FILE_BYTES + 1);
-                if (content.length > MAX_FILE_BYTES) {
-                    throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
-                }
-                return checkedFile(fileName, content, response.headers()
-                        .firstValue("Content-Type").orElse(null));
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(ErrorCode.E_IM_02);
+            Socket socket = target.https() ? startTls(raw, target) : raw;
+            writeGet(socket, target);
+            return readResponse(new BufferedInputStream(socket.getInputStream()), fileName);
         } catch (IOException e) {
             throw new BusinessException(ErrorCode.E_IM_02);
+        } finally {
+            closeQuietly(raw);
         }
+    }
+
+    private static Socket connectPinned(ValidatedTarget target) {
+        IOException last = null;
+        for (InetAddress address : target.addresses()) {
+            Socket socket = new Socket();
+            try {
+                socket.connect(new InetSocketAddress(address, target.port()), 5000);
+                socket.setSoTimeout(20_000);
+                return socket;
+            } catch (IOException e) {
+                last = e;
+                closeQuietly(socket);
+            }
+        }
+        log.warn("OneBot 文件下载无法连接任一已校验地址 count={} error={}",
+                target.addresses().size(),
+                last == null ? "unknown" : last.getClass().getSimpleName());
+        throw new BusinessException(ErrorCode.E_IM_02);
+    }
+
+    private static Socket startTls(Socket raw, ValidatedTarget target) throws IOException {
+        try {
+            SSLSocketFactory factory = SSLContext.getDefault().getSocketFactory();
+            String peerHost = stripBrackets(target.hostHeader());
+            SSLSocket ssl = (SSLSocket) factory.createSocket(
+                    raw, peerHost, target.port(), true);
+            SSLParameters parameters = ssl.getSSLParameters();
+            // 证书主机名校验必须保留；连接本身已经钉扎到校验过的 IP。
+            parameters.setEndpointIdentificationAlgorithm("HTTPS");
+            ssl.setSSLParameters(parameters);
+            ssl.startHandshake();
+            return ssl;
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IOException("TLS 初始化失败", e);
+        }
+    }
+
+    private static void writeGet(Socket socket, ValidatedTarget target) throws IOException {
+        String path = target.uri().getRawPath();
+        if (path == null || path.isEmpty()) {
+            path = "/";
+        }
+        String query = target.uri().getRawQuery();
+        if (query != null && !query.isEmpty()) {
+            path = path + "?" + query;
+        }
+        int defaultPort = target.https() ? 443 : 80;
+        String host = target.hostHeader()
+                + (target.port() == defaultPort ? "" : ":" + target.port());
+        String request = "GET " + path + " HTTP/1.1\r\n"
+                + "Host: " + host + "\r\n"
+                + "User-Agent: ScholarClaw-OneBot/1.0\r\n"
+                + "Accept: */*\r\n"
+                + "Accept-Encoding: identity\r\n"
+                + "Connection: close\r\n\r\n";
+        OutputStream output = socket.getOutputStream();
+        output.write(request.getBytes(StandardCharsets.US_ASCII));
+        output.flush();
+    }
+
+    private static DownloadedFile readResponse(InputStream input, String fileName)
+            throws IOException {
+        String statusLine = readLine(input, 4096);
+        if (statusLine == null || !statusLine.startsWith("HTTP/1.")) {
+            throw new BusinessException(ErrorCode.E_IM_02);
+        }
+        String[] statusParts = statusLine.split(" ", 3);
+        if (statusParts.length < 2 || !"200".equals(statusParts[1])) {
+            throw new BusinessException(ErrorCode.E_IM_02);
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        int totalHeaderBytes = 0;
+        while (true) {
+            String line = readLine(input, 8192);
+            if (line == null) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+            if (line.isEmpty()) {
+                break;
+            }
+            totalHeaderBytes += line.length();
+            if (totalHeaderBytes > 32 * 1024) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+            int colon = line.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            String key = line.substring(0, colon).trim().toLowerCase(Locale.ROOT);
+            String value = line.substring(colon + 1).trim();
+            headers.putIfAbsent(key, value);
+        }
+
+        String contentEncoding = headers.get("content-encoding");
+        if (contentEncoding != null && !contentEncoding.isBlank()
+                && !"identity".equalsIgnoreCase(contentEncoding)) {
+            // 不实现 gzip/br 解码，避免把压缩字节当作 PDF/MD/TXT 写入知识库。
+            throw new BusinessException(ErrorCode.E_IM_02);
+        }
+
+        byte[] content;
+        String transferEncoding = headers.get("transfer-encoding");
+        if (transferEncoding != null
+                && transferEncoding.toLowerCase(Locale.ROOT).contains("chunked")) {
+            content = readChunked(input);
+        } else {
+            String contentLength = headers.get("content-length");
+            if (contentLength != null) {
+                long length;
+                try {
+                    length = Long.parseLong(contentLength);
+                } catch (NumberFormatException e) {
+                    throw new BusinessException(ErrorCode.E_IM_02);
+                }
+                if (length < 0) {
+                    throw new BusinessException(ErrorCode.E_IM_02);
+                }
+                if (length > MAX_FILE_BYTES) {
+                    throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
+                }
+                content = readExactly(input, (int) length);
+            } else {
+                content = readUntilEof(input);
+            }
+        }
+        return checkedFile(fileName, content, headers.get("content-type"));
+    }
+
+    private static byte[] readExactly(InputStream input, int length) throws IOException {
+        byte[] buffer = new byte[length];
+        int offset = 0;
+        while (offset < length) {
+            int read = input.read(buffer, offset, length - offset);
+            if (read < 0) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+            offset += read;
+        }
+        return buffer;
+    }
+
+    private static byte[] readUntilEof(InputStream input) throws IOException {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        long total = 0;
+        int read;
+        while ((read = input.read(buffer)) >= 0) {
+            total += read;
+            if (total > MAX_FILE_BYTES) {
+                throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
+            }
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
+    }
+
+    private static byte[] readChunked(InputStream input) throws IOException {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        long total = 0;
+        while (true) {
+            String sizeLine = readLine(input, 256);
+            if (sizeLine == null) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+            int semicolon = sizeLine.indexOf(';');
+            String sizeHex = (semicolon >= 0 ? sizeLine.substring(0, semicolon) : sizeLine).trim();
+            int size;
+            try {
+                size = Integer.parseInt(sizeHex, 16);
+            } catch (NumberFormatException e) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+            if (size < 0) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+            if (size == 0) {
+                // 消费 trailer，直到空行；忽略 trailer 内容。
+                while (true) {
+                    String trailer = readLine(input, 8192);
+                    if (trailer == null || trailer.isEmpty()) {
+                        return output.toByteArray();
+                    }
+                }
+            }
+            total += size;
+            if (total > MAX_FILE_BYTES) {
+                throw new BusinessException(ErrorCode.FILE_SIZE_EXCEEDED);
+            }
+            output.write(readExactly(input, size));
+            String ending = readLine(input, 16);
+            if (ending == null || !ending.isEmpty()) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+        }
+    }
+
+    private static String readLine(InputStream input, int maxLength) throws IOException {
+        StringBuilder builder = new StringBuilder();
+        int value;
+        while ((value = input.read()) >= 0) {
+            if (value == '\n') {
+                int length = builder.length();
+                if (length > 0 && builder.charAt(length - 1) == '\r') {
+                    builder.setLength(length - 1);
+                }
+                return builder.toString();
+            }
+            if (builder.length() >= maxLength) {
+                throw new BusinessException(ErrorCode.E_IM_02);
+            }
+            builder.append((char) value);
+        }
+        return builder.isEmpty() ? null : builder.toString();
+    }
+
+    private static String stripBrackets(String host) {
+        if (host.startsWith("[") && host.endsWith("]") && host.length() > 2) {
+            return host.substring(1, host.length() - 1);
+        }
+        return host;
     }
 
     private static DownloadedFile checkedFile(String fileName, byte[] content, String contentType) {
@@ -273,6 +591,12 @@ public class OneBotApiClient {
 
     private JsonNode postAction(String action, Object body, ErrorCode errorCode,
                                 String message) {
+        return postAction(action, body, errorCode, message,
+                actionTimeout, MAX_ACTION_BODY_BYTES);
+    }
+
+    private JsonNode postAction(String action, Object body, ErrorCode errorCode,
+                                String message, Duration timeout, int maxBodyBytes) {
         if (!isConfigured()) {
             throw new BusinessException(errorCode, message);
         }
@@ -283,7 +607,7 @@ public class OneBotApiClient {
             throw new BusinessException(errorCode, message);
         }
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + "/" + action))
-                .timeout(actionTimeout)
+                .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
         if (!accessToken.isBlank()) {
@@ -294,7 +618,7 @@ public class OneBotApiClient {
                     builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() != 200
                     || response.body() == null
-                    || response.body().length() > MAX_ACTION_BODY_BYTES) {
+                    || response.body().length() > maxBodyBytes) {
                 throw new BusinessException(errorCode, message);
             }
             return objectMapper.readTree(response.body());
@@ -357,6 +681,14 @@ public class OneBotApiClient {
     private static void closeQuietly(InputStream input) {
         try {
             input.close();
+        } catch (IOException ignored) {
+            // 已准备返回失败；关闭失败不影响结果。
+        }
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
         } catch (IOException ignored) {
             // 已准备返回失败；关闭失败不影响结果。
         }

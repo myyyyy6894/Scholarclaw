@@ -104,8 +104,11 @@ class DdlReminderClaimerTest {
                 LocalDateTime.of(2026, 10, 28, 22, 30),
                 SHANGHAI, DND_START, DND_END, TRACE_ID);
 
-        assertThat(result).singleElement()
-                .extracting(DdlReminderDispatch::type).isEqualTo(DdlReminderType.DDL_T6H);
+        assertThat(result).singleElement().satisfies(dispatch -> {
+            assertThat(dispatch.type()).isEqualTo(DdlReminderType.DDL_T6H);
+            assertThat(dispatch.advancedForDnd()).isTrue();
+        });
+        assertThat(capturedNotification().advancedForDnd()).isTrue();
     }
 
     @Test
@@ -157,13 +160,41 @@ class DdlReminderClaimerTest {
     }
 
     @Test
-    @DisplayName("待确认任务跟进落在免打扰窗口时不领取，等窗口结束")
-    void doesNotClaimFollowUpInsideDnd() {
+    @DisplayName("待确认跟进落在免打扰窗口：立即领取并写站内信，只把 IM 交给通知层顺延")
+    void claimsFollowUpInsideDndAndWritesNotificationImmediately() {
         LocalDateTime now = LocalDateTime.of(2026, 10, 29, 2, 0);
         DdlTaskEntity task = pendingTask(LocalDateTime.of(2026, 10, 29, 1, 0), 0);
+        when(mapper.markFollowUpReminded(TASK_ID, USER_ID,
+                task.getFollowUpAt(), 0, now.plusHours(24), now)).thenReturn(1);
 
-        assertThat(claimer.claim(task, now, SHANGHAI, DND_START, DND_END, TRACE_ID)).isEmpty();
-        verifyNoInteractions(mapper);
+        List<DdlReminderDispatch> result = claimer.claim(
+                task, now, SHANGHAI, DND_START, DND_END, TRACE_ID);
+
+        assertThat(result).singleElement().satisfies(dispatch -> {
+            assertThat(dispatch.type()).isEqualTo(DdlReminderType.DDL_FOLLOW_UP);
+            assertThat(dispatch.followUpCount()).isEqualTo(1);
+        });
+        verify(mapper).markFollowUpReminded(TASK_ID, USER_ID,
+                task.getFollowUpAt(), 0, now.plusHours(24), now);
+        assertThat(capturedNotification().bizType())
+                .isEqualTo(NotificationBizType.DDL_FOLLOW_UP);
+    }
+
+    @Test
+    @DisplayName("第 2 次跟进后 follow_up_at 置空，不再产生第三次")
+    void clearsFollowUpAtAfterSecondReminder() {
+        DdlTaskEntity task = pendingTask(NOW.minusHours(1), 1);
+        when(mapper.markFollowUpReminded(TASK_ID, USER_ID,
+                task.getFollowUpAt(), 1, null, NOW)).thenReturn(1);
+
+        List<DdlReminderDispatch> result = claimer.claim(
+                task, NOW, SHANGHAI, DND_START, DND_END, TRACE_ID);
+
+        assertThat(result).singleElement()
+                .extracting(DdlReminderDispatch::followUpCount).isEqualTo(2);
+        verify(mapper).markFollowUpReminded(TASK_ID, USER_ID,
+                task.getFollowUpAt(), 1, null, NOW);
+        assertThat(capturedNotification().followUpCount()).isEqualTo(2);
     }
 
     @Test

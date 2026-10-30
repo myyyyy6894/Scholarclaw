@@ -15,6 +15,8 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE_URL?: string
   readonly VITE_DEV_PROXY_TARGET?: string
   readonly VITE_APP_TITLE?: string
+  /** NapCat WebUI 跳转地址（非密钥）；远程部署时改成浏览器可达地址。 */
+  readonly VITE_NAPCAT_WEBUI_URL?: string
 }
 
 interface ImportMeta {

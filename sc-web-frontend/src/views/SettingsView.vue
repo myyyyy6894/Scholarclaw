@@ -33,6 +33,7 @@ import {
 } from '@/views/settings/model-config-form'
 import type { ModelConfigFormState, SingleProbeType } from '@/views/settings/model-config-form'
 import { useModelProbeResults } from '@/views/settings/use-model-probe-results'
+import { resolveNapcatWebuiUrl } from '@/views/settings/napcat-entry'
 import {
   createPreferencesForm,
   PreferencesValidationError,
@@ -81,6 +82,9 @@ const IM_PLATFORMS = [
   { value: 'QQ_ONEBOT', label: 'QQ（OneBot）' },
   { value: 'WECOM', label: '企业微信' },
 ]
+
+// QQ 扫码登录由独立 NapCat 协议端完成；这里只提供跳转，不代理其登录页。
+const napcatWebuiUrl = resolveNapcatWebuiUrl(import.meta.env.VITE_NAPCAT_WEBUI_URL)
 
 const chatKeyPlaceholder = computed(() =>
   modelForm.value.hasSavedChatKey
@@ -521,6 +525,22 @@ function goToLogin(): void {
               </el-form-item>
             </el-col>
           </el-row>
+          <div class="sc-settings__row">
+            <span class="sc-settings__hint">
+              QQ 扫码登录由独立的 NapCat 协议端完成；登录后请让 QQ 号与上方绑定保持一致。
+              远程部署时需通过
+              <code>VITE_NAPCAT_WEBUI_URL</code>
+              配置浏览器可达的地址。
+            </span>
+            <el-link
+              type="primary"
+              :href="napcatWebuiUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              打开 NapCat 登录页
+            </el-link>
+          </div>
           <div class="sc-settings__row sc-settings__row--end">
             <span class="sc-settings__hint">平台与账号必须同时填写或同时留空。</span>
             <el-button type="primary" :loading="savingPrefs" @click="onSavePreferences">

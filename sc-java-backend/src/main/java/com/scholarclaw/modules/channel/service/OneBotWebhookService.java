@@ -58,9 +58,20 @@ public class OneBotWebhookService {
         this.allowedSenders = parseAllowedSenders(allowedSenders);
     }
 
+    /** 兼容既有 Bearer 调用与测试。 */
     public WebhookDecision accept(String authorizationHeader, JsonNode payload) {
-        if (!authVerifier.isAuthorized(authorizationHeader)) {
-            log.warn("OneBot Webhook 令牌校验失败，拒绝请求");
+        return accept(authorizationHeader, null, null, payload);
+    }
+
+    /**
+     * 同步网关入口：支持 Bearer 或 NapCat HTTP 客户端默认的 {@code X-Signature}。
+     *
+     * @param rawBody 原始请求体字节；X-Signature 必须对未重新序列化的 body 计算
+     */
+    public WebhookDecision accept(String authorizationHeader, String signatureHeader,
+                                  byte[] rawBody, JsonNode payload) {
+        if (!authVerifier.isAuthorized(authorizationHeader, signatureHeader, rawBody)) {
+            log.warn("OneBot Webhook 令牌/签名校验失败，拒绝请求");
             return WebhookDecision.unauthorized();
         }
         String traceId = TraceContext.currentOrGeneratedTraceId();

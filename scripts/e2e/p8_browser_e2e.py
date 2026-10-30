@@ -124,10 +124,14 @@ def main() -> int:
     if note is None:
         print(f"\nP8 browser E2E: {len(FAILS)} failure(s)")
         return 1
-    check("QQ 离线时通知仍在 Web 可见",
-          note.get("outbound_status") in (
-              "PENDING_IM", "RATE_LIMITED_DELAYED", "FALLBACK_WEB_ONLY", "SENT_IM"),
-          note)
+    # QQ 离线时不能只接受“任意非终态”：必须最终降级为 FALLBACK_WEB_ONLY，
+    # 否则说明调度器仍卡在 PENDING_IM / RATE_LIMITED_DELAYED，不能证明降级链路可用。
+    final_note = wait_for(lambda: (lambda item: item if item and item.get("outbound_status")
+                                  == "FALLBACK_WEB_ONLY" else None)(
+        find_notification(client, token, task_id)), timeout=60)
+    check("QQ 离线时通知最终 FALLBACK_WEB_ONLY", final_note is not None,
+          find_notification(client, token, task_id))
+    note = final_note or note
 
     session = json.dumps({"token": token, "user": {"user_id": uid, "username": username}})
     console_errors: list[str] = []

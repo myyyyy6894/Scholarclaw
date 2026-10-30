@@ -247,8 +247,10 @@ python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380 -
 NapCat 容器仍未纳入 Compose。它验证的是 Java 侧 OneBot 协议处理、站内通知、出站令牌桶/
 抖动/重试/降级与 Web 通知中心，不证明真实 QQ 平台可用。
 
-前置：最新 Java/Web 镜像已构建（`mvn -DskipTests package`、`npm run build`、
-`docker compose build sc-java-backend sc-web-nginx`）。
+前置：最新 Java/Python/Web 镜像已构建（`mvn -DskipTests package`、`npm run build`、
+`docker compose build sc-java-backend sc-python-ai sc-web-nginx`）。
+Python 也会校验模型 Base URL 白名单；只重建 Java/Web 会让 Python 保留旧白名单并返回
+`E-SYS-02`，因此启动与恢复都必须重建 `sc-python-ai`。
 
 ```bash
 # 1) 模型替身 + OneBot Action 替身（内部网络；OneBot 额外映射 127.0.0.1:19090 供测试读取调用记录）
@@ -282,7 +284,12 @@ SC_DDL_REMINDER_INITIAL_DELAY_MS=2000
 SC_DDL_REMINDER_INTERVAL_MS=3000
 EOF
 
-docker compose --env-file /tmp/sc-p8-e2e.env up -d --force-recreate sc-java-backend sc-web-nginx
+docker compose --env-file /tmp/sc-p8-e2e.env up -d --force-recreate \
+  sc-java-backend sc-python-ai sc-web-nginx
+
+# 2b) 必须确认 Python 已使用当前 mock IP 的白名单，否则模型调用会先报 E-SYS-02
+docker compose exec -T sc-python-ai printenv SC_LOCAL_MODEL_ALLOWED_ORIGINS
+# 期望输出：http://$MOCK_IP:11434
 
 # 3) P8 API：Webhook/白名单/去重/转发/文件/通知/IM 出站/fallback
 sc-python-ai/.venv/bin/python scripts/e2e/p8_api_e2e.py \
@@ -296,20 +303,26 @@ docker stop sc-p8-mock-onebot
 /tmp/sc-e2e-venv/bin/python scripts/e2e/p8_browser_e2e.py --base-url http://127.0.0.1
 ```
 
-P8 API 覆盖：错误令牌 401、未绑定发送者静默丢弃、meta ACK、私聊/群 @ 文本、单层转发、
-嵌套转发 `E-IM-03`、重复消息 `DUPLICATE_IGNORED`、无 Embedding 文件下载前拦截、合法文件
-默认课程入库、T-6h 提醒→站内通知→IM `SENT_IM`、未绑定用户 `FALLBACK_WEB_ONLY`、
-协议端失败 3 次后 `FALLBACK_WEB_ONLY`。浏览器覆盖：通知角标/标题/全部已读、未读归零、
+P8 API 覆盖：错误令牌 401、未绑定发送者静默丢弃、meta ACK、私聊/群 @ 文本（精确断言
+`send_group_msg` 与 `group_id`，且不私聊发送者）、单层转发、嵌套转发 `E-IM-03`、重复消息
+`DUPLICATE_IGNORED` 且不产生第二个 DDL 任务、无 Embedding 文件下载前拦截、只有 `data.file`
+的文件段、合法文件默认课程入库、文件 URL SSRF（云元数据/回环）拦截、T-6h 提醒→站内通知→IM
+`SENT_IM`、未绑定用户 `FALLBACK_WEB_ONLY`、协议端失败 3 次后 `FALLBACK_WEB_ONLY`。
+浏览器覆盖：通知角标/标题/全部已读、未读归零、QQ 离线时通知最终 `FALLBACK_WEB_ONLY`、
 DDL 页面在 QQ 离线时正常加载、无 console error。
 
-清理（恢复原 `.env` 并删除替身）：
+清理（恢复原 `.env`、删除替身并确认整栈健康）：
 
 ```bash
 docker stop sc-p8-mock-onebot sc-p7-mock
 docker rm sc-p8-mock-onebot sc-p7-mock
 cp .env /tmp/sc-p8-e2e-restore.env
-docker compose --env-file /tmp/sc-p8-e2e-restore.env up -d --force-recreate sc-java-backend
+# 必须同时恢复 Java、Python 与 Web：Python 的模型白名单、Web 的反代配置都可能被临时 env 影响
+docker compose --env-file /tmp/sc-p8-e2e-restore.env up -d --force-recreate \
+  sc-java-backend sc-python-ai sc-web-nginx
 rm -f /tmp/sc-p8-e2e.env /tmp/sc-p8-e2e-restore.env
+docker compose ps
+# 期望：7 个服务均为 running/healthy
 ```
 
 **诚实边界：** 真实 NapCat/真实 QQ、真实供应商模型、真实平台风控与限流行为仍未验证；

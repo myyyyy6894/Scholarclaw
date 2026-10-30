@@ -590,6 +590,19 @@ describe('completed task editing', () => {
     expect(operationColumn).toContain('openEditDialog(row)')
     expect(operationColumn).toContain('取消')
   })
+
+  it('页面不再展示“提醒调度尚未接入”的过期文案', () => {
+    const source = readFileSync(
+      new URL('../src/views/DdlView.vue', import.meta.url),
+      'utf8',
+    )
+
+    expect(source).not.toContain('提醒调度尚未接入')
+    expect(source).not.toContain('尚未实现')
+    expect(source).not.toContain('调度属 P8')
+    expect(source).toContain('提醒调度已启用')
+    expect(source).toContain('T-24h / T-6h / 逾期提醒范围')
+  })
 })
 
 

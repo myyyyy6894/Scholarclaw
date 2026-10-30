@@ -23,6 +23,10 @@ CALLS: list[dict] = []
 LOCK = threading.Lock()
 FAIL_UID = 24681014
 PDF_BYTES = b"%PDF-1.7\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+PDF_ONLY_FILE_BYTES = (
+    b"%PDF-1.7\n1 0 obj<</Type/Catalog /Title(p8-only-file)>>endobj\n"
+    b"trailer<</Root 1 0 R>>\n%%EOF\n"
+)
 
 
 def record(action: str, body: dict) -> None:
@@ -71,15 +75,23 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(200, {"status": "ok", "retcode": 0, "data": {"message_id": 1}})
             return
+        if self.path == "/send_group_msg":
+            record("send_group_msg", body)
+            self._json(200, {"status": "ok", "retcode": 0, "data": {"message_id": 2}})
+            return
         if self.path == "/get_file":
             record("get_file", body)
-            encoded = base64.b64encode(PDF_BYTES).decode()
+            reference = str(body.get("file") or body.get("file_id") or "")
+            only_file = "only" in reference
+            payload = PDF_ONLY_FILE_BYTES if only_file else PDF_BYTES
+            file_name = "p8_only_file.pdf" if only_file else "p8_e2e.pdf"
+            encoded = base64.b64encode(payload).decode()
             self._json(200, {
                 "status": "ok",
                 "retcode": 0,
                 "data": {
-                    "file_name": "p8_e2e.pdf",
-                    "file_size": len(PDF_BYTES),
+                    "file_name": file_name,
+                    "file_size": len(payload),
                     "file": "base64://" + encoded,
                 },
             })

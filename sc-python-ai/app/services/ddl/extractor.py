@@ -65,7 +65,9 @@ SHAPE_RETRY_DELAYS: tuple[float, ...] = (0.2,)
 MAX_EXTRACTION_READ_TIMEOUT_SECONDS = 10.0
 
 _GATEWAY_PATH = "chat/completions"
-_MAX_OUTPUT_TOKENS = 800
+#: 提取输出上限。800 对 JSON 本身足够，但部分推理型/短输出模型会先消耗
+#: reasoning tokens，导致 content 被截断成非法 JSON；保留 1600 给推理与格式波动。
+_MAX_OUTPUT_TOKENS = 1600
 
 #: 原文中的模糊时间限定词与绝对日期模式集中在 :mod:`app.services.ddl.time_keywords`。
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")

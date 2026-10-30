@@ -13,6 +13,10 @@ import java.time.LocalDateTime;
  * <p>{@code dueAt} 是应用时区（{@link com.scholarclaw.common.config.ScTimeZone}）墙钟时间；
  * {@code dueAtUserZone} 是按 {@code userTimezone} 换算后的展示时间，二者可为 {@code null}
  * （例如 {@code PENDING_TIME} 没有截止时间）。
+ *
+ * <p>{@code advancedForDnd} 只对 T-6h 有意义：为 {@code true} 表示触发时刻因夜间免打扰
+ * 从 {@code due_at - 6h} 提前到窗口开始前 1 小时。通知文案必须据此说明“提前发送”，
+ * 不得继续声称“距截止不足 6 小时”。
  */
 public record DdlReminderDispatch(
         Long userId,
@@ -30,6 +34,7 @@ public record DdlReminderDispatch(
         LocalDateTime dueAtUserZone,
         String userTimezone,
         int followUpCount,
+        boolean advancedForDnd,
         LocalDateTime occurredAt,
         String traceId) {
 }

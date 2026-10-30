@@ -12,6 +12,9 @@ WORKDIR /app
 
 # 文档基线：Node 20 LTS 用于构建（docs/02 §1.3）
 ARG NPM_REGISTRY=https://registry.npmjs.org/
+# 构建期注入的 NapCat WebUI 跳转地址（非密钥）；远程部署时由 compose build args 覆盖。
+ARG VITE_NAPCAT_WEBUI_URL=http://127.0.0.1:6099
+ENV VITE_NAPCAT_WEBUI_URL=${VITE_NAPCAT_WEBUI_URL}
 
 # 先复制依赖清单再安装，改业务代码时不会让依赖层缓存失效。
 # 注意：package-lock.json 的 resolved 指向 npmmirror（生成时的网络条件所致，见 RISK-19），

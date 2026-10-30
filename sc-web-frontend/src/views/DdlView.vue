@@ -358,7 +358,7 @@ const editHint = computed(() => {
     return ''
   }
   if (task.status === 'PENDING_TIME' || task.status === 'PENDING_CONFIRM') {
-    return '补充明确的截止日期后保存，任务会激活并进入可提醒范围（T-24h / T-6h 等调度属 P8，尚未接入）。'
+    return '补充明确的截止日期后保存，任务会激活并进入 T-24h / T-6h / 逾期提醒范围。'
   }
   if (task.status === 'COMPLETED') {
     return '已完成任务只更新字段，仍保持完成状态；如需重新计时，请先取消完成勾选。'
@@ -488,8 +488,8 @@ async function cancelTask(task: DdlTask): Promise<void> {
       type="info"
       :closable="false"
       show-icon
-      title="提醒调度尚未接入（P8）"
-      description="当前页面管理任务状态与截止时间；T-24h / T-6h / 逾期与待确认跟进提醒属于 TASK-801/802，尚未实现。"
+      title="提醒调度已启用"
+      description="T-24h、T-6h、逾期与待确认跟进提醒由后台调度自动执行；站内通知始终可用，QQ 推送失败或离线时会降级为仅 Web 展示。"
     />
 
     <el-card class="sc-card-gap" shadow="never">
@@ -564,7 +564,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
         <template #header>
           <div class="sc-ddl-section__header">
             <span>待确认收件箱（{{ board.pending_inbox_tasks.length }}）</span>
-            <span class="sc-ddl-muted">补充时间后进入可提醒状态（调度属 P8）</span>
+            <span class="sc-ddl-muted">补充时间后进入 T-24h / T-6h / 逾期提醒范围</span>
           </div>
         </template>
         <el-empty

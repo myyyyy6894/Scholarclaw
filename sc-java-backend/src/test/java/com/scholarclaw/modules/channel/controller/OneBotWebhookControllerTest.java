@@ -39,15 +39,17 @@ class OneBotWebhookControllerTest {
     void setUp() {
         webhookService = mock(OneBotWebhookService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
-                        new OneBotWebhookController(webhookService))
-                .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
+                        new OneBotWebhookController(webhookService, MAPPER))
+                .setMessageConverters(
+                        new org.springframework.http.converter.ByteArrayHttpMessageConverter(),
+                        new MappingJackson2HttpMessageConverter(MAPPER))
                 .build();
     }
 
     @Test
     @DisplayName("令牌失败：HTTP 401 空响应，不返回业务信封")
     void returnsUnauthorizedWithoutBody() throws Exception {
-        when(webhookService.accept(eq("Bearer wrong"), any()))
+        when(webhookService.accept(eq("Bearer wrong"), eq(null), any(), any()))
                 .thenReturn(WebhookDecision.unauthorized());
 
         mockMvc.perform(post(PATH)
@@ -57,13 +59,13 @@ class OneBotWebhookControllerTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(content().string(""));
 
-        verify(webhookService).accept(eq("Bearer wrong"), any());
+        verify(webhookService).accept(eq("Bearer wrong"), eq(null), any(), any());
     }
 
     @Test
     @DisplayName("白名单拒绝：HTTP 200 空响应（OneBot 不应重试）")
     void returnsEmptyOkForRejectedSender() throws Exception {
-        when(webhookService.accept(eq("Bearer token"), any()))
+        when(webhookService.accept(eq("Bearer token"), eq(null), any(), any()))
                 .thenReturn(WebhookDecision.emptyOk());
 
         mockMvc.perform(post(PATH)
@@ -77,7 +79,7 @@ class OneBotWebhookControllerTest {
     @Test
     @DisplayName("正常/重复：HTTP 200 OneBot ACK，snake_case 字段")
     void returnsOneBotAck() throws Exception {
-        when(webhookService.accept(eq("Bearer token"), any()))
+        when(webhookService.accept(eq("Bearer token"), eq(null), any(), any()))
                 .thenReturn(WebhookDecision.ack(new OneBotAck("ok", 0,
                         "DUPLICATE_IGNORED", "tr_81a1b2c3d4e5")));
 
@@ -96,7 +98,7 @@ class OneBotWebhookControllerTest {
     @Test
     @DisplayName("缺少 Authorization 头也交由服务层判定（不会抛 500）")
     void missingAuthorizationIsHandledByService() throws Exception {
-        when(webhookService.accept(eq(null), any()))
+        when(webhookService.accept(eq(null), eq(null), any(), any()))
                 .thenReturn(WebhookDecision.unauthorized());
 
         mockMvc.perform(post(PATH)

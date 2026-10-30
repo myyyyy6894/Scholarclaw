@@ -82,7 +82,7 @@ public class OneBotChannelAdapter {
             try {
                 forwarded = oneBotApiClient.getForwardText(event.forwardId());
             } catch (BusinessException e) {
-                reply(imUid, userMessage(e));
+                reply(event, imUid, userMessage(e));
                 return;
             }
             processText(event, userId, imUid, forwarded);
@@ -98,7 +98,7 @@ public class OneBotChannelAdapter {
             return;
         }
         if (rawText.length() > MAX_TEXT_LENGTH) {
-            reply(imUid, "⚠️ 消息文本过长，请分段发送，或在 PC Web 工作台粘贴完整通知。");
+            reply(event, imUid, "⚠️ 消息文本过长，请分段发送，或在 PC Web 工作台粘贴完整通知。");
             return;
         }
         try {
@@ -111,16 +111,16 @@ public class OneBotChannelAdapter {
                     null,
                     false));
             if (result != null && result.replyText() != null && !result.replyText().isBlank()) {
-                reply(imUid, result.replyText());
+                reply(event, imUid, result.replyText());
             }
         } catch (BusinessException e) {
             log.warn("OneBot 文本处理失败 messageId={} code={}",
                     event.messageId(), e.getErrorCode().code());
-            reply(imUid, userMessage(e));
+            reply(event, imUid, userMessage(e));
         } catch (RuntimeException e) {
             log.error("OneBot 文本处理未预期失败 messageId={} error={}",
                     event.messageId(), e.getClass().getSimpleName(), e);
-            reply(imUid, GENERIC_FAILURE);
+            reply(event, imUid, GENERIC_FAILURE);
         }
     }
 
@@ -129,16 +129,28 @@ public class OneBotChannelAdapter {
         UserConfigEntity config = configOpt.orElse(null);
         if (config == null || !modelConfigRules.isEmbeddingConfigValid(config)) {
             // DB-07：配置不完整时不得下载文件、建默认课程、写库或发 MQ。
-            reply(imUid, ErrorCode.E_SYS_01.defaultMessage());
+            reply(event, imUid, ErrorCode.E_SYS_01.defaultMessage());
             return;
         }
         String fileName = event.fileName();
+        if (fileName == null || fileName.isBlank()) {
+            // 事件只有 file_id（或 file 只是 ID）时，先通过 get_file 元数据解析文件名；
+            // 该动作不下载文件内容，DB-07 前置检查已经完成。
+            try {
+                fileName = oneBotApiClient.resolveFileName(event.fileReference());
+            } catch (BusinessException e) {
+                log.warn("OneBot 文件元数据解析失败 messageId={} code={}",
+                        event.messageId(), e.getErrorCode().code());
+                reply(event, imUid, userMessage(e));
+                return;
+            }
+        }
         if (!supportedExtension(fileName)) {
-            reply(imUid, ErrorCode.FILE_TYPE_UNSUPPORTED.defaultMessage());
+            reply(event, imUid, ErrorCode.FILE_TYPE_UNSUPPORTED.defaultMessage());
             return;
         }
         if (event.fileSize() > OneBotApiClient.MAX_FILE_BYTES) {
-            reply(imUid, ErrorCode.FILE_SIZE_EXCEEDED.defaultMessage());
+            reply(event, imUid, ErrorCode.FILE_SIZE_EXCEEDED.defaultMessage());
             return;
         }
 
@@ -148,7 +160,7 @@ public class OneBotChannelAdapter {
         } catch (BusinessException e) {
             log.warn("OneBot 文件下载失败 messageId={} code={}",
                     event.messageId(), e.getErrorCode().code());
-            reply(imUid, userMessage(e));
+            reply(event, imUid, userMessage(e));
             return;
         }
 
@@ -156,24 +168,39 @@ public class OneBotChannelAdapter {
             DefaultCourseUpload uploaded = knowledgeUploadService.uploadToDefaultCourse(
                     userId, file.fileName(), file.contentType(), file.content());
             KnowledgeDocVO doc = uploaded.doc();
-            reply(imUid, "⏳ 收到文件《" + doc.docName() + "》（" + formatSize(doc.fileSizeBytes())
+            reply(event, imUid, "⏳ 收到文件《" + doc.docName() + "》（" + formatSize(doc.fileSizeBytes())
                     + "），已加入【" + uploaded.courseName() + "】知识库并开始解析"
                     + "（追踪号：" + com.scholarclaw.common.filter.TraceContext
                     .currentOrGeneratedTraceId() + "）。解析完成后会发送站内通知。");
         } catch (BusinessException e) {
             log.warn("OneBot 文件入库失败 messageId={} code={}",
                     event.messageId(), e.getErrorCode().code());
-            reply(imUid, userMessage(e));
+            reply(event, imUid, userMessage(e));
         } catch (RuntimeException e) {
             log.error("OneBot 文件入库未预期失败 messageId={} error={}",
                     event.messageId(), e.getClass().getSimpleName(), e);
-            reply(imUid, GENERIC_FAILURE);
+            reply(event, imUid, GENERIC_FAILURE);
         }
     }
 
-    private void reply(Long imUid, String text) {
+    /**
+     * 回复目标必须与入站场景一致：群聊 {@code @} 回原群，私聊回私聊。
+     *
+     * <p>若群消息缺少合法 {@code group_id}，退回私聊发送者并在日志中标注；这属于协议端
+     * 报文异常，不应把“群聊回复”静默变成“私聊回复”。
+     */
+    private void reply(OneBotEvent event, Long imUid, String text) {
         if (text == null || text.isBlank()) {
             return;
+        }
+        if (event != null && event.groupMessage()) {
+            Long groupId = parseImUid(event.groupId());
+            if (groupId != null) {
+                oneBotApiClient.sendGroupMsg(groupId, text);
+                return;
+            }
+            log.warn("群消息缺少合法 group_id，退回私聊回复 senderId={} messageId={}",
+                    event.senderId(), event.messageId());
         }
         oneBotApiClient.sendPrivateMsg(imUid, text);
     }

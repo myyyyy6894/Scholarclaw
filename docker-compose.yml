@@ -41,6 +41,11 @@ volumes:
   # 原始课件共享卷：Java 读写，Python 只读挂载 /raw（02 §13.3）
   vol_shared_storage:
     name: vol_shared_storage
+  # NapCat 可选协议端（profile=onebot）：QQ 登录态与 OneBot 配置持久化
+  vol_napcat_qq:
+    name: vol_napcat_qq
+  vol_napcat_config:
+    name: vol_napcat_config
 
 services:
 
@@ -170,6 +175,10 @@ services:
       sc-rabbitmq:
         condition: service_healthy
     networks: [scholarclaw-public, scholarclaw-internal]
+    # 允许容器通过 host.docker.internal 访问宿主/其他 bridge 网络中的本地 Ollama；
+    # 仅用于本地模型白名单（SC_ALLOW_LOCAL_MODEL_BASE_URL）场景。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # 不映射宿主机端口：对外只经 sc-web-nginx 反向代理
     environment:
       TZ: ${SC_TIMEZONE:-Asia/Shanghai}
@@ -207,10 +216,15 @@ services:
       SC_LOCAL_MODEL_ALLOWED_ORIGINS: ${SC_LOCAL_MODEL_ALLOWED_ORIGINS:-}
       SC_IM_PUSH_ENABLED: ${SC_IM_PUSH_ENABLED:-false}
       SC_ONEBOT_ACCESS_TOKEN: ${SC_ONEBOT_ACCESS_TOKEN:-}
-      # TASK-803 OneBot 入站/出站；NapCat 容器本身仍为可选组件（未纳入本编排）。
-      SC_ONEBOT_BASE_URL: ${SC_ONEBOT_BASE_URL:-}
+      # TASK-803 OneBot 入站/出站；NapCat 为可选 profile（docker compose --profile onebot up -d）。
+      # 默认指向同网络的 sc-napcat-onebot；不使用 NapCat 时保持空值即可（入站无人上报，出站仍受总开关约束）。
+      SC_ONEBOT_BASE_URL: ${SC_ONEBOT_BASE_URL:-http://sc-napcat-onebot:3000}
       SC_ONEBOT_ALLOWED_SENDERS: ${SC_ONEBOT_ALLOWED_SENDERS:-}
+      # OneBot 文件下载 Origin 白名单（逗号分隔）；默认空=拒绝回环/私网文件 URL。
+      # 同机/同 Docker 网络的 NapCat 临时文件服务需显式加入，如 http://sc-napcat-onebot:3000。
+      SC_ONEBOT_FILE_ALLOWED_ORIGINS: ${SC_ONEBOT_FILE_ALLOWED_ORIGINS:-}
       SC_ONEBOT_ACTION_TIMEOUT_MS: ${SC_ONEBOT_ACTION_TIMEOUT_MS:-5000}
+      SC_ONEBOT_FILE_TIMEOUT_MS: ${SC_ONEBOT_FILE_TIMEOUT_MS:-30000}
       SC_ONEBOT_EXECUTOR_CORE_SIZE: ${SC_ONEBOT_EXECUTOR_CORE_SIZE:-2}
       SC_ONEBOT_EXECUTOR_MAX_SIZE: ${SC_ONEBOT_EXECUTOR_MAX_SIZE:-4}
       SC_ONEBOT_EXECUTOR_QUEUE_CAPACITY: ${SC_ONEBOT_EXECUTOR_QUEUE_CAPACITY:-200}
@@ -289,6 +303,9 @@ services:
       sc-java-backend:
         condition: service_healthy
     networks: [scholarclaw-internal]
+    # 本地 Ollama 白名单场景：让 Python 的 SSRF 校验与出站请求都能解析 host.docker.internal。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # ⚠️ 严禁出现：SC_MASTER_KEY、SC_DB_*、SC_REDIS_PASSWORD、SC_JWT_SECRET（02 §13.2）
     environment:
       TZ: ${SC_TIMEZONE:-Asia/Shanghai}
@@ -349,6 +366,8 @@ services:
       context: ./sc-web-frontend
       args:
         NPM_REGISTRY: ${SC_NPM_REGISTRY:-https://registry.npmjs.org/}
+        # NapCat WebUI 跳转地址（非密钥）；远程部署时在 .env 覆盖并重建 Web 镜像。
+        VITE_NAPCAT_WEBUI_URL: ${VITE_NAPCAT_WEBUI_URL:-http://127.0.0.1:6099}
     image: scholarclaw/sc-web-nginx:1.0.0
     container_name: sc-web-nginx
     restart: unless-stopped
@@ -369,7 +388,35 @@ services:
       retries: 5
       start_period: 10s
 
-# 说明（有意未包含的服务）：
-#   sc-napcat-onebot —— 02 §13.1 标注为「可选」的 OneBot 11 客户端容器，且 MVP 验收不依赖它。
-#   社区镜像 tag 无法在无外部协议端的情况下验证，故留待 TASK-803（OneBot 适配器）落地时
-#   连同镜像 tag 一并确认，避免在此写下一个未经验证的镜像引用。
+  # ---------------------------------------------------------------------------
+  # NapCat（OneBot 11 协议端）—— 可选 profile，不参与 MVP 默认启动
+  # 启动：docker compose --profile onebot up -d sc-napcat-onebot
+  # WebUI：http://127.0.0.1:${SC_NAPCAT_WEBUI_PORT:-6099}（扫码登录 QQ）
+  # 说明：社区镜像 tag 无法在无真实 QQ 登录态时验证；生产部署前请 pin 具体版本。
+  #       3000/6099 只绑定 127.0.0.1，不暴露到局域网/公网。
+  # ---------------------------------------------------------------------------
+  sc-napcat-onebot:
+    image: mlikiowa/napcat-docker:latest
+    container_name: sc-napcat-onebot
+    restart: unless-stopped
+    profiles: ["onebot"]
+    networks: [scholarclaw-internal]
+    ports:
+      # 默认只绑定回环；远程访问 WebUI 时把 SC_NAPCAT_WEBUI_BIND 改为 0.0.0.0（仅限可信内网/VPN）。
+      - "${SC_NAPCAT_WEBUI_BIND:-127.0.0.1}:${SC_NAPCAT_WEBUI_PORT:-6099}:6099"
+      - "${SC_NAPCAT_HTTP_BIND:-127.0.0.1}:${SC_NAPCAT_HTTP_PORT:-3000}:3000"
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+    volumes:
+      - vol_napcat_qq:/app/.config/QQ
+      - vol_napcat_config:/app/napcat/config
+    mem_limit: 1024m
+
+# 说明（OneBot/NapCat）：
+#   sc-napcat-onebot 已作为可选 profile 纳入编排。默认 `docker compose up -d` 不会启动它；
+#   显式 `docker compose --profile onebot up -d sc-napcat-onebot` 才会创建。
+#   它连接 scholarclaw-internal，因此 OneBot Action API 可直接用服务名
+#   http://sc-napcat-onebot:3000；入站上报地址为
+#   http://sc-java-backend:8080/webhooks/onebot/v11（或经 Nginx /webhooks/）。
+#   若 NapCat 运行在宿主机/另一台机器，则改用可达的宿主机 IP/公网域名，并自行承担 TLS、
+#   防火墙与令牌保护；不要求与 Java 处于同一个 Docker 网络。

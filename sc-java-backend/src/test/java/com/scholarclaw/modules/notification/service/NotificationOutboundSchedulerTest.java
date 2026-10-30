@@ -263,6 +263,37 @@ class NotificationOutboundSchedulerTest {
     }
 
     @Test
+    @DisplayName("发送成功后 markSent 未生效：本轮仍算已发送，不能误判为发送失败重试")
+    void doesNotTreatMarkSentFailureAsSendFailure() {
+        when(mapper.markSent(NOTIFICATION_ID, LEASE, NOW)).thenReturn(0);
+
+        NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
+
+        assertThat(summary.sent()).isEqualTo(1);
+        verify(oneBotApiClient).sendPrivateMsg(24681012L, "提醒正文");
+        verify(mapper, never()).markRetry(anyLong(), any(), any(), anyInt(), anyString(), any());
+        verify(mapper, never()).markFallback(anyLong(), any(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("故障注入：发送成功后 markSent 抛异常，租约到期重试会重复发送（至少一次契约）")
+    void documentsAtLeastOnceWhenMarkSentThrows() {
+        when(mapper.markSent(NOTIFICATION_ID, LEASE, NOW))
+                .thenThrow(new IllegalStateException("db write failed"));
+
+        NotificationOutboundScheduler.DispatchSummary first = scheduler.dispatchOnce();
+        NotificationOutboundScheduler.DispatchSummary second = scheduler.dispatchOnce();
+
+        assertThat(first.failed()).isEqualTo(1);
+        assertThat(second.failed()).isEqualTo(1);
+        // 消息已实际送达两次：系统行为与“正常路径至少一次投递 + 本地去重”的契约一致，
+        // 不能声明严格恰好一次。
+        verify(oneBotApiClient, org.mockito.Mockito.times(2))
+                .sendPrivateMsg(24681012L, "提醒正文");
+        verify(mapper, never()).markRetry(anyLong(), any(), any(), anyInt(), anyString(), any());
+    }
+
+    @Test
     @DisplayName("调度注解显式声明时区（ENV-01）")
     void scheduledAnnotationDeclaresZone() throws Exception {
         Scheduled scheduled = NotificationOutboundScheduler.class

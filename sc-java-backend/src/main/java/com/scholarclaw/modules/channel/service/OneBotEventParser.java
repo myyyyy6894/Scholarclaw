@@ -42,22 +42,24 @@ public class OneBotEventParser {
         }
         String selfId = text(payload, "self_id");
         String senderId = text(payload, "user_id");
+        String groupId = text(payload, "group_id");
         long time = number(payload.path("time"), 0L);
 
         if ("meta_event".equals(postType)) {
-            return new OneBotEvent(postType, null, null, null, senderId, selfId, time,
+            return new OneBotEvent(postType, null, null, null, senderId, selfId, null, time,
                     null, null, null, null, -1L, true, false, true, "meta_event");
         }
         if ("notice".equals(postType)) {
-            return parseNotice(payload, senderId, selfId, time);
+            return parseNotice(payload, senderId, selfId, groupId, time);
         }
         if (!"message".equals(postType)) {
-            return ignored(postType, null, null, senderId, selfId, time, "unsupported_post_type");
+            return ignored(postType, null, null, senderId, selfId, groupId, time,
+                    "unsupported_post_type");
         }
 
         String messageType = text(payload, "message_type").toLowerCase(Locale.ROOT);
         if (!"private".equals(messageType) && !"group".equals(messageType)) {
-            return ignored("message", messageType, null, senderId, selfId, time,
+            return ignored("message", messageType, null, senderId, selfId, groupId, time,
                     "unsupported_message_type");
         }
         String messageId = text(payload, "message_id");
@@ -65,9 +67,9 @@ public class OneBotEventParser {
             throw new IllegalArgumentException("消息缺少 message_id/user_id");
         }
         if (senderId.equals(selfId)) {
-            return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId, time,
-                    null, null, null, null, -1L, false, "group".equals(messageType),
-                    true, "self_message");
+            return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId,
+                    groupId, time, null, null, null, null, -1L, false,
+                    "group".equals(messageType), true, "self_message");
         }
 
         MessageParts parts = new MessageParts();
@@ -81,37 +83,44 @@ public class OneBotEventParser {
 
         boolean group = "group".equals(messageType);
         if (group && !parts.atSelf) {
-            return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId, time,
-                    null, null, null, null, -1L, false, true, true, "group_not_at_bot");
+            return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId,
+                    groupId, time, null, null, null, null, -1L, false, true, true,
+                    "group_not_at_bot");
         }
         String text = parts.text.toString();
         if (parts.fileReference == null && parts.forwardId == null && text.isBlank()) {
-            return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId, time,
-                    null, null, null, null, -1L, false, group, true, "empty_message");
+            return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId,
+                    groupId, time, null, null, null, null, -1L, false, group, true,
+                    "empty_message");
         }
-        return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId, time,
+        return new OneBotEvent(postType, messageType, null, messageId, senderId, selfId,
+                groupId, time,
                 text.isBlank() ? null : text.trim(),
                 parts.forwardId, parts.fileReference, parts.fileName, parts.fileSize,
                 false, group, false, null);
     }
 
-    private OneBotEvent parseNotice(JsonNode payload, String senderId, String selfId, long time) {
+    private OneBotEvent parseNotice(JsonNode payload, String senderId, String selfId,
+                                    String groupId, long time) {
         String noticeType = text(payload, "notice_type").toLowerCase(Locale.ROOT);
         if (!"group_upload".equals(noticeType)) {
-            return ignored("notice", null, noticeType, senderId, selfId, time,
+            return ignored("notice", null, noticeType, senderId, selfId, groupId, time,
                     "unsupported_notice_type");
         }
         JsonNode file = payload.path("file");
+        String fileValue = text(file, "file");
         String fileReference = firstNonBlank(
-                text(file, "id"), text(file, "file_id"), text(file, "file"));
-        String fileName = firstNonBlank(text(file, "name"), text(file, "file_name"));
+                text(file, "id"), text(file, "file_id"), fileValue);
+        String fileName = firstNonBlank(text(file, "name"), text(file, "file_name"),
+                looksLikeFileName(fileValue) ? fileValue : "");
         long fileSize = number(file.path("size"), -1L);
         if (fileReference.isBlank()) {
-            return ignored("notice", null, noticeType, senderId, selfId, time, "file_missing_id");
+            return ignored("notice", null, noticeType, senderId, selfId, groupId, time,
+                    "file_missing_id");
         }
         // 群文件通知没有 message_id，使用 file.id 作为接入层幂等键。
-        return new OneBotEvent("notice", null, noticeType, fileReference, senderId, selfId, time,
-                null, null, fileReference, fileName, fileSize,
+        return new OneBotEvent("notice", null, noticeType, fileReference, senderId, selfId,
+                groupId, time, null, null, fileReference, fileName, fileSize,
                 false, true, false, null);
     }
 
@@ -129,10 +138,17 @@ public class OneBotEventParser {
                 case "forward" -> parts.forwardId = firstNonBlank(
                         text(data, "id"), text(data, "message_id"));
                 case "file" -> {
+                    String fileValue = text(data, "file");
+                    // 优先 file_id；若协议端同时给了可直接下载的 url，则优先 url，
+                    // 避免把“文件名”当成 file_id 再走一次 get_file。只有 url 缺失时才用 file。
                     parts.fileReference = firstNonBlank(
-                            text(data, "file_id"), text(data, "file"), text(data, "url"));
+                            text(data, "file_id"), text(data, "url"), fileValue);
+                    // OneBot 常见文件段是 {"file":"xxx.pdf","file_size":...}：
+                    // data.file 既可能是文件名，也可能只是 file_id。只有看起来像文件名
+                    // （带扩展名、无路径/协议前缀）时才作为名称候选；否则留给 get_file 解析。
                     parts.fileName = firstNonBlank(
-                            text(data, "name"), text(data, "file_name"));
+                            text(data, "name"), text(data, "file_name"),
+                            looksLikeFileName(fileValue) ? fileValue : "");
                     parts.fileSize = number(data.path("file_size"), -1L);
                 }
                 default -> {
@@ -163,9 +179,31 @@ public class OneBotEventParser {
     }
 
     private static OneBotEvent ignored(String postType, String messageType, String noticeType,
-                                       String senderId, String selfId, long time, String reason) {
-        return new OneBotEvent(postType, messageType, noticeType, null, senderId, selfId, time,
-                null, null, null, null, -1L, false, "group".equals(messageType), true, reason);
+                                       String senderId, String selfId, String groupId,
+                                       long time, String reason) {
+        return new OneBotEvent(postType, messageType, noticeType, null, senderId, selfId,
+                groupId, time, null, null, null, null, -1L, false,
+                "group".equals(messageType), true, reason);
+    }
+
+    /**
+     * 判断 {@code data.file} 是否像文件名而不是 file_id/URL/本机路径。
+     *
+     * <p>要求含扩展名、不含路径分隔符与协议前缀；这样 {@code {"file":"讲义.pdf"}} 可以被
+     * 当成名称直接做扩展名校验，而 {@code {"file":"a1b2c3"}} 会走 {@code get_file} 解析。
+     */
+    static boolean looksLikeFileName(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String candidate = value.trim();
+        if (candidate.startsWith("http://") || candidate.startsWith("https://")
+                || candidate.startsWith("base64://")
+                || candidate.contains("/") || candidate.contains("\\")) {
+            return false;
+        }
+        int dot = candidate.lastIndexOf('.');
+        return dot > 0 && dot < candidate.length() - 1 && candidate.length() <= 255;
     }
 
     private static String text(JsonNode node, String field) {

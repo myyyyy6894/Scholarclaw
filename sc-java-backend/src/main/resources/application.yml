@@ -143,6 +143,13 @@ sc:
     # 额外发送者白名单（逗号分隔 QQ 号）；为空时只要求 t_user_config 绑定 ACTIVE 用户。
     allowed-senders: ${SC_ONEBOT_ALLOWED_SENDERS:}
     action-timeout-ms: ${SC_ONEBOT_ACTION_TIMEOUT_MS:5000}
+    # get_file 可能把整个文件以 base64 返回，需独立放宽超时（默认 30s）。
+    file-timeout-ms: ${SC_ONEBOT_FILE_TIMEOUT_MS:30000}
+    # 文件下载 Origin 白名单（逗号分隔，如 http://127.0.0.1:8080）。
+    # 默认空：拒绝一切回环/私网文件地址；仅在 NapCat 临时文件服务与 Java 同机时显式配置。
+    # 链路本地与云元数据地址即使加入白名单也会被硬拒绝。
+    file:
+      allowed-origins: ${SC_ONEBOT_FILE_ALLOWED_ORIGINS:}
     executor:
       core-size: ${SC_ONEBOT_EXECUTOR_CORE_SIZE:2}
       max-size: ${SC_ONEBOT_EXECUTOR_MAX_SIZE:4}
@@ -173,7 +180,7 @@ sc:
       enabled: ${SC_DDL_REMINDER_ENABLED:true}
       initial-delay-ms: ${SC_DDL_REMINDER_INITIAL_DELAY_MS:60000}
       interval-ms: ${SC_DDL_REMINDER_INTERVAL_MS:60000}
-      # 单类候选（正式梯度 / 跟进）每轮上限；下一分钟继续处理剩余任务。
+      # 候选集 keyset 分页大小；每轮会遍历完整候选集，不是“只扫第一页”。
       batch-size: ${SC_DDL_REMINDER_BATCH_SIZE:200}
       # 必须大于正常扫描耗时；扫描超时会告警，数据库条件更新仍保证不重复领取。
       lock-ttl-seconds: ${SC_DDL_REMINDER_LOCK_TTL_SECONDS:50}

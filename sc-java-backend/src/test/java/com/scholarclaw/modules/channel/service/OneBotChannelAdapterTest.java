@@ -209,9 +209,64 @@ class OneBotChannelAdapterTest {
     }
 
     @Test
+    @DisplayName("群聊 @ 文本：回复必须发回原群，不能私聊发送者")
+    void repliesGroupMessageToGroup() {
+        when(agent.handle(any())).thenReturn(reply("已创建任务 #T102"));
+
+        adapter.process(groupTextEvent("7654321", "数据库作业 10月25日交"), USER_ID);
+
+        verify(oneBotApiClient).sendGroupMsg(7654321L, "已创建任务 #T102");
+        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("事件没有文件名：先 get_file 解析文件名，再做扩展名与下载校验")
+    void resolvesFileNameBeforeExtensionCheck() {
+        when(modelConfigRules.isEmbeddingConfigValid(any())).thenReturn(true);
+        when(oneBotApiClient.resolveFileName("file-1")).thenReturn("b.pdf");
+        when(oneBotApiClient.fetchFile("file-1", "b.pdf"))
+                .thenReturn(new DownloadedFile("b.pdf", "application/pdf",
+                        "%PDF-1.7".getBytes(StandardCharsets.UTF_8)));
+        when(uploadService.uploadToDefaultCourse(eq(USER_ID), eq("b.pdf"),
+                eq("application/pdf"), any()))
+                .thenReturn(new DefaultCourseUpload(doc(), "未分类课程"));
+
+        adapter.process(fileEventWithoutName("file-1"), USER_ID);
+
+        verify(oneBotApiClient).resolveFileName("file-1");
+        verify(oneBotApiClient).fetchFile("file-1", "b.pdf");
+        verify(oneBotApiClient).sendPrivateMsg(eq(IM_UID), anyString());
+    }
+
+    @Test
+    @DisplayName("get_file 解析出错误扩展名：快速拒绝，不下载内容")
+    void rejectsUnsupportedResolvedFileName() {
+        when(modelConfigRules.isEmbeddingConfigValid(any())).thenReturn(true);
+        when(oneBotApiClient.resolveFileName("file-1")).thenReturn("virus.exe");
+
+        adapter.process(fileEventWithoutName("file-1"), USER_ID);
+
+        verify(oneBotApiClient, never()).fetchFile(anyString(), anyString());
+        verify(oneBotApiClient).sendPrivateMsg(IM_UID,
+                ErrorCode.FILE_TYPE_UNSUPPORTED.defaultMessage());
+    }
+
+    @Test
+    @DisplayName("DB-07 未配置时不得先调用 get_file 解析文件名")
+    void blocksMetadataLookupBeforeEmbeddingCheck() {
+        when(modelConfigRules.isEmbeddingConfigValid(any())).thenReturn(false);
+
+        adapter.process(fileEventWithoutName("file-1"), USER_ID);
+
+        verify(oneBotApiClient, never()).resolveFileName(anyString());
+        verify(oneBotApiClient, never()).fetchFile(anyString(), anyString());
+        verify(oneBotApiClient).sendPrivateMsg(IM_UID, ErrorCode.E_SYS_01.defaultMessage());
+    }
+
+    @Test
     @DisplayName("心跳/未 @ 群消息：不处理、不回复")
     void ignoresNonBusinessEvents() {
-        adapter.process(new OneBotEvent("meta_event", null, null, null, null, null, 0,
+        adapter.process(new OneBotEvent("meta_event", null, null, null, null, null, null, 0,
                 null, null, null, null, -1, true, false, true, "meta_event"), USER_ID);
 
         verify(agent, never()).handle(any());
@@ -220,20 +275,32 @@ class OneBotChannelAdapterTest {
 
     private static OneBotEvent textEvent(String text) {
         return new OneBotEvent("message", "private", null, MESSAGE_ID,
-                String.valueOf(IM_UID), "987654321", 1760509200L, text,
+                String.valueOf(IM_UID), "987654321", null, 1760509200L, text,
                 null, null, null, -1, false, false, false, null);
     }
 
     private static OneBotEvent forwardEvent() {
         return new OneBotEvent("message", "private", null, MESSAGE_ID,
-                String.valueOf(IM_UID), "987654321", 1760509200L, null,
+                String.valueOf(IM_UID), "987654321", null, 1760509200L, null,
                 "forward-1", null, null, -1, false, false, false, null);
     }
 
     private static OneBotEvent fileEvent(String fileName) {
         return new OneBotEvent("message", "private", null, MESSAGE_ID,
-                String.valueOf(IM_UID), "987654321", 1760509200L, null,
+                String.valueOf(IM_UID), "987654321", null, 1760509200L, null,
                 null, "file-1", fileName, 1024, false, false, false, null);
+    }
+
+    private static OneBotEvent groupTextEvent(String groupId, String text) {
+        return new OneBotEvent("message", "group", null, MESSAGE_ID,
+                String.valueOf(IM_UID), "987654321", groupId, 1760509200L, text,
+                null, null, null, -1, false, true, false, null);
+    }
+
+    private static OneBotEvent fileEventWithoutName(String fileReference) {
+        return new OneBotEvent("message", "private", null, MESSAGE_ID,
+                String.valueOf(IM_UID), "987654321", null, 1760509200L, null,
+                null, fileReference, null, 1024, false, false, false, null);
     }
 
     private static UserConfigEntity user() {

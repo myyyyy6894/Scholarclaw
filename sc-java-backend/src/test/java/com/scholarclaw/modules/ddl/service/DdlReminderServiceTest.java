@@ -2,6 +2,8 @@ package com.scholarclaw.modules.ddl.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -53,9 +55,9 @@ class DdlReminderServiceTest {
     void scansBothCandidateGroupsWithUserPreference() {
         DdlTaskEntity active = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
         DdlTaskEntity pending = pendingTask(PENDING_TASK_ID, NOW.minusHours(1));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(active));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of(pending));
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of(pending));
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config(
                 "Asia/Shanghai", LocalTime.of(23, 30), LocalTime.of(7, 30))));
         DdlReminderDispatch activeDispatch = dispatch(ACTIVE_TASK_ID,
@@ -82,9 +84,9 @@ class DdlReminderServiceTest {
     @DisplayName("用户配置缺失：跳过提醒且不写任务表")
     void skipsWhenUserConfigMissing() {
         DdlTaskEntity active = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(active));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.empty());
 
         DdlReminderService.ReminderScanResult result = service.scan(NOW, TRACE_ID);
@@ -99,9 +101,9 @@ class DdlReminderServiceTest {
     @DisplayName("注销中的用户不再收到提醒")
     void skipsDeactivatingUser() {
         DdlTaskEntity active = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(active));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         UserConfigEntity config = config("Asia/Shanghai", null, null);
         config.setAccountStatus("DEACTIVATING");
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config));
@@ -117,9 +119,9 @@ class DdlReminderServiceTest {
     void isolatesPerTaskFailure() {
         DdlTaskEntity failing = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
         DdlTaskEntity healthy = activeTask(ACTIVE_TASK_ID + 1, NOW.plusHours(11));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(failing, healthy));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config(
                 "Asia/Shanghai", null, null)));
         when(claimer.claim(eq(failing), any(), any(), any(), any(), anyString()))
@@ -139,9 +141,9 @@ class DdlReminderServiceTest {
     @DisplayName("读取用户配置异常：计入失败且继续扫描其他用户")
     void isolatesConfigReadFailure() {
         DdlTaskEntity task = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(task));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         when(userConfigService.findById(USER_ID)).thenThrow(new IllegalStateException("db down"));
 
         DdlReminderService.ReminderScanResult result = service.scan(NOW, TRACE_ID);
@@ -154,9 +156,9 @@ class DdlReminderServiceTest {
     @DisplayName("领取返回空（并发已领取/任务已变化）计入 unclaimed，不算失败")
     void countsUnclaimedWhenClaimerReturnsEmpty() {
         DdlTaskEntity task = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(task));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config(
                 "Asia/Shanghai", null, null)));
         when(claimer.claim(eq(task), any(), any(), any(), any(), anyString()))
@@ -174,9 +176,9 @@ class DdlReminderServiceTest {
     void fallsBackToTaskTimezoneSnapshot() {
         DdlTaskEntity task = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
         task.setUserTimezone("America/New_York");
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(task));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config(
                 null, null, null)));
         when(claimer.claim(eq(task), any(), eq(ZoneId.of("America/New_York")),
@@ -194,9 +196,9 @@ class DdlReminderServiceTest {
     @DisplayName("用户时区非法：跳过该任务并计入失败，不调用领取")
     void skipsInvalidTimezone() {
         DdlTaskEntity task = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(task));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config(
                 "Mars/Olympus", null, null)));
 
@@ -212,9 +214,9 @@ class DdlReminderServiceTest {
     void cachesUserConfigPerScan() {
         DdlTaskEntity first = activeTask(ACTIVE_TASK_ID, NOW.plusHours(10));
         DdlTaskEntity second = activeTask(ACTIVE_TASK_ID + 1, NOW.plusHours(11));
-        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, BATCH_SIZE))
+        when(mapper.selectActiveReminderCandidates(NOW, HORIZON, null, 0L, BATCH_SIZE))
                 .thenReturn(List.of(first, second));
-        when(mapper.selectFollowUpCandidates(NOW, BATCH_SIZE)).thenReturn(List.of());
+        when(mapper.selectFollowUpCandidates(NOW, null, 0L, BATCH_SIZE)).thenReturn(List.of());
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config(
                 "Asia/Shanghai", null, null)));
         when(claimer.claim(any(), any(), any(), any(), any(), anyString())).thenReturn(List.of());
@@ -222,6 +224,45 @@ class DdlReminderServiceTest {
         service.scan(NOW, TRACE_ID);
 
         verify(userConfigService).findById(USER_ID);
+    }
+
+    @Test
+    @DisplayName("候选超过批大小：keyset 分页遍历完整集合，最后一条任务仍会被领取")
+    void scansAllPagesBeyondBatchSize() {
+        List<DdlTaskEntity> all = new java.util.ArrayList<>();
+        for (int i = 1; i <= 201; i++) {
+            all.add(activeTask(i, NOW.plusMinutes(i)));
+        }
+        DdlReminderService paging = new DdlReminderService(mapper, claimer,
+                new DdlReminderPolicy(), userConfigService, new DdlTimeRuleValidator(), 2);
+        when(mapper.selectActiveReminderCandidates(eq(NOW), eq(HORIZON), any(), anyLong(),
+                anyInt())).thenAnswer(invocation -> page(all,
+                invocation.getArgument(2), invocation.getArgument(3),
+                invocation.getArgument(4)));
+        when(mapper.selectFollowUpCandidates(eq(NOW), any(), anyLong(), anyInt()))
+                .thenReturn(List.of());
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config(
+                "Asia/Shanghai", null, null)));
+        when(claimer.claim(any(), any(), any(), any(), any(), anyString())).thenReturn(List.of());
+
+        DdlReminderService.ReminderScanResult result = paging.scan(NOW, TRACE_ID);
+
+        assertThat(result.candidates()).isEqualTo(201);
+        verify(claimer).claim(eq(all.get(200)), eq(NOW), eq(SHANGHAI),
+                eq(LocalTime.of(23, 30)), eq(LocalTime.of(7, 30)), eq(TRACE_ID));
+    }
+
+    private static List<DdlTaskEntity> page(List<DdlTaskEntity> all, LocalDateTime afterDueAt,
+                                            long afterTaskId, int limit) {
+        return all.stream()
+                .filter(task -> afterDueAt == null
+                        || task.getDueAt().isAfter(afterDueAt)
+                        || (task.getDueAt().isEqual(afterDueAt)
+                        && task.getTaskId() > afterTaskId))
+                .sorted(java.util.Comparator.comparing(DdlTaskEntity::getDueAt)
+                        .thenComparing(DdlTaskEntity::getTaskId))
+                .limit(limit)
+                .toList();
     }
 
     private static UserConfigEntity config(String timezone, LocalTime dndStart, LocalTime dndEnd) {
@@ -269,6 +310,6 @@ class DdlReminderServiceTest {
         return new DdlReminderDispatch(USER_ID, taskId, null, type,
                 "操作系统原理", "提交实验二报告", null, null, null, "EXACT_DATETIME",
                 false, NOW.plusHours(10), NOW.plusHours(10), "Asia/Shanghai",
-                followUpCount, NOW, TRACE_ID);
+                followUpCount, false, NOW, TRACE_ID);
     }
 }

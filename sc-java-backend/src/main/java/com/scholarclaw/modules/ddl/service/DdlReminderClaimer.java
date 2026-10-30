@@ -59,7 +59,7 @@ public class DdlReminderClaimer {
         }
         if (TaskStatus.PENDING_TIME.name().equals(task.getStatus())
                 || TaskStatus.PENDING_CONFIRM.name().equals(task.getStatus())) {
-            return claimFollowUp(task, now, userZone, dndStart, dndEnd, traceId);
+            return claimFollowUp(task, now, userZone, traceId);
         }
         // COMPLETED / CANCELED / 未知状态不产生提醒。
         return List.of();
@@ -79,7 +79,7 @@ public class DdlReminderClaimer {
                     task.getTaskId(), task.getUserId(), dueAt, now);
             if (updated == 1) {
                 DdlReminderDispatch dispatch = dispatch(
-                        task, DdlReminderType.DDL_OVERDUE, now, userZone, 0, traceId);
+                        task, DdlReminderType.DDL_OVERDUE, now, userZone, 0, false, traceId);
                 notifyReminder(dispatch);
                 return List.of(dispatch);
             }
@@ -87,14 +87,18 @@ public class DdlReminderClaimer {
         }
 
         // 更紧急的 T-6h 优先；若同时跨过两个阈值，只发 T-6h 并在 SQL 中静默补记 T-24h 位。
+        LocalTime effectiveDndStart = policy.dndStartOrDefault(dndStart);
+        LocalTime effectiveDndEnd = policy.dndEndOrDefault(dndEnd);
         LocalDateTime t6Trigger = policy.t6TriggerAt(dueAt, userZone,
-                policy.dndStartOrDefault(dndStart), policy.dndEndOrDefault(dndEnd));
+                effectiveDndStart, effectiveDndEnd);
         if (policy.reminderDue(now, t6Trigger)) {
             int updated = ddlTaskMapper.markT6Reminded(
                     task.getTaskId(), task.getUserId(), dueAt, now);
             if (updated == 1) {
+                boolean advanced = policy.isT6AdvancedForDnd(dueAt, userZone,
+                        effectiveDndStart, effectiveDndEnd);
                 DdlReminderDispatch dispatch = dispatch(
-                        task, DdlReminderType.DDL_T6H, now, userZone, 0, traceId);
+                        task, DdlReminderType.DDL_T6H, now, userZone, 0, advanced, traceId);
                 notifyReminder(dispatch);
                 return List.of(dispatch);
             }
@@ -107,7 +111,7 @@ public class DdlReminderClaimer {
                     task.getTaskId(), task.getUserId(), dueAt, now);
             if (updated == 1) {
                 DdlReminderDispatch dispatch = dispatch(
-                        task, DdlReminderType.DDL_T24H, now, userZone, 0, traceId);
+                        task, DdlReminderType.DDL_T24H, now, userZone, 0, false, traceId);
                 notifyReminder(dispatch);
                 return List.of(dispatch);
             }
@@ -116,22 +120,18 @@ public class DdlReminderClaimer {
     }
 
     private List<DdlReminderDispatch> claimFollowUp(DdlTaskEntity task, LocalDateTime now,
-                                                    ZoneId userZone, LocalTime dndStart,
-                                                    LocalTime dndEnd, String traceId) {
+                                                    ZoneId userZone, String traceId) {
         LocalDateTime followUpAt = task.getFollowUpAt();
         int count = task.getFollowUpCount() == null ? 0 : task.getFollowUpCount();
         if (followUpAt == null || count >= 2 || now.isBefore(followUpAt)) {
             return List.of();
         }
 
-        LocalDateTime effectiveAt = policy.followUpEffectiveAt(
-                followUpAt, now, userZone,
-                policy.dndStartOrDefault(dndStart), policy.dndEndOrDefault(dndEnd));
-        if (now.isBefore(effectiveAt)) {
-            return List.of();
-        }
-
-        LocalDateTime nextFollowUpAt = policy.nextFollowUpAt(now);
+        // 跟进提醒到期立即领取并写站内信。夜间免打扰只影响外部 IM：由
+        // NotificationOutboundPolicy 把非紧急通知置为 RATE_LIMITED_DELAYED 并顺延到窗口结束，
+        // 绝不在这里推迟整个跟进，否则 Web 站内信也会一起丢失。
+        int nextCount = count + 1;
+        LocalDateTime nextFollowUpAt = policy.nextFollowUpAt(now, nextCount);
         int updated = ddlTaskMapper.markFollowUpReminded(
                 task.getTaskId(), task.getUserId(), followUpAt, count, nextFollowUpAt, now);
         if (updated != 1) {
@@ -139,7 +139,7 @@ public class DdlReminderClaimer {
         }
         List<DdlReminderDispatch> dispatches = new ArrayList<>(1);
         DdlReminderDispatch dispatch = dispatch(
-                task, DdlReminderType.DDL_FOLLOW_UP, now, userZone, count + 1, traceId);
+                task, DdlReminderType.DDL_FOLLOW_UP, now, userZone, nextCount, false, traceId);
         notifyReminder(dispatch);
         dispatches.add(dispatch);
         return dispatches;
@@ -160,12 +160,13 @@ public class DdlReminderClaimer {
                 dispatch.userTimezone(),
                 dispatch.timeInferred(),
                 dispatch.followUpCount(),
+                dispatch.advancedForDnd(),
                 dispatch.traceId()));
     }
 
     private DdlReminderDispatch dispatch(DdlTaskEntity task, DdlReminderType type,
                                          LocalDateTime now, ZoneId userZone, int followUpCount,
-                                         String traceId) {
+                                         boolean advancedForDnd, String traceId) {
         LocalDateTime dueAt = task.getDueAt();
         LocalDateTime dueAtUserZone = dueAt == null ? null : policy.toUserZone(dueAt, userZone);
         return new DdlReminderDispatch(
@@ -184,6 +185,7 @@ public class DdlReminderClaimer {
                 dueAtUserZone,
                 userZone.getId(),
                 followUpCount,
+                advancedForDnd,
                 now,
                 traceId);
     }

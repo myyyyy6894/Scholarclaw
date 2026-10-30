@@ -37,7 +37,7 @@ class OneBotEventParserTest {
     void parsesGroupMessageAddressedToBot() throws Exception {
         OneBotEvent event = parse("""
                 {"post_type":"message","message_type":"group","message_id":11,
-                 "user_id":24681012,"self_id":987654321,"time":1760509200,
+                 "user_id":24681012,"self_id":987654321,"group_id":7654321,"time":1760509200,
                  "message":[
                    {"type":"at","data":{"qq":"987654321"}},
                    {"type":"text","data":{"text":" /list "}},
@@ -47,20 +47,22 @@ class OneBotEventParserTest {
 
         assertThat(event.ignored()).isFalse();
         assertThat(event.groupMessage()).isTrue();
+        assertThat(event.groupId()).isEqualTo("7654321");
         assertThat(event.text()).isEqualTo("/list");
     }
 
     @Test
-    @DisplayName("群聊未 @ 机器人：合法但忽略，不进入业务")
+    @DisplayName("群聊未 @ 机器人：合法但忽略，仍保留 group_id")
     void ignoresGroupMessageWithoutAtSelf() throws Exception {
         OneBotEvent event = parse("""
                 {"post_type":"message","message_type":"group","message_id":12,
-                 "user_id":24681012,"self_id":987654321,
+                 "user_id":24681012,"self_id":987654321,"group_id":7654321,
                  "message":[{"type":"text","data":{"text":"大家好"}}]}
                 """);
 
         assertThat(event.ignored()).isTrue();
         assertThat(event.ignoredReason()).isEqualTo("group_not_at_bot");
+        assertThat(event.groupId()).isEqualTo("7654321");
     }
 
     @Test
@@ -82,6 +84,51 @@ class OneBotEventParserTest {
     }
 
     @Test
+    @DisplayName("文件段只有 data.file 文件名：仍识别为 PDF，不误判为不支持格式")
+    void parsesFileSegmentWithOnlyFileField() throws Exception {
+        OneBotEvent event = parse("""
+                {"post_type":"message","message_type":"private","message_id":17,
+                 "user_id":24681012,"message":[
+                   {"type":"file","data":{"file":"第6章_并发控制.pdf","file_size":2048}}
+                 ]}
+                """);
+
+        assertThat(event.hasFile()).isTrue();
+        assertThat(event.fileReference()).isEqualTo("第6章_并发控制.pdf");
+        assertThat(event.fileName()).isEqualTo("第6章_并发控制.pdf");
+        assertThat(event.fileSize()).isEqualTo(2048L);
+    }
+
+    @Test
+    @DisplayName("文件段同时有 file 名称与 url：优先使用 url 下载，file 作为名称")
+    void prefersDirectUrlOverFileNameAsReference() throws Exception {
+        OneBotEvent event = parse("""
+                {"post_type":"message","message_type":"private","message_id":19,
+                 "user_id":24681012,"message":[
+                   {"type":"file","data":{"file":"a.pdf","file_size":10,
+                                          "url":"https://cdn.example.com/a.pdf"}}
+                 ]}
+                """);
+
+        assertThat(event.fileReference()).isEqualTo("https://cdn.example.com/a.pdf");
+        assertThat(event.fileName()).isEqualTo("a.pdf");
+    }
+
+    @Test
+    @DisplayName("文件段 data.file 只是 file_id：不作为文件名，留给 get_file 解析")
+    void treatsFileWithoutExtensionAsReferenceOnly() throws Exception {
+        OneBotEvent event = parse("""
+                {"post_type":"message","message_type":"private","message_id":18,
+                 "user_id":24681012,"message":[
+                   {"type":"file","data":{"file":"a1b2c3d4","file_size":100}}
+                 ]}
+                """);
+
+        assertThat(event.fileReference()).isEqualTo("a1b2c3d4");
+        assertThat(event.fileName()).isEmpty();
+    }
+
+    @Test
     @DisplayName("群文件上传通知：用 file.id 作为消息幂等键")
     void parsesGroupUploadNotice() throws Exception {
         OneBotEvent event = parse("""
@@ -97,6 +144,7 @@ class OneBotEventParserTest {
         assertThat(event.fileReference()).isEqualTo("group-file-1");
         assertThat(event.fileName()).isEqualTo("讲义.md");
         assertThat(event.fileSize()).isEqualTo(2048L);
+        assertThat(event.groupId()).isEqualTo("888888");
     }
 
     @Test

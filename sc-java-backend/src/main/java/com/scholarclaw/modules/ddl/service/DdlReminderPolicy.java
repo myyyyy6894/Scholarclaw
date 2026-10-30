@@ -16,9 +16,10 @@ import org.springframework.stereotype.Component;
  *       由 TASK-802/TASK-804 在通知层处理（Web 站内信仍按阈值落库）。</li>
  *   <li>T-6h：{@code due_at - 6h} 若落在免打扰窗口内，按 {@code PO-03} 提前到“该窗口开始前 1 小时”。
  *       默认窗口 {@code 23:30 ~ 07:30} 即 {@code 22:30}；对自定义窗口同样取开始前 1 小时，
- *       保证提前后的时刻一定在窗口之外。</li>
- *   <li>待确认跟进：{@code follow_up_at} 落在免打扰窗口时顺延到窗口结束（默认次日 {@code 07:30}）；
- *       若调度恢复时已经离开窗口，则立即触发。</li>
+ *       保证提前后的时刻一定在窗口之外。提前只影响提醒触发时刻与文案，不改变 IM 紧急属性。</li>
+ *   <li>待确认跟进：{@code follow_up_at} 到期即领取并立即写站内信；免打扰只由
+ *       {@code NotificationOutboundPolicy} 作用于外部 IM（顺延到窗口结束），
+ *       **禁止在领取层推迟整个跟进提醒**，否则 Web 站内信也会被一起延后。</li>
  *   <li>免打扰窗口按**用户时区**解释；{@code due_at} 以应用时区墙钟存储，因此换算必须显式
  *       经过“应用时区 instant -> 用户时区”，严禁直接比较两种墙钟。</li>
  *   <li>{@code dnd_start_time == dnd_end_time} 视为未配置免打扰（0 长度窗口）。</li>
@@ -66,36 +67,24 @@ public class DdlReminderPolicy {
     }
 
     /**
-     * 待确认跟进提醒的实际触发时刻。
+     * 下一次跟进提醒时间。
      *
-     * <p>取 {@code max(followUpAt, now)}：调度恢复时若已经离开免打扰窗口则立即触发；
-     * 若当前仍在窗口内，则顺延到窗口结束。返回应用时区时间。
+     * <p>{@code 03} §6.3 场景 SQL 与 {@code 01} FR-DDL-003：第 1 次跟进后顺延 24 小时；
+     * 第 2 次跟进后 {@code follow_up_at = NULL}，不再产生第三次提醒，任务仅保留在
+     * Web 待确认收件箱置顶。
+     *
+     * @param nextCount 本次提醒后的累计跟进次数（即 {@code follow_up_count + 1}）
+     * @return {@code nextCount >= 2} 时返回 {@code null}
      */
-    public LocalDateTime followUpEffectiveAt(LocalDateTime followUpAt, LocalDateTime now,
-                                             ZoneId userZone, LocalTime dndStart,
-                                             LocalTime dndEnd) {
-        if (isDndDisabled(dndStart, dndEnd)) {
-            return followUpAt;
-        }
-        LocalDateTime baseline = followUpAt.isAfter(now) ? followUpAt : now;
-        LocalDateTime local = toUserZone(baseline, userZone);
-        if (!withinDnd(local.toLocalTime(), dndStart, dndEnd)) {
-            return baseline;
-        }
-        LocalDate resumeDate;
-        if (dndStart.isBefore(dndEnd)) {
-            resumeDate = local.toLocalDate();
-        } else {
-            resumeDate = local.toLocalTime().isBefore(dndEnd)
-                    ? local.toLocalDate()
-                    : local.toLocalDate().plusDays(1);
-        }
-        return toAppZone(LocalDateTime.of(resumeDate, dndEnd), userZone);
+    public LocalDateTime nextFollowUpAt(LocalDateTime now, int nextCount) {
+        return nextCount >= 2 ? null : now.plusHours(FOLLOW_UP_HOURS);
     }
 
-    /** 下一次跟进提醒：文档规定从本次触发时刻顺延 24 小时。 */
-    public LocalDateTime nextFollowUpAt(LocalDateTime now) {
-        return now.plusHours(FOLLOW_UP_HOURS);
+    /** T-6h 是否因免打扰被提前（用于文案区分，避免虚报“不足 6 小时”）。 */
+    public boolean isT6AdvancedForDnd(LocalDateTime dueAt, ZoneId userZone,
+                                      LocalTime dndStart, LocalTime dndEnd) {
+        LocalDateTime threshold = dueAt.minusHours(T6_HOURS);
+        return t6TriggerAt(dueAt, userZone, dndStart, dndEnd).isBefore(threshold);
     }
 
     public LocalTime dndStartOrDefault(LocalTime configured) {

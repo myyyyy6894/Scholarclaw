@@ -84,37 +84,61 @@ public interface DdlTaskMapper extends BaseMapper<DdlTaskEntity> {
     // ---------------------------------------------------------------------
 
     /**
-     * 扫描未来 24 小时内到期、且尚未完成全部正式梯度的 {@code ACTIVE} 任务。
+     * 按 {@code (due_at, task_id)} keyset 分页扫描未来 24 小时内到期、且尚未完成全部正式梯度的
+     * {@code ACTIVE} 任务。
+     *
+     * <p><b>为什么必须分页遍历完整候选集：</b>已发 T-24h、尚未到 T-6h 的任务会持续命中候选条件；
+     * 如果每轮只取 {@code ORDER BY due_at LIMIT n} 的第一页，候选数超过 n 后排在后面的任务会长期
+     * 饿死。keyset 条件保证每轮从上一页最后一条之后继续，直到取空。
      *
      * <p>保留“已过 due_at”的任务用于流转 {@code OVERDUE}；已触发 T-24h/T-6h 且尚未到期的任务
-     * 不再重复扫描。命中 {@code idx_ddl_status_due (status, due_at)}。
+     * 仍会参与分页（用于等待下一个梯度），因此分页键必须稳定且与提醒位无关。
+     * 命中 {@code idx_ddl_status_due (status, due_at)}。
      */
     @Select("""
+            <script>
             SELECT * FROM t_ddl_task
              WHERE status = 'ACTIVE'
                AND due_at IS NOT NULL
-               AND due_at <= #{horizon}
-               AND (due_at <= #{now} OR (reminded_flags & 3) <> 3)
-             ORDER BY due_at ASC
+               AND due_at &lt;= #{horizon}
+               AND (due_at &lt;= #{now} OR (reminded_flags &amp; 3) &lt;&gt; 3)
+            <if test="afterDueAt != null">
+               AND (due_at &gt; #{afterDueAt}
+                    OR (due_at = #{afterDueAt} AND task_id &gt; #{afterTaskId}))
+            </if>
+             ORDER BY due_at ASC, task_id ASC
              LIMIT #{limit}
+            </script>
             """)
     List<DdlTaskEntity> selectActiveReminderCandidates(@Param("now") LocalDateTime now,
                                                        @Param("horizon") LocalDateTime horizon,
+                                                       @Param("afterDueAt") LocalDateTime afterDueAt,
+                                                       @Param("afterTaskId") long afterTaskId,
                                                        @Param("limit") int limit);
 
     /**
-     * 扫描跟催到期的待确认任务；命中 {@code idx_ddl_status_followup (status, follow_up_at)}。
+     * 按 {@code (follow_up_at, task_id)} keyset 分页扫描跟催到期的待确认任务；
+     * 命中 {@code idx_ddl_status_followup (status, follow_up_at)}。
      */
     @Select("""
+            <script>
             SELECT * FROM t_ddl_task
              WHERE status IN ('PENDING_TIME', 'PENDING_CONFIRM')
                AND follow_up_at IS NOT NULL
-               AND follow_up_at <= #{now}
-               AND follow_up_count < 2
-             ORDER BY follow_up_at ASC
+               AND follow_up_at &lt;= #{now}
+               AND follow_up_count &lt; 2
+            <if test="afterFollowUpAt != null">
+               AND (follow_up_at &gt; #{afterFollowUpAt}
+                    OR (follow_up_at = #{afterFollowUpAt} AND task_id &gt; #{afterTaskId}))
+            </if>
+             ORDER BY follow_up_at ASC, task_id ASC
              LIMIT #{limit}
+            </script>
             """)
     List<DdlTaskEntity> selectFollowUpCandidates(@Param("now") LocalDateTime now,
+                                                 @Param("afterFollowUpAt")
+                                                 LocalDateTime afterFollowUpAt,
+                                                 @Param("afterTaskId") long afterTaskId,
                                                  @Param("limit") int limit);
 
     /** 领取 T-24h 提醒：仅当任务仍为 ACTIVE、due_at 未变且位 1 未置位时成功。 */
@@ -180,11 +204,15 @@ public interface DdlTaskMapper extends BaseMapper<DdlTaskEntity> {
     /**
      * 领取待确认跟进提醒：按旧 {@code follow_up_at + follow_up_count} 做 CAS，
      * 防止同一关注册任务被并发调度重复计数。
+     *
+     * <p>第 2 次跟进后 {@code nextFollowUpAt} 为 {@code null}，与
+     * {@code chk_ddl_time_invariants} 的“{@code follow_up_count = 2} 时 {@code follow_up_at}
+     * 必须为空”一致；显式 {@code jdbcType=TIMESTAMP} 让 MyBatis 正确写 NULL。
      */
     @Update("""
             UPDATE t_ddl_task
                SET follow_up_count = follow_up_count + 1,
-                   follow_up_at = #{nextFollowUpAt},
+                   follow_up_at = #{nextFollowUpAt,jdbcType=TIMESTAMP},
                    updated_at = #{now}
              WHERE task_id = #{taskId}
                AND user_id = #{userId}

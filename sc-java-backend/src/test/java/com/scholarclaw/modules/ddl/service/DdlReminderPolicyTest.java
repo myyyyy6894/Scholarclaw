@@ -95,43 +95,14 @@ class DdlReminderPolicyTest {
     }
 
     @Test
-    @DisplayName("跟进提醒落在免打扰窗口时顺延到窗口结束（默认次日 07:30）")
-    void followUpPostponesToDndEnd() {
-        LocalDateTime now = LocalDateTime.of(2026, 10, 28, 23, 41);
-        assertThat(policy.followUpEffectiveAt(
-                LocalDateTime.of(2026, 10, 28, 23, 40), now, SHANGHAI, DND_START, DND_END))
-                .isEqualTo(LocalDateTime.of(2026, 10, 29, 7, 30));
-
-        // 凌晨段顺延到当天 07:30
-        assertThat(policy.followUpEffectiveAt(
-                LocalDateTime.of(2026, 10, 29, 2, 0),
-                LocalDateTime.of(2026, 10, 29, 2, 0), SHANGHAI, DND_START, DND_END))
-                .isEqualTo(LocalDateTime.of(2026, 10, 29, 7, 30));
-    }
-
-    @Test
-    @DisplayName("跟进提醒在调度恢复时已离开窗口则立即触发")
-    void followUpFiresImmediatelyWhenWindowHasEnded() {
-        LocalDateTime now = LocalDateTime.of(2026, 10, 29, 8, 0);
-        assertThat(policy.followUpEffectiveAt(
-                LocalDateTime.of(2026, 10, 28, 18, 0), now, SHANGHAI, DND_START, DND_END))
-                .isEqualTo(now);
-
-        // 当前时间已进入窗口、即便 follow_up_at 在白天也必须顺延
-        LocalDateTime lateNight = LocalDateTime.of(2026, 10, 28, 23, 45);
-        assertThat(policy.followUpEffectiveAt(
-                LocalDateTime.of(2026, 10, 28, 18, 0), lateNight, SHANGHAI, DND_START, DND_END))
-                .isEqualTo(LocalDateTime.of(2026, 10, 29, 7, 30));
-    }
-
-    @Test
-    @DisplayName("免打扰未配置时跟进提醒按原时间触发")
-    void followUpUnchangedWhenDndDisabled() {
-        LocalDateTime followUpAt = LocalDateTime.of(2026, 10, 28, 23, 40);
-        assertThat(policy.followUpEffectiveAt(followUpAt,
-                LocalDateTime.of(2026, 10, 28, 23, 41),
-                SHANGHAI, LocalTime.of(0, 0), LocalTime.of(0, 0)))
-                .isEqualTo(followUpAt);
+    @DisplayName("T-6h 免打扰提前判定：仅提前场景标记 advanced")
+    void detectsT6AdvancedForDnd() {
+        assertThat(policy.isT6AdvancedForDnd(
+                LocalDateTime.of(2026, 10, 29, 8, 0), SHANGHAI, DND_START, DND_END))
+                .isTrue();
+        assertThat(policy.isT6AdvancedForDnd(
+                LocalDateTime.of(2026, 10, 29, 18, 0), SHANGHAI, DND_START, DND_END))
+                .isFalse();
     }
 
     @Test
@@ -149,11 +120,12 @@ class DdlReminderPolicyTest {
     }
 
     @Test
-    @DisplayName("下一轮跟进固定从本次触发时刻顺延 24 小时")
-    void nextFollowUpIsTwentyFourHoursLater() {
+    @DisplayName("第 1 次跟进后顺延 24 小时，第 2 次后返回 null")
+    void nextFollowUpIsTwentyFourHoursLaterThenNull() {
         LocalDateTime now = LocalDateTime.of(2026, 10, 28, 10, 0);
-        assertThat(policy.nextFollowUpAt(now))
+        assertThat(policy.nextFollowUpAt(now, 1))
                 .isEqualTo(LocalDateTime.of(2026, 10, 29, 10, 0));
+        assertThat(policy.nextFollowUpAt(now, 2)).isNull();
     }
 
     @Test

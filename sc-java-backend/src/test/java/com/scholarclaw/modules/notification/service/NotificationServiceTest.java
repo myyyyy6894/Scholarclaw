@@ -125,6 +125,43 @@ class NotificationServiceTest {
     }
 
     @Test
+    @DisplayName("免打扰内 DDL 跟进：站内信状态 RATE_LIMITED_DELAYED，计划推送为次日 07:30")
+    void followUpInsideDndIsStoredImmediatelyButImDelayed() {
+        NotificationService service = service(true, NIGHT);
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config()));
+
+        service.createDdlReminderInTx(new DdlReminderNotification(
+                USER_ID, TASK_ID, NotificationBizType.DDL_FOLLOW_UP,
+                "操作系统原理", "提交实验二报告", null, "Asia/Shanghai",
+                false, 1, false, null));
+
+        NotificationLogEntity entity = capturedEntity();
+        assertThat(entity.getReadStatus()).isEqualTo("UNREAD");
+        assertThat(entity.getOutboundStatus())
+                .isEqualTo(OutboundStatus.RATE_LIMITED_DELAYED.name());
+        assertThat(entity.getScheduledPushAt())
+                .isEqualTo(LocalDateTime.of(2026, 10, 28, 7, 30));
+    }
+
+    @Test
+    @DisplayName("T-6h 因免打扰提前：文案说明提前发送，不虚报不足 6 小时")
+    void advancedT6ReminderDoesNotClaimSixHoursRemaining() {
+        NotificationService service = service(true, NIGHT);
+
+        service.createDdlReminderInTx(new DdlReminderNotification(
+                USER_ID, TASK_ID, NotificationBizType.DDL_T6H,
+                "操作系统原理", "提交实验二报告",
+                LocalDateTime.of(2026, 10, 29, 8, 0), "Asia/Shanghai",
+                false, 0, true, null));
+
+        NotificationLogEntity entity = capturedEntity();
+        assertThat(entity.getTitle()).contains("提前");
+        assertThat(entity.getContent()).contains("因夜间免打扰提前发送")
+                .contains("T-6h 阶段提醒")
+                .doesNotContain("不足 6 小时");
+    }
+
+    @Test
     @DisplayName("DDL T-24h 文案包含任务编号、截止时间、时区与 23:59 推断说明")
     void formatsT24Reminder() {
         NotificationService service = service(false, DAY);
@@ -133,7 +170,7 @@ class NotificationServiceTest {
                 USER_ID, TASK_ID, NotificationBizType.DDL_T24H,
                 "操作系统原理", "提交实验二报告",
                 LocalDateTime.of(2026, 10, 29, 23, 59), "Asia/Shanghai",
-                true, 0, "tr_test_0002"));
+                true, 0, false, "tr_test_0002"));
 
         NotificationLogEntity entity = capturedEntity();
         assertThat(entity.getTitle()).contains("T-24h").contains("操作系统原理")
@@ -154,7 +191,7 @@ class NotificationServiceTest {
                 USER_ID, TASK_ID, NotificationBizType.DDL_OVERDUE,
                 "操作系统原理", "提交实验二报告",
                 LocalDateTime.of(2026, 10, 28, 9, 0), "Asia/Shanghai",
-                false, 0, null));
+                false, 0, false, null));
         NotificationLogEntity overdue = capturedEntity();
         assertThat(overdue.getTitle()).contains("逾期");
         assertThat(overdue.getContent()).contains("已超过截止时间");
@@ -162,7 +199,7 @@ class NotificationServiceTest {
         service.createDdlReminderInTx(new DdlReminderNotification(
                 USER_ID, TASK_ID + 1, NotificationBizType.DDL_FOLLOW_UP,
                 "操作系统原理", "提交实验二报告", null, "Asia/Shanghai",
-                false, 2, null));
+                false, 2, false, null));
         NotificationLogEntity followUp = capturedEntity();
         assertThat(followUp.getContent()).contains("第 2/2 次提醒")
                 .contains("尚未确认截止时间");
@@ -175,7 +212,7 @@ class NotificationServiceTest {
         assertThatThrownBy(() -> service.createDdlReminderInTx(
                 new DdlReminderNotification(USER_ID, TASK_ID,
                         NotificationBizType.DOC_INGEST_READY,
-                        "c", "t", null, "Asia/Shanghai", false, 0, null)))
+                        "c", "t", null, "Asia/Shanghai", false, 0, false, null)))
                 .isInstanceOf(IllegalArgumentException.class);
         verify(mapper, never()).insert(any(NotificationLogEntity.class));
     }

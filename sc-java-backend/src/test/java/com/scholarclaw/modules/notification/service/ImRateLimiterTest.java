@@ -25,6 +25,25 @@ class ImRateLimiterTest {
     }
 
     @Test
+    @DisplayName("Lua 字段契约：使用 last_refill_ms，而不是 ts")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void usesDocumentedHashFieldNames() {
+        when(redisTemplate.execute(any(), anyList(), any(), any(), any(), any()))
+                .thenReturn(List.of(1L, 0L));
+        org.mockito.ArgumentCaptor<org.springframework.data.redis.core.script.RedisScript>
+                script = org.mockito.ArgumentCaptor.forClass(
+                        org.springframework.data.redis.core.script.RedisScript.class);
+
+        limiter.tryAcquire();
+
+        org.mockito.Mockito.verify(redisTemplate).execute(script.capture(), anyList(),
+                any(), any(), any(), any());
+        assertThat(script.getValue().getScriptAsString())
+                .contains("last_refill_ms")
+                .doesNotContain("'ts'");
+    }
+
+    @Test
     @DisplayName("令牌充足：允许发送")
     @SuppressWarnings("unchecked")
     void allowsWhenTokenAvailable() {

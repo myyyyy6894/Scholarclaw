@@ -44,7 +44,7 @@ public class SlashCommandRouter {
             case "/kb" -> Optional.of(AgentCommand.kb(argument));
             case "/list" -> Optional.of(AgentCommand.list(argument));
             case "/done" -> Optional.of(taskList(AgentCommand.Kind.DONE, argument));
-            case "/confirm" -> Optional.of(withDateTime(AgentCommand.Kind.CONFIRM, argument));
+            case "/confirm" -> Optional.of(confirm(argument));
             case "/edit" -> Optional.of(withDateTime(AgentCommand.Kind.EDIT, argument));
             default -> Optional.empty();
         };
@@ -69,6 +69,39 @@ public class SlashCommandRouter {
             ids.add(parseTaskId(token));
         }
         return AgentCommand.tasks(kind, List.copyOf(ids), null, null);
+    }
+
+    /**
+     * `/confirm T923`：沿用任务已有的截止时间直接确认激活；
+     * `/confirm T923 2026-10-31 05:00`：先改时间再确认（兼容旧语法）。
+     *
+     * <p>不带日期/时刻时只允许单个任务，避免“统一时间”语义被隐式套用到多任务。
+     */
+    private static AgentCommand confirm(String argument) {
+        String[] tokens = argument.isBlank() ? new String[0] : argument.split("\\s+");
+        boolean hasDate = false;
+        boolean hasTime = false;
+        for (String token : tokens) {
+            hasDate |= DATE.matcher(token).matches();
+            hasTime |= TIME.matcher(token).matches();
+        }
+        if (hasDate || hasTime) {
+            return withDateTime(AgentCommand.Kind.CONFIRM, argument);
+        }
+        if (tokens.length == 0) {
+            throw new AgentCommandException(
+                    "请在 /confirm 后提供任务编号，例如：/confirm T923。");
+        }
+        LinkedHashSet<Long> ids = new LinkedHashSet<>();
+        for (String token : tokens) {
+            ids.add(parseTaskId(token));
+        }
+        if (ids.size() > 1) {
+            throw new AgentCommandException(
+                    "一次只能确认一个未带时间的任务；批量确认请提供统一日期与时刻，"
+                            + "例如：/confirm T923 T924 2026-10-31 05:00。");
+        }
+        return AgentCommand.tasks(AgentCommand.Kind.CONFIRM, List.copyOf(ids), null, null);
     }
 
     /**

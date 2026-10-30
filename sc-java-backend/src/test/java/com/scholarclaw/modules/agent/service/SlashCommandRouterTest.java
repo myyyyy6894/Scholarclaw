@@ -37,6 +37,13 @@ class SlashCommandRouterTest {
         assertThat(confirm.dueDate()).isEqualTo(LocalDate.of(2026, 10, 25));
         assertThat(confirm.dueTime()).isEqualTo(LocalTime.of(22, 0));
 
+        // `/confirm T923`：只给编号，沿用任务已有截止时间。
+        AgentCommand confirmOnlyId = router.parse("/confirm T923").orElseThrow();
+        assertThat(confirmOnlyId.kind()).isEqualTo(AgentCommand.Kind.CONFIRM);
+        assertThat(confirmOnlyId.taskIds()).containsExactly(923L);
+        assertThat(confirmOnlyId.dueDate()).isNull();
+        assertThat(confirmOnlyId.dueTime()).isNull();
+
         AgentCommand edit = router.parse("/edit T105 2026-10-26 08:30:15").orElseThrow();
         assertThat(edit.kind()).isEqualTo(AgentCommand.Kind.EDIT);
         assertThat(edit.dueTime()).isEqualTo(LocalTime.of(8, 30, 15));
@@ -91,6 +98,9 @@ class SlashCommandRouterTest {
                 .isInstanceOf(AgentCommandException.class);
         assertThatThrownBy(() -> router.parse("/done TABC"))
                 .isInstanceOf(AgentCommandException.class);
+        assertThatThrownBy(() -> router.parse("/confirm T923 T924"))
+                .isInstanceOf(AgentCommandException.class)
+                .hasMessageContaining("一次只能确认一个");
         assertThatThrownBy(() -> router.parse("/confirm T104 2026-10-25"))
                 .isInstanceOf(AgentCommandException.class);
         assertThatThrownBy(() -> router.parse("/confirm T104 2026/10/25 22:00"))

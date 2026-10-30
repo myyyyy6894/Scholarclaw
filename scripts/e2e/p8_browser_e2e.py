@@ -24,6 +24,7 @@ import httpx
 from playwright.sync_api import sync_playwright
 
 BASE = "http://127.0.0.1"
+NAPCAT_WEBUI_URL = "http://127.0.0.1:6099"
 FAILS: list[str] = []
 
 
@@ -88,13 +89,16 @@ def find_notification(client: httpx.Client, token: str, task_id: str):
 
 
 def main() -> int:
-    global BASE
+    global BASE, NAPCAT_WEBUI_URL
     parser = argparse.ArgumentParser(description="P8 Web notification browser E2E")
     parser.add_argument("--base-url", default=BASE)
     parser.add_argument("--password", default="Passw0rd123")
     parser.add_argument("--screenshot", default="/tmp/sc_p8_notifications.png")
+    parser.add_argument("--napcat-webui-url", default=NAPCAT_WEBUI_URL,
+                        help="设置页 NapCat 入口的期望 href（构建期 VITE_NAPCAT_WEBUI_URL）")
     args = parser.parse_args()
     BASE = args.base_url.rstrip("/")
+    NAPCAT_WEBUI_URL = args.napcat_webui_url.rstrip("/")
 
     client = httpx.Client(timeout=30.0, trust_env=False)
     suffix = str(int(time.time()))[-8:]
@@ -162,6 +166,18 @@ def main() -> int:
         status, body, _ = call(client, "GET", "/api/v1/notifications?size=100", token)
         unread = (data_of(body) or {}).get("unread_count") if status == 200 else None
         check("全部已读后未读数为 0", unread == 0, (status, body))
+
+        # 设置页必须提供可用的 NapCat WebUI 跳转入口（构建期 VITE_NAPCAT_WEBUI_URL）。
+        page.goto(BASE + "/settings", wait_until="networkidle")
+        entry = page.get_by_role("link", name="打开 NapCat 登录页")
+        entry_count = entry.count()
+        entry_href = entry.first.get_attribute("href") if entry_count else None
+        check("设置页 NapCat 登录入口存在", entry_count == 1, entry_count)
+        check("设置页 NapCat 登录入口 href 正确", entry_href == NAPCAT_WEBUI_URL,
+              entry_href)
+        page.screenshot(path=args.screenshot.replace(".png", "-settings.png"),
+                        full_page=True)
+
         check("页面无 console error", console_errors == [], console_errors[:5])
         browser.close()
 

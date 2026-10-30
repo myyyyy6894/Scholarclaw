@@ -61,7 +61,7 @@ import {
  * DDL 雷达工作台（`06` TASK-705、`04` §4.6）。
  *
  * 覆盖通知粘贴提取、手动新建、待确认收件箱、重复通知变更决策、编辑 / 确认激活、
- * 完成勾选与取消任务。页面只展示后端真实状态：
+ * 完成勾选与删除任务。页面只展示后端真实状态：
  *
  * * 模糊或缺失时间不会被前端补成具体时刻；
  * * 变更草案必须由用户显式选择“确认更新 / 仍然新建 / 忽略”，前端不静默合并；
@@ -423,9 +423,9 @@ async function toggleCompletion(task: DdlTask, completed: boolean): Promise<void
 async function cancelTask(task: DdlTask): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确定取消任务《${task.task_title}》？任务会置为 CANCELED 并从活动看板移除，对应的变更草案与后续提醒一并清空。`,
-      '取消任务',
-      { type: 'warning', confirmButtonText: '取消任务', cancelButtonText: '返回' },
+      `确定删除任务《${task.task_title}》？任务会从看板移除（置为 CANCELED），对应的变更草案与后续提醒一并清空。`,
+      '删除任务',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '返回' },
     )
   } catch {
     return
@@ -433,7 +433,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
   busyTaskId.value = task.task_id
   try {
     await deleteDdlTask(task.task_id)
-    notifySuccess(`任务 ${task.display_code} 已取消。`)
+    notifySuccess(`任务 ${task.display_code} 已删除。`)
     await refreshAll()
   } catch (error) {
     notifyError(error)
@@ -609,7 +609,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
                 :disabled="busyTaskId === task.task_id"
                 @click="cancelTask(task)"
               >
-                取消任务
+                删除任务
               </el-button>
             </div>
           </article>
@@ -673,7 +673,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="150" align="right">
+          <el-table-column label="操作" width="170" align="right" fixed="right">
             <template #default="{ row }">
               <el-button text type="primary" size="small" @click="openEditDialog(row)">
                 编辑
@@ -685,7 +685,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
                 :disabled="busyTaskId === row.task_id"
                 @click="cancelTask(row)"
               >
-                取消
+                删除
               </el-button>
             </template>
           </el-table-column>
@@ -730,18 +730,19 @@ async function cancelTask(task: DdlTask): Promise<void> {
               {{ formatTimestamp(row.completed_at, row.user_timezone) ?? '—' }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="150" align="right">
+          <el-table-column label="操作" width="170" align="right" fixed="right">
             <template #default="{ row }">
               <el-button text type="primary" size="small" @click="openEditDialog(row)">
                 编辑
               </el-button>
               <el-button
                 text
+                type="danger"
                 size="small"
                 :disabled="busyTaskId === row.task_id"
                 @click="cancelTask(row)"
               >
-                取消
+                删除
               </el-button>
             </template>
           </el-table-column>

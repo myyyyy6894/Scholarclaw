@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -57,7 +58,13 @@ import org.springframework.stereotype.Service;
 @Service
 public class AgentOrchestratorService {
 
-    private static final Duration ROUTE_READ_TIMEOUT = Duration.ofSeconds(15);
+    /**
+     * AUTO_ROUTE 单次调用可能包含“意图分类 + DDL 提取”两次模型请求；真实供应商在
+     * 1600 max_tokens 下耗时可能超过 15s。默认 60s，可用
+     * {@code SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS} 覆盖。
+     */
+    @Value("${sc.agent.route-read-timeout-seconds:60}")
+    private long routeReadTimeoutSeconds = 60;
     private static final BigDecimal INTENT_CONFIDENCE_THRESHOLD = new BigDecimal("0.65");
     private static final BigDecimal MODIFY_CONFIDENCE_THRESHOLD = new BigDecimal("0.80");
     private static final int MAX_CANDIDATE_COURSES = 200;
@@ -233,6 +240,10 @@ public class AgentOrchestratorService {
         return switch (command.kind()) {
             case DONE -> executeDone(userId, taskIds.getFirst(), confidence,
                     AgentToolAction.TASK_DONE);
+            case CONFIRM -> command.dueDate() == null
+                    ? executeConfirmExisting(userId, taskIds.getFirst(), confidence, action)
+                    : executeUpdate(userId, taskIds.getFirst(), command.dueDate(),
+                            command.dueTime(), confidence, action);
             default -> executeUpdate(userId, taskIds.getFirst(), command.dueDate(),
                     command.dueTime(), confidence, action);
         };
@@ -311,7 +322,7 @@ public class AgentOrchestratorService {
                 return listTasks(userId, "", null, confidence);
             }
             return reply(AgentIntent.TASK_MANAGE, confidence, AgentToolAction.CLARIFY,
-                    "请提供任务编号，例如：/done T102、/confirm T102 2026-10-25 22:00。"
+                    "请提供任务编号，例如：/done T102、/confirm T102（沿用已有截止时间）或 /confirm T102 2026-10-25 22:00。"
                             + "查询任务详情可直接说“查询 T102”。",
                     null, null, false);
         }
@@ -546,6 +557,34 @@ public class AgentOrchestratorService {
                 updated, null, false);
     }
 
+    /**
+     * `/confirm T923`：沿用任务已有截止时间确认，避免在 IM 里重复输入日期与时刻。
+     * 无可用截止时间的任务（{@code PENDING_TIME}）仍需显式提供时间。
+     */
+    private AgentReply executeConfirmExisting(Long userId, Long taskId, BigDecimal confidence,
+                                              AgentToolAction action) {
+        DdlTaskVO existing = ddlTaskService.getTask(userId, taskId);
+        if (existing.dueDate() == null) {
+            return reply(AgentIntent.TASK_MANAGE, confidence, AgentToolAction.CLARIFY,
+                    "任务 " + existing.displayCode() + " 还没有可用截止时间，请回复 /confirm T"
+                            + taskId + " YYYY-MM-DD HH:mm。", null, null, false);
+        }
+        UpdateDdlTaskRequest request = new UpdateDdlTaskRequest(
+                existing.courseId() == null ? null : existing.courseId().toString(),
+                existing.courseName(),
+                existing.taskTitle(),
+                existing.timePrecision(),
+                existing.dueDate(),
+                existing.dueTime(),
+                existing.deliverableFormat(),
+                existing.submissionChannel());
+        DdlTaskVO updated = ddlTaskService.confirmTask(userId, taskId, request);
+        String time = updated.dueTime() == null ? "23:59:59" : updated.dueTime();
+        return reply(AgentIntent.TASK_MANAGE, confidence, action,
+                "任务 " + updated.displayCode() + " 已确认，截止时间 " + updated.dueDate() + " "
+                        + time + "（" + updated.status() + "）。", updated, null, false);
+    }
+
     private AgentReply listTasks(Long userId, String group, String courseId,
                                  BigDecimal confidence) {
         DdlTaskBoardVO board = ddlTaskService.listTasks(userId, trimToNull(group),
@@ -559,7 +598,7 @@ public class AgentOrchestratorService {
 
     private AgentReply help(BigDecimal confidence) {
         return reply(AgentIntent.CHITCHAT_HELP, confidence, AgentToolAction.HELP,
-                "可用指令：/ddl 通知原文、/list、/done T102、/confirm T102 2026-10-25 22:00、"
+                "可用指令：/ddl 通知原文、/list、/done T102、/confirm T102（沿用已有截止时间）、"
                         + "/edit T102 2026-10-25 22:00。也可以直接转发通知文本。",
                 null, null, false);
     }
@@ -580,7 +619,8 @@ public class AgentOrchestratorService {
                                    AgentInboundMessage message) {
         Map<String, Object> body = routeRequest(userId, user, rawText, message);
         JsonNode data = pythonAiEngineClient.postJson(
-                PythonAiEngineClient.ROUTE_AND_EXTRACT_PATH, body, userId, ROUTE_READ_TIMEOUT);
+                PythonAiEngineClient.ROUTE_AND_EXTRACT_PATH, body, userId,
+                Duration.ofSeconds(routeReadTimeoutSeconds));
         AgentIntent intent = parseIntent(data.path("intent"));
         BigDecimal confidence = parseConfidence(data.path("intent_confidence"));
         DdlExtractedPayload payload = null;

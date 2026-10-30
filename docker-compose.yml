@@ -215,6 +215,10 @@ services:
       SC_ALLOW_LOCAL_MODEL_BASE_URL: ${SC_ALLOW_LOCAL_MODEL_BASE_URL:-false}
       SC_LOCAL_MODEL_ALLOWED_ORIGINS: ${SC_LOCAL_MODEL_ALLOWED_ORIGINS:-}
       SC_IM_PUSH_ENABLED: ${SC_IM_PUSH_ENABLED:-false}
+      # AUTO_ROUTE 可能含两次模型请求；真实供应商 1600 max_tokens 下需放宽（默认 60s）。
+      SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS: ${SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS:-60}
+      # 单次 DDL 提取（含模型重试）的 Python 读取超时（默认 60s）。
+      SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS: ${SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS:-60}
       SC_ONEBOT_ACCESS_TOKEN: ${SC_ONEBOT_ACCESS_TOKEN:-}
       # TASK-803 OneBot 入站/出站；NapCat 为可选 profile（docker compose --profile onebot up -d）。
       # 默认指向同网络的 sc-napcat-onebot；不使用 NapCat 时保持空值即可（入站无人上报，出站仍受总开关约束）。

@@ -213,15 +213,15 @@ def main() -> int:
         check("浏览器：完成态编辑保持已完成", "完成态改名任务" in text
               and "已完成" in text, text[:1600])
 
-        # 7. 取消任务：用 display_code 精确断言被取消的那一条从看板移除
+        # 7. 删除任务：用 display_code 精确断言被删除的那一条从看板移除
         #    （同名任务可能有多条，不能只数标题出现次数）
         cancel_row = page.locator("tr", has_text="提交实验二报告").first
         canceled_code = cancel_row.locator(".sc-ddl-code").first.inner_text().strip()
-        cancel_row.get_by_role("button", name="取消").click()
-        page.locator(".el-message-box").get_by_role("button", name="取消任务").click()
+        cancel_row.get_by_role("button", name="删除", exact=True).click()
+        page.locator(".el-message-box").get_by_role("button", name="删除", exact=True).click()
         page.wait_for_timeout(1200)
         # 成功提示 toast 里也会出现任务编号，必须只看表格行。
-        check("浏览器：取消任务后从看板移除",
+        check("浏览器：删除任务后从看板移除",
               page.locator("tr", has_text=canceled_code).count() == 0,
               body_text()[:1600])
 

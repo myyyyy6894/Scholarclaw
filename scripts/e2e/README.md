@@ -243,9 +243,11 @@ python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380 -
 
 ## 7. P8 Web + QQ（OneBot 协议替身）联调（TASK-805）
 
-**边界：** 本脚本使用 `p8_mock_onebot.py` 模拟 NapCat Action API，**不是真实 QQ 账号**；
-NapCat 容器仍未纳入 Compose。它验证的是 Java 侧 OneBot 协议处理、站内通知、出站令牌桶/
-抖动/重试/降级与 Web 通知中心，不证明真实 QQ 平台可用。
+**边界：** 本脚本使用 `p8_mock_onebot.py` 模拟 NapCat Action API，**不是真实 QQ 账号**，
+本节的自动化结果**不得**当作真实 QQ 证据。NapCat 已作为可选 `onebot` Compose profile
+（`docker compose --profile onebot up -d sc-napcat-onebot`，见 `DEPLOYMENT.md` §3.1），
+本节仍刻意使用协议替身，以保证可重复、无需登录态。真实 QQ 的证据单独记录（见
+`TASK_TRACKER.md` §1 TASK-805 与 `.agent-handoff/validation.md`）。
 
 前置：最新 Java/Python/Web 镜像已构建（`mvn -DskipTests package`、`npm run build`、
 `docker compose build sc-java-backend sc-python-ai sc-web-nginx`）。
@@ -309,7 +311,9 @@ P8 API 覆盖：错误令牌 401、未绑定发送者静默丢弃、meta ACK、�
 的文件段、合法文件默认课程入库、文件 URL SSRF（云元数据/回环）拦截、T-6h 提醒→站内通知→IM
 `SENT_IM`、未绑定用户 `FALLBACK_WEB_ONLY`、协议端失败 3 次后 `FALLBACK_WEB_ONLY`。
 浏览器覆盖：通知角标/标题/全部已读、未读归零、QQ 离线时通知最终 `FALLBACK_WEB_ONLY`、
-DDL 页面在 QQ 离线时正常加载、无 console error。
+DDL 页面在 QQ 离线时正常加载、设置页「打开 NapCat 登录页」入口存在且 `href` 与
+`VITE_NAPCAT_WEBUI_URL` 一致、无 console error。截图：`/tmp/sc_p8_notifications.png`、
+`/tmp/sc_p8_notifications-settings.png`。
 
 清理（恢复原 `.env`、删除替身并确认整栈健康）：
 

@@ -2,7 +2,9 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0~P7 已验收 `DONE`（P7 由负责人 2026-10-28 验收，TASK-701~706 全部 `DONE`）；P8 `TODO`。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router（规则优先 + 单次 LLM 分类 + Java 确定性工具执行）。**真实栈 E2E 已用本地 mock 模型执行（API 46/46、浏览器 20/20），并完成 2026-10-28 第五轮审阅修复与 P7 验收；真实供应商模型、OneBot 入站与 P8 提醒仍未执行**；任务状态以 `TASK_TRACKER.md` §1 为准。
+**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收，TASK-801~805 全部 `DONE`）；下一阶段 P9 / TASK-901。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
+
+**证据边界（不要混写）**：P8 自动化 E2E 使用 `scripts/e2e/p8_mock_onebot.py` 协议替身（P8 API 48/48、浏览器 10/10），**不是真实 NapCat/QQ**；真实 QQ 已手工验证私聊入站、回复与真实 DeepSeek DDL 提取（task 827）；真实 QQ 主动提醒（T-6h）已验证（task 923 → 通知 1327 `SENT_IM`）；**群聊 `@` 真实回复、群文件下载/群权限、真实平台限流/风控仍未验证**，负责人已接受为上线前补测项（RISK-103/104）。IM 投递语义为「正常路径至少一次 + 本地去重」，**不是严格恰好一次**（RISK-110）。任务状态以 `TASK_TRACKER.md` §1 为准。
 
 ---
 
@@ -126,6 +128,18 @@ docker compose ps                        # 等到 7 个容器都 healthy
 入口：`http://<宿主机>:80`。七个容器（MySQL / Redis / RabbitMQ / ChromaDB / Java / Python / Nginx）
 与端口边界、卷权限、环境变量注入边界、健康检查依赖链、已知限制**详见 `DEPLOYMENT.md`**。
 
+**可选 OneBot / NapCat（`onebot` profile）**：接入真实 QQ 时额外启动社区 NapCat 容器：
+
+```bash
+docker compose --profile onebot up -d sc-napcat-onebot
+# WebUI（仅回环）：http://127.0.0.1:6099   HTTP Action API（仅回环）：http://127.0.0.1:3000
+```
+
+该容器只加入 `scholarclaw-internal` 网络，端口默认只绑定 `127.0.0.1`；Java 通过
+`SC_ONEBOT_BASE_URL=http://sc-napcat-onebot:3000` 调用它，入站上报地址为
+`http://sc-java-backend:8080/webhooks/onebot/v11`。默认 `docker compose up -d` **不会**创建该容器。
+详细步骤（登录、HTTP 服务端、上报地址、Token、文件下载 Origin 白名单）见 `DEPLOYMENT.md` §3.1。
+
 要点提醒：**只有 Nginx 暴露宿主机端口**；`/internal/**` 被 Nginx 阻断为 404；
 Java 与 Python 共享同一 uid（10001）但 Python 对共享卷是只读挂载。
 
@@ -238,6 +252,13 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 | 数据库迁移开关（Java） | `SC_DB_MIGRATION_ENABLED` | `true` | 启动期自动执行 `db/migration/V*.sql`；生产改由运维先手工迁移时设为 `false` |
 | MySQL 探针方式（Java） | `SC_DB_POOL_PROBE` | `true` | `true`＝连接池级（能证明凭据正确）；`false`＝退回 TCP 可达性 |
 | Redis 探针方式（Java） | `SC_REDIS_POOL_PROBE` | `true` | `true`＝连接池级 `PING`（能证明凭据正确）；`false`＝退回 TCP 可达性 |
+| IM 主动推送总开关（Java） | `SC_IM_PUSH_ENABLED` | `false` | `false`＝所有通知只落站内信并置 `FALLBACK_WEB_ONLY`；`true` 才由出站调度器调用 OneBot。**验收/演示真实 QQ 主动提醒时必须显式打开，结束后恢复 `false`** |
+| Agent 路由读取超时（Java） | `SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS` | `60` | `AUTO_ROUTE` 调用 Python 的读取超时（秒）。该调用可能含意图分类 + DDL 提取两次模型请求，真实供应商在 1600 `max_tokens` 下可超过 15s |
+| DDL 提取读取超时（Java） | `SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS` | `60` | 单次 DDL 提取调用 Python 的读取超时（秒），需覆盖模型最多 2 次重试 |
+| OneBot 访问令牌（Java） | `SC_ONEBOT_ACCESS_TOKEN` | 空 | 入站 Bearer / `X-Signature` HMAC-SHA1 校验密钥。**留空时入站一律拒绝**。NapCat 侧的 token 需在 WebUI 中单独配置为相同值；该变量**不会**注入 `sc-napcat-onebot` 容器 |
+| OneBot Action API 基址（Java） | `SC_ONEBOT_BASE_URL` | compose 注入 `http://sc-napcat-onebot:3000` | 出站回复/`get_file` 目标；未注入时入站仍可验签，但无法回复或取文件 |
+| OneBot 发送者白名单（Java） | `SC_ONEBOT_ALLOWED_SENDERS` | 空 | 叠加在 `t_user_config` 绑定之上的可选 `user_id` 白名单；留空表示只按绑定校验 |
+| OneBot 文件 Origin 白名单（Java） | `SC_ONEBOT_FILE_ALLOWED_ORIGINS` | 空 | 逗号分隔的允许下载 Origin（如 `http://sc-napcat-onebot:3000`）。默认空＝拒绝回环/私网文件 URL；链路本地与云元数据地址即使加入白名单也硬拒绝 |
 
 其余环境变量（`SC_MASTER_KEY`、`SC_JWT_SECRET`、`SC_DB_PASSWORD` 等）随对应任务引入，注入边界见 `docs/02` §13.2。
 **`sc-python-ai` 只从上述白名单变量读取配置**，其 `app/core/config.py` 对白名单外的名字直接报错，
@@ -250,6 +271,7 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 | `VITE_API_BASE_URL` | `/api` | 浏览器请求业务接口的前缀；开发态由 Vite 代理，生产态由 Nginx 反向代理 |
 | `VITE_DEV_PROXY_TARGET` | `http://127.0.0.1:8080` | 开发态代理目标（Java 后端） |
 | `VITE_APP_TITLE` | `ScholarClaw 智学爪` | 页面标题 |
+| `VITE_NAPCAT_WEBUI_URL` | `http://127.0.0.1:6099` | 设置页「打开 NapCat 登录页」链接目标（仅本机浏览器访问，不参与后端鉴权） |
 
 ⚠️ **Vite 只会把 `VITE_` 前缀的变量注入客户端包**，因此**任何密钥都不得以 `VITE_` 命名**——
 模型密钥由 Java 加密保存、只在内部请求内透传，前端只展示掩码。
@@ -262,4 +284,4 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 - 当前状态、需求追踪、未决事项台账：`TASK_TRACKER.md`。
 - 环境差异与风险：`ENVIRONMENT.md`。
 
-阶段路线：P0 仓库核验 → P1 工程骨架与容器底座 → P2 认证/BYOK → P3 Python 网关与模型探测 → P4 课程与知识库（`DONE`）→ P5 异步解析与向量索引 → P6 RAG 与 SSE → P7 DDL 闭环 → P8 提醒/通知/OneBot → P9 清理补偿与 MVP 验收。
+阶段路线：P0 仓库核验 → P1 工程骨架与容器底座 → P2 认证/BYOK → P3 Python 网关与模型探测 → P4 课程与知识库（`DONE`）→ P5 异步解析与向量索引（`DONE`）→ P6 RAG 与 SSE（`DONE`）→ P7 DDL 闭环（`DONE`）→ P8 提醒/通知/OneBot（`DONE`）→ P9 清理补偿与 MVP 验收。

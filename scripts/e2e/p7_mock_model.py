@@ -106,7 +106,9 @@ def extracted(notice, reference):
         base.update(raw_time_text=notice, task_title="提交日期任务",
                     time_precision="DATE_ONLY", parsed_due_date=due_date)
     elif ("实验二报告" in notice or "实验报告" in notice) and due_date:
-        base.update(raw_time_text=notice[-20:], task_title="提交实验二报告",
+        # 必须返回完整时间表述：截断会丢掉年份（如“2026年12月10日”→“2月10日”），
+        # 触发 Java 侧跨年顺延规则，导致日期漂移和 E2E 假失败。
+        base.update(raw_time_text=notice, task_title="提交实验二报告",
                     time_precision="EXACT_DATETIME", parsed_due_date=due_date,
                     parsed_due_time=due_time or "22:00:00")
     return {"intent_confidence": 0.98, "ddl_payload": base}

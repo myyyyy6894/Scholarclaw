@@ -131,6 +131,10 @@ sc:
   # ENV-01 要求：时区必须显式固定，严禁依赖宿主机或 JVM 默认时区，
   # 因此该值由 TimeZoneConfig 在启动时显式装载，并作为 Jackson 时间序列化的基准。
   timezone: ${SC_TIMEZONE:Asia/Shanghai}
+  # Agent 路由（TASK-706）：AUTO_ROUTE 一次调用可能包含意图分类 + DDL 提取两次模型请求，
+  # 真实供应商在 1600 max_tokens 下单次可超过 15s；默认 60s，可用环境变量覆盖。
+  agent:
+    route-read-timeout-seconds: ${SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS:60}
   # 站内通知初始出站状态（TASK-802）：关闭或未绑定 IM 时直接 FALLBACK_WEB_ONLY；
   # 真正的令牌桶限流与发送属 TASK-804。该开关与 compose 的 SC_IM_PUSH_ENABLED 一致。
   im:
@@ -176,6 +180,8 @@ sc:
   # DDL 定时提醒（TASK-801）：T-24h / T-6h / 逾期 / 待确认跟进。
   # 调度器每轮获取 Redis sc:lock:job:ddl_reminder；提醒位由 t_ddl_task 条件更新最终防重。
   ddl:
+    # DDL 提取的 Python 读取超时（秒）。模型可能重试 2 次，真实供应商单次可超过 15s。
+    extract-read-timeout-seconds: ${SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS:60}
     reminder:
       enabled: ${SC_DDL_REMINDER_ENABLED:true}
       initial-delay-ms: ${SC_DDL_REMINDER_INITIAL_DELAY_MS:60000}

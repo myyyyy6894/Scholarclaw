@@ -175,6 +175,24 @@ class DdlExtractionServiceTest {
     }
 
     @Test
+    @DisplayName("DDL 提取读取超默认 60s，避免真实供应商模型重试被 15s 截断")
+    void extractionReadTimeoutAllowsSlowProvider() {
+        stubPython(payload("操作系统原理", "提交实验二报告", "DATE_ONLY",
+                "2099-12-31", null, 0.96, false, false));
+        when(draftStore.acquireRequestLock(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_timeout")))
+                .thenReturn(DdlDraftStore.RequestLock.acquired("request-token"));
+        when(draftStore.loadReceipt(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_timeout")))
+                .thenReturn(Optional.empty());
+
+        service.extractForPlatform(USER_ID, "QQ_ONEBOT", "msg_timeout",
+                "请于2099年12月31日提交实验报告", null, "2026-10-15T11:40:00+08:00", false);
+
+        ArgumentCaptor<Duration> captor = ArgumentCaptor.forClass(Duration.class);
+        verify(pythonClient).postJson(any(), any(), any(), captor.capture());
+        assertThat(captor.getValue()).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
     @DisplayName("路由模式落库：直接复用已解析 payload，不再调用 Python")
     void persistRoutedSkipsPython() {
         DdlExtractedPayload routed = DdlExtractedPayload.fromData(data(payload(

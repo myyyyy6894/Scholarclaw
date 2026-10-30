@@ -61,6 +61,44 @@ docker compose down                     # 停止并删除容器（保留数据�
 docker compose down -v                  # ⚠️ 连数据卷一起删除，会丢失 MySQL 与课件数据
 ```
 
+### 3.1 可选 OneBot / NapCat（真实 QQ）
+
+NapCat 以 **可选 `onebot` profile** 纳入编排，默认 `docker compose up -d` 不会创建它。
+
+```bash
+# 启动（只启动这一个可选容器）
+docker compose --profile onebot up -d sc-napcat-onebot
+
+# 停止（保留登录态与配置卷）
+docker compose --profile onebot stop sc-napcat-onebot
+
+# 彻底删除（含 QQ 登录态与 NapCat 配置卷，谨慎）
+docker compose --profile onebot rm -sf sc-napcat-onebot
+docker volume rm vol_napcat_qq vol_napcat_config
+```
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| 容器名 | `sc-napcat-onebot` | 镜像 `mlikiowa/napcat-docker:latest`；**生产前请 pin 具体版本**（社区 tag 不可复现） |
+| 网络 | 仅 `scholarclaw-internal` | 与 Java 同网，Java 可用 `http://sc-napcat-onebot:3000` 直接调用 Action API |
+| WebUI | `http://127.0.0.1:${SC_NAPCAT_WEBUI_PORT:-6099}` | 首次扫码登录 QQ；**默认只绑定回环** |
+| HTTP Action API | `http://127.0.0.1:${SC_NAPCAT_HTTP_PORT:-3000}` | NapCat 的 HTTP **服务端**端口；入站上报由 NapCat 作为**客户端**发往 Java |
+| 回环绑定 | `SC_NAPCAT_WEBUI_BIND` / `SC_NAPCAT_HTTP_BIND` | 默认 `127.0.0.1`；仅可信内网/VPN 场景才改 `0.0.0.0`，并自行承担暴露风险 |
+| 持久化卷 | `vol_napcat_qq`（`/app/.config/QQ`）、`vol_napcat_config`（`/app/napcat/config`） | 删除卷即丢失 QQ 登录态与 OneBot 配置 |
+| 内存上限 | `1024m` | 与架构基线一致 |
+
+**NapCat 侧需要手工配置（不由 Compose 注入）：**
+
+1. WebUI 扫码登录 QQ；
+2. 打开「网络配置 → HTTP 服务器」，启用并设置端口 `3000`、Token 与 Java 的 `SC_ONEBOT_ACCESS_TOKEN` **保持一致**；
+3. 打开「HTTP 客户端 / 上报」，上报地址填 `http://sc-java-backend:8080/webhooks/onebot/v11`，并启用 Message 上报；
+4. 文件下载：若 NapCat 返回本地路径，需在 NapCat 配置中开启 `enableLocalFile2Url`，Java 才收到 `base64`/URL；同机临时文件服务的 Origin 需显式加入 Java 的 `SC_ONEBOT_FILE_ALLOWED_ORIGINS`。
+
+**Web 设置页入口**：前端构建期变量 `VITE_NAPCAT_WEBUI_URL`（默认 `http://127.0.0.1:6099`）决定「打开 NapCat 登录页」链接。
+它只影响浏览器跳转，不参与后端鉴权；远程访问时改为可达的 WebUI 地址并重新构建前端。
+
+**证据边界**：真实 QQ 私聊入站、回复与真实 DeepSeek DDL 提取已手工验证；**主动提醒、群聊 `@`、群文件下载/群权限、真实平台限流/风控未验收**（见 `TASK_TRACKER.md` §1 与 `.agent-handoff/risks.md`）。
+
 ## 4. 网络与端口边界
 
 | 容器 | 网络 | 宿主机端口 | 容器内端口 |
@@ -72,6 +110,7 @@ docker compose down -v                  # ⚠️ 连数据卷一起删除，会�
 | `sc-redis` | internal | 不暴露 | 6379 |
 | `sc-rabbitmq` | internal | 不暴露 | 5672 / 15672 |
 | `sc-chromadb` | internal | 不暴露 | 8000 |
+| `sc-napcat-onebot`（可选 `onebot` profile） | internal | `127.0.0.1:${SC_NAPCAT_WEBUI_PORT:-6099}`、`127.0.0.1:${SC_NAPCAT_HTTP_PORT:-3000}` | 6099（WebUI）/ 3000（Action API） |
 
 Nginx 另外**显式阻断** `/internal/**`（返回 404），内部接口不可能从容器外到达。
 
@@ -87,6 +126,8 @@ Nginx 另外**显式阻断** `/internal/**`（返回 404），内部接口不可
 | `vol_rabbitmq_data` | `sc-rabbitmq:/var/lib/rabbitmq` | RabbitMQ 独占 |
 | `vol_chroma_data` | `sc-chromadb:/chroma/chroma` | ChromaDB 独占（**可重建**派生索引） |
 | `vol_shared_storage` | `sc-java-backend:/data/scholarclaw/storage`（rw）<br>`sc-python-ai:/data/scholarclaw/storage/raw`（ro） | Java 读写删除；Python 只读 |
+| `vol_napcat_qq` | `sc-napcat-onebot:/app/.config/QQ` | NapCat 独占（QQ 登录态） |
+| `vol_napcat_config` | `sc-napcat-onebot:/app/napcat/config` | NapCat 独占（OneBot 配置） |
 
 **`volume.subpath` 不能省。** 若直接把卷根挂到 Python 的 `/data/scholarclaw/storage/raw`，
 Java 写的 `<卷根>/raw/x.pdf` 在 Python 眼里会变成 `/…/raw/raw/x.pdf`——两侧路径对不上，
@@ -105,7 +146,12 @@ Java 与 Python 容器使用**同一 uid/gid（10001）**，保证跨容器的�
 | `SC_RABBITMQ_*` | `sc-rabbitmq`、`sc-java-backend`、`sc-python-ai` | 其他 |
 | `SC_INTERNAL_SERVICE_TOKEN` | `sc-java-backend`、`sc-python-ai` | 其他 |
 | `SC_ALLOW_LOCAL_MODEL_BASE_URL` / `SC_LOCAL_MODEL_ALLOWED_ORIGINS` | `sc-java-backend`、`sc-python-ai` | 其他 |
-| `SC_IM_PUSH_ENABLED` / `SC_ONEBOT_ACCESS_TOKEN` | 仅 `sc-java-backend` | Python |
+| `SC_IM_PUSH_ENABLED` / `SC_ONEBOT_ACCESS_TOKEN` | 仅 `sc-java-backend` | Python、`sc-napcat-onebot` |
+| `SC_ONEBOT_BASE_URL` / `SC_ONEBOT_ALLOWED_SENDERS` / `SC_ONEBOT_FILE_ALLOWED_ORIGINS` | 仅 `sc-java-backend` | Python、`sc-napcat-onebot` |
+
+**OneBot 令牌的实际注入关系（易误读）**：`SC_ONEBOT_ACCESS_TOKEN` 只注入 Java，NapCat 容器只收到 `TZ`。
+NapCat 的 HTTP 服务端 Token 在它自己的 WebUI 里配置，必须与 Java 的值手工保持一致；
+环境变量不会替你同步到 NapCat 容器内。
 
 实现方式：`docker-compose.yml` 里逐项 `environment:` 显式声明，**任何容器都不用 `env_file`**。
 实测结果：`sc-python-ai` 容器内 `env` 只有 **15 个应用变量**（`TZ`、`SC_TIMEZONE`、`SC_LOG_LEVEL`、
@@ -220,7 +266,7 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 | 容器日志轮转 | **未配置** `logging` 上限。长期运行建议加 `logging.options.max-size`，否则可能持续占用磁盘 |
 | 数据库迁移 | ✅ **已执行（TASK-201）**：7 张 MVP 表 + 版本表 `sc_schema_migration` 已建，结构核对 473 项全一致（见 §13）。`v1.1` 扩展表按约束未建；`03` §10.3 的增量回滚脚本与 `03` §7.4 的只读最小权限账号仍未落地 |
 | Java 与数据层连接 | Java 容器已收到 DB/Redis/MQ 凭据，但**代码尚未引入相应客户端**（TASK-201 之后）。健康检查对这三者目前只做 **TCP 可达性**验证：证明网络通、进程在监听，**不证明**凭据正确或数据库可读写 |
-| OneBot / NapCat 容器 | **有意未纳入**编排（文档标注为可选）。TASK-803 已实现入站适配器与 `OneBotApiClient`；NapCat 镜像 tag 与真实 QQ 联调仍待 TASK-805 确认 |
+| OneBot / NapCat 容器 | ✅ **已作为可选 `onebot` profile 纳入编排**（`docker compose --profile onebot up -d sc-napcat-onebot`），仅加入内网、3000/6099 默认绑定 `127.0.0.1`。NapCat 镜像 tag 仍为 `latest`，生产前需 pin；**真实 QQ 主动提醒、群聊 `@`、群文件下载/群权限、平台限流/风控未验收**（见 §3.1） |
 | 内部通信验证 | ✅ 已完成（TASK-105 + 2026-10-19 复核）：契约、环回例外范围、日志关联与脱敏、只读挂载、**双向 `/health` 常驻验证**、依赖故障判定均已实测，见 `INTERNAL_API_VERIFICATION.md`。**Python → Java 的「业务」内部调用（`API-INT-JAVA-001/002/003`）尚未实现**（属 TASK-503），当前 Python → Java 只覆盖健康检查 |
 | Python 依赖锁定范围 | `sc-python-ai/requirements.lock.txt` 锁的是**运行时**依赖（16 个包，全部固定版本）。两点边界：① 不含制品哈希（`pip freeze` 拿不到哈希，无法防"同名同版本被重传"）；② 开发/测试依赖（`pytest`、`pytest-asyncio`）仍是版本区间，未纳入锁文件——等引入 CI 时再评估 |
 | `data.peers` 的覆盖面 | 只有 `sc-java-backend` 会上报 `peers.python_ai`；`sc-python-ai` 的 `peers` 恒为空（Python → Java 方向由容器 healthcheck 承担，避免两个健康接口互调形成无限递归）。若日后希望 Python 也上报该观测，需先为健康接口定义"禁止递归"的显式契约 |

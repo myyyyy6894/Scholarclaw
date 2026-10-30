@@ -579,7 +579,7 @@ describe('completed task editing', () => {
     expect(buildUpdatePayload(form).due_time).toBe('17:00:00')
   })
 
-  it('已完成任务表格提供编辑入口（模板回归）', () => {
+  it('已完成任务表格提供编辑与删除入口（模板回归）', () => {
     const source = readFileSync(
       new URL('../src/views/DdlView.vue', import.meta.url),
       'utf8',
@@ -588,7 +588,8 @@ describe('completed task editing', () => {
     const operationColumn = completedSection.slice(0, completedSection.indexOf('</el-table>'))
 
     expect(operationColumn).toContain('openEditDialog(row)')
-    expect(operationColumn).toContain('取消')
+    expect(operationColumn).toContain('cancelTask(row)')
+    expect(operationColumn).toContain('删除')
   })
 
   it('页面不再展示“提醒调度尚未接入”的过期文案', () => {

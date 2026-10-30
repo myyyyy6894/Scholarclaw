@@ -35,6 +35,7 @@ import java.util.Objects;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,7 +60,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class DdlExtractionService {
 
     private static final Logger log = LoggerFactory.getLogger(DdlExtractionService.class);
-    private static final Duration EXTRACT_READ_TIMEOUT = Duration.ofSeconds(15);
+    /**
+     * DDL 提取可能包含模型重试（最多 2 次），真实供应商在 1600 max_tokens 下单次可超过 15s。
+     * 默认 60s，可用 {@code SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS} 覆盖。
+     */
+    @Value("${sc.ddl.extract-read-timeout-seconds:60}")
+    private long extractReadTimeoutSeconds = 60;
     private static final int RAW_TEXT_MIN_LENGTH = 4;
     private static final int RAW_TEXT_MAX_LENGTH = 4000;
     private static final int SEMANTIC_WINDOW_DAYS = 14;
@@ -261,7 +267,7 @@ public class DdlExtractionService {
         JsonNode data = pythonAiEngineClient.postJson(
                 PythonAiEngineClient.ROUTE_AND_EXTRACT_PATH,
                 pythonRequest(userId, user, courses, rawText, referenceTimeRaw),
-                userId, EXTRACT_READ_TIMEOUT);
+                userId, Duration.ofSeconds(extractReadTimeoutSeconds));
         return DdlExtractedPayload.fromData(data);
     }
 

@@ -151,6 +151,25 @@ class AgentOrchestratorServiceTest {
     }
 
     @Test
+    @DisplayName("/confirm 只给编号：沿用任务已有截止时间，不要求重复输入")
+    void slashConfirmWithoutDateTimeReusesExistingDue() {
+        when(ddlTaskService.getTask(USER_ID, 923L))
+                .thenReturn(taskVO(923L, "PENDING_CONFIRM"));
+        when(ddlTaskService.confirmTask(eq(USER_ID), eq(923L), any(UpdateDdlTaskRequest.class)))
+                .thenReturn(taskVO(923L, "ACTIVE"));
+
+        AgentReply reply = service.handle(message("/confirm T923"));
+
+        assertThat(reply.action()).isEqualTo(AgentToolAction.TASK_CONFIRM);
+        ArgumentCaptor<UpdateDdlTaskRequest> captor =
+                ArgumentCaptor.forClass(UpdateDdlTaskRequest.class);
+        verify(ddlTaskService).confirmTask(eq(USER_ID), eq(923L), captor.capture());
+        assertThat(captor.getValue().timePrecision()).isEqualTo("EXACT_DATETIME");
+        assertThat(captor.getValue().dueDate()).isEqualTo("2099-12-31");
+        assertThat(captor.getValue().dueTime()).isEqualTo("22:00:00");
+    }
+
+    @Test
     @DisplayName("/confirm 作用在 ACTIVE 任务：传播 409 STATE_CONFLICT，零写库")
     void slashConfirmOnActiveTaskConflicts() {
         when(ddlTaskService.getTask(USER_ID, 104L)).thenReturn(taskVO(104L, "ACTIVE"));
@@ -438,6 +457,19 @@ class AgentOrchestratorServiceTest {
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(ErrorCode.UPSTREAM_TIMEOUT));
         verifyNoInteractions(ddlTaskService, ddlExtractionService);
+    }
+
+    @Test
+    @DisplayName("AUTO_ROUTE 读取超默认 60s，避免真实供应商两次模型调用被截断")
+    void routeReadTimeoutAllowsSlowProvider() {
+        stubRoute("CODE_SCAFFOLD", 0.9, null);
+
+        assertThatThrownBy(() -> service.handle(message("帮我搭个工程")))
+                .isInstanceOf(BusinessException.class);
+
+        ArgumentCaptor<Duration> captor = ArgumentCaptor.forClass(Duration.class);
+        verify(pythonClient).postJson(any(), any(), eq(USER_ID), captor.capture());
+        assertThat(captor.getValue()).isEqualTo(Duration.ofSeconds(60));
     }
 
     @Test

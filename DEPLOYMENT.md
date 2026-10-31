@@ -264,7 +264,7 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 |---|---|
 | HTTPS / 443 | **未启用**。文档提到 80/443 双端口，但项目未定义证书来源；当前只暴露 80。生产化需补 TLS 终止 |
 | 容器日志轮转 | **未配置** `logging` 上限。长期运行建议加 `logging.options.max-size`，否则可能持续占用磁盘 |
-| 数据库迁移 | ✅ **已执行（TASK-201）**：7 张 MVP 表 + 版本表 `sc_schema_migration` 已建，结构核对 473 项全一致（见 §13）。`v1.1` 扩展表按约束未建；`03` §10.3 的增量回滚脚本与 `03` §7.4 的只读最小权限账号仍未落地 |
+| 数据库迁移 | ✅ **已执行**：`V1.0.0`（7 张 MVP 表）与 `V1.0.4`（第二次跟进 `follow_up_at` 约束）已应用，结构核对 **485 项**一致（见 §13）；`U1.0.4` 回滚脚本已提供。`v1.1` 扩展表按约束未建；只读最小权限账号（`03` §7.4）仍未落地 |
 | Java 与数据层连接 | Java 容器已收到 DB/Redis/MQ 凭据，但**代码尚未引入相应客户端**（TASK-201 之后）。健康检查对这三者目前只做 **TCP 可达性**验证：证明网络通、进程在监听，**不证明**凭据正确或数据库可读写 |
 | OneBot / NapCat 容器 | ✅ **已作为可选 `onebot` profile 纳入编排**（`docker compose --profile onebot up -d sc-napcat-onebot`），仅加入内网、3000/6099 默认绑定 `127.0.0.1`。NapCat 镜像 tag 仍为 `latest`，生产前需 pin；**真实 QQ 主动提醒、群聊 `@`、群文件下载/群权限、平台限流/风控未验收**（见 §3.1） |
 | 内部通信验证 | ✅ 已完成（TASK-105 + 2026-10-19 复核）：契约、环回例外范围、日志关联与脱敏、只读挂载、**双向 `/health` 常驻验证**、依赖故障判定均已实测，见 `INTERNAL_API_VERIFICATION.md`。**Python → Java 的「业务」内部调用（`API-INT-JAVA-001/002/003`）尚未实现**（属 TASK-503），当前 Python → Java 只覆盖健康检查 |
@@ -310,13 +310,13 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 | 项 | 说明 |
 |---|---|
 | 脚本位置 | `sc-java-backend/src/main/resources/db/migration/V{主}.{次}.{修订}__{动词_简述}.sql`（随 jar 打包，无需挂载） |
-| 当前脚本 | `V1.0.0__init_mvp_schema.sql`：7 张 MVP 表（逐字取自 `03` §9.2 Part 1），含生成列 `default_course_uk` / `active_course_name_key` / `active_file_sha256`、6 个唯一索引、14 个 `CHECK` 约束 |
+| 当前脚本 | `V1.0.0__init_mvp_schema.sql`（7 张 MVP 表，含生成列/唯一索引/CHECK）与 `V1.0.4__p8_review_fixes.sql`（第二次跟进后 `follow_up_at=NULL`，重建 `chk_ddl_time_invariants`）；回滚脚本 `U1.0.4__rollback_p8_review_fixes.sql` |
 | 执行时机 | Java 启动时（`sc.db.migration.enabled`，默认 `true`）按版本**数值升序**执行；`db-config` 为 `spring.datasource.*`（`serverTimezone=Asia/Shanghai`、utf8mb4） |
 | 幂等 | 版本表 `sc_schema_migration(version PK, script, checksum, success, execution_ms, applied_at)`：已成功的版本跳过；重复启动只打印「均已执行」 |
 | 防漂移 | 已执行脚本内容（SHA-256）变化 → **拒绝启动**；改历史脚本必须新增增量脚本 |
 | 失败处理 | MySQL DDL 无法回滚（`03` §10.3）：失败版本写 `success=0` + 错误摘要，并让应用启动失败；人工修复后 `DELETE FROM sc_schema_migration WHERE version='x.y.z'` 再启动 |
 | 手工执行（备选，**当前未使用**） | 用有 DDL 权限的账号执行同一脚本后，在 `.env` 设 `SC_DB_MIGRATION_ENABLED=false`；版本表会让应用判断「已是最新」。⚠️ **本项目当前没有运维角色**，实际执行路径是「Java 启动自动迁移」；此流程留给将来有运维/多环境时使用 |
-| 结构核对 | `python3 scripts/db/verify_mvp_schema.py`：把真实库与 `docs/03` 的表集合/字段/索引/约束逐项比对（只读，退出码 0=一致）。**2026-10-19 实测 473 项全部一致** |
+| 结构核对 | `python3 scripts/db/verify_mvp_schema.py`：把真实库与 `docs/03` 的表集合/字段/索引/约束逐项比对（只读，退出码 0=一致）。**2026-10-31 实测 485 项全部一致（版本 1.0.4）** |
 | v1.1 边界 | `t_ddl_subtask` / `t_exam_wrong_book` **不建**（`03` §1.4 / DB-04）；`MigrationScriptTest` 有断言防止提前建表 |
 | 已知缺口 | `DB-01` 运行时参数未应用；增量迁移的 `U*.sql` 回滚脚本与只读最小权限账号（`03` §7.4）待后续任务 |
 
@@ -324,7 +324,8 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 
 ```
 sc-java-backend | 数据库迁移：已执行 V1.0.0 init_mvp_schema（353 ms）
-sc-java-backend | 数据库迁移完成：本次执行 1 个脚本，当前版本 1.0.0
+sc-java-backend | 数据库迁移：已执行 V1.0.4 p8_review_fixes（… ms）
+sc-java-backend | 数据库迁移完成：本次执行 2 个脚本，当前版本 1.0.4
 # 重启后：
-sc-java-backend | 数据库迁移：1 个脚本均已执行（当前版本 1.0.0），无待执行项
+sc-java-backend | 数据库迁移：2 个脚本均已执行（当前版本 1.0.4），无待执行项
 ```

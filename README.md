@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P9 / TASK-901（级联清理）、TASK-902（孤儿资源扫描与 GC）、TASK-903（安全回归）、TASK-904（两条核心业务闭环验收）与 TASK-905（性能与 RAG 基线）已实现，状态 `IN_REVIEW`，待负责人验收；证据见 `SECURITY_REGRESSION.md`、`MVP_ACCEPTANCE.md` 与 `PERFORMANCE_BASELINE.md`（性能数字为本地 mock 口径，不代表真实供应商）。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
+**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P9 / TASK-901（级联清理）、TASK-902（孤儿资源扫描与 GC）、TASK-903（安全回归）、TASK-904（两条核心业务闭环验收）、TASK-905（性能与 RAG 基线）与 TASK-906（部署与交付文档）已实现，**P9 全部任务 `IN_REVIEW`，待负责人逐项验收**；证据见 `SECURITY_REGRESSION.md`、`MVP_ACCEPTANCE.md`、`PERFORMANCE_BASELINE.md` 与 `DELIVERY.md`（性能数字为本地 mock 口径，不代表真实供应商）。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
 
 **证据边界（不要混写）**：P8 自动化 E2E 使用 `scripts/e2e/p8_mock_onebot.py` 协议替身（P8 API 48/48、浏览器 10/10），**不是真实 NapCat/QQ**；真实 QQ 已手工验证私聊入站、回复与真实 DeepSeek DDL 提取（task 827）；真实 QQ 主动提醒（T-6h）已验证（task 923 → 通知 1327 `SENT_IM`）；**群聊 `@` 真实回复、群文件下载/群权限、真实平台限流/风控仍未验证**，负责人已接受为上线前补测项（RISK-103/104）。IM 投递语义为「正常路径至少一次 + 本地去重」，**不是严格恰好一次**（RISK-110）。任务状态以 `TASK_TRACKER.md` §1 为准。
 
@@ -40,6 +40,7 @@ ScholarClaw/
 ├── docker-compose.yml        # 单机部署编排（7 个容器 + 双网络 + 5 个持久化卷）
 ├── .env.example              # 部署环境变量示例（真实值放 .env，已 gitignore）
 ├── DEPLOYMENT.md             # 部署手册：端口边界、卷权限、注入边界、健康检查链、问题定位
+├── DELIVERY.md               # MVP 交付包说明：清单、首次启动、验证、故障恢复（TASK-906）
 ├── INTERNAL_API_VERIFICATION.md  # 内部通信与日志追踪的验证记录（TASK-105 交付物）
 ├── SECURITY_REGRESSION.md       # 安全回归报告（TASK-903 交付物）
 ├── MVP_ACCEPTANCE.md            # 两条核心业务闭环验收记录（TASK-904 交付物）
@@ -181,15 +182,18 @@ docker compose exec -T sc-mysql sh -c 'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD"
   -e "SELECT version, script, success, execution_ms, applied_at FROM sc_schema_migration"'
 
 # 手工执行（生产建议：用特权账号先迁移，再在 .env 里设 SC_DB_MIGRATION_ENABLED=false）
-docker compose exec -T sc-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
-  < sc-java-backend/src/main/resources/db/migration/V1.0.0__init_mvp_schema.sql
+for f in sc-java-backend/src/main/resources/db/migration/V*.sql; do
+  docker compose exec -T sc-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' < "$f"
+done
 
 # 结构核对：把真实库与 docs/03 的数据字典/索引表/约束名逐项比对（只读，退出码 0=一致）
 python3 scripts/db/verify_mvp_schema.py
 ```
 
-V1.0.0 只建 **7 张 MVP 表**；`v1.1` 的 `t_ddl_subtask` / `t_exam_wrong_book` 按 `03` §1.4
-留待 `V1.1.0` 增量脚本（`MigrationScriptTest` 有断言守着，防止提前建表）。
+当前版本 **1.0.4**：`V1.0.0` 建 7 张 MVP 表，`V1.0.4` 调整第二次跟进后的 `follow_up_at` 约束；
+回滚脚本为 `db/rollback/U1.0.4__rollback_p8_review_fixes.sql`。`v1.1` 的 `t_ddl_subtask` /
+`t_exam_wrong_book` 按 `03` §1.4 留待 `V1.1.0` 增量脚本（`MigrationScriptTest` 有断言守着，防止提前建表）。
+结构核对当前为 **485 项一致**。
 
 ### 3.6 认证闭环冒烟（已实测）
 

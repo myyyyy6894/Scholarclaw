@@ -191,6 +191,28 @@ public class CourseService implements UserCourseCountProvider {
         courseMutationService.markRebuildingIfFailed(userId, courseId);
     }
 
+    /** GC：跨用户扫描滞留超过阈值的软删课程（`is_deleting=1`）。 */
+    public List<StaleCourse> listStaleDeleting(LocalDateTime before, int limit) {
+        return courseNamespaceMapper.selectList(Wrappers.<CourseNamespaceEntity>lambdaQuery()
+                        .eq(CourseNamespaceEntity::getIsDeleting, 1)
+                        .lt(CourseNamespaceEntity::getUpdatedAt, before)
+                        .orderByAsc(CourseNamespaceEntity::getUpdatedAt)
+                        .last("LIMIT " + Math.max(1, limit)))
+                .stream()
+                .map(entity -> new StaleCourse(entity.getUserId(), entity.getCourseId(),
+                        entity.getIndexVersion()))
+                .toList();
+    }
+
+    /** GC：物理删除已软删课程行；重复执行幂等。 */
+    public int purgeSoftDeleted(Long userId, Long courseId) {
+        return courseMutationService.purgeSoftDeleted(userId, courseId);
+    }
+
+    /** GC 扫描结果：课程归属、课程 ID 与索引版本（用于删除旧 Collection）。 */
+    public record StaleCourse(Long userId, Long courseId, Integer indexVersion) {
+    }
+
     /** `API-COURSE-004`：第一阶段软删，事件监听方负责文档/DDL/会话；物理清理由 GC 兜底。 */
     public DeleteCourseVO deleteCourse(Long userId, Long courseId) {
         getActiveCourse(userId, courseId);

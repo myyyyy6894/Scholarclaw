@@ -190,6 +190,16 @@ sc:
       batch-size: ${SC_DDL_REMINDER_BATCH_SIZE:200}
       # 必须大于正常扫描耗时；扫描超时会告警，数据库条件更新仍保证不重复领取。
       lock-ttl-seconds: ${SC_DDL_REMINDER_LOCK_TTL_SECONDS:50}
+  # 删除残留与孤儿资源 GC（TASK-902）：每 60 分钟扫描 DEACTIVATING 用户、
+  # DELETING 文档、is_deleting 课程与 raw 孤儿文件；失败幂等重试。
+  deletion-gc:
+    enabled: ${SC_DELETION_GC_ENABLED:true}
+    initial-delay-ms: ${SC_DELETION_GC_INITIAL_DELAY_MS:60000}
+    interval-ms: ${SC_DELETION_GC_INTERVAL_MS:3600000}
+    stale-minutes: ${SC_DELETION_GC_STALE_MINUTES:10}
+    orphan-file-minutes: ${SC_DELETION_GC_ORPHAN_FILE_MINUTES:60}
+    batch-size: ${SC_DELETION_GC_BATCH_SIZE:200}
+    lock-ttl-seconds: ${SC_DELETION_GC_LOCK_TTL_SECONDS:300}
   internal:
     # Java <-> Python 内部调用鉴权令牌（02 §13.2：仅注入 sc-java-backend 与 sc-python-ai）。
     # 默认留空表示“未注入”：此时 InternalTokenAuthFilter 对所有 /internal/** 请求一律拒绝（fail-closed），

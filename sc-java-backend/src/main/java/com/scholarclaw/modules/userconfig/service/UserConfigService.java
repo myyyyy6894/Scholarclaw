@@ -188,6 +188,19 @@ public class UserConfigService {
                                   String embeddingModel, Integer embeddingDim, String embeddingApiKeyCipher) {
     }
 
+    /** GC：跨用户扫描滞留超过阈值的 `DEACTIVATING` 账号。 */
+    public java.util.List<Long> findStaleDeactivating(java.time.LocalDateTime before, int limit) {
+        return userConfigMapper.selectList(Wrappers.<UserConfigEntity>lambdaQuery()
+                        .eq(UserConfigEntity::getAccountStatus, "DEACTIVATING")
+                        .lt(UserConfigEntity::getUpdatedAt, before)
+                        .orderByAsc(UserConfigEntity::getUpdatedAt)
+                        .select(UserConfigEntity::getUserId)
+                        .last("LIMIT " + Math.max(1, limit)))
+                .stream()
+                .map(UserConfigEntity::getUserId)
+                .toList();
+    }
+
     /** 账号是否处于注销清理中（`03` §4.1 `account_status = DEACTIVATING`）。 */
     public static boolean isDeactivating(UserConfigEntity entity) {
         return entity != null && "DEACTIVATING".equals(entity.getAccountStatus());

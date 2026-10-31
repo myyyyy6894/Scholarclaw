@@ -409,6 +409,15 @@ public class KnowledgeDocService {
                 .eq(KnowledgeDocEntity::getUserId, userId));
     }
 
+    /** GC：扫描滞留超过阈值的 `DELETING` 文档（跨用户，按 `(status, updated_at)` 索引）。 */
+    public List<KnowledgeDocEntity> listStaleDeleting(LocalDateTime before, int limit) {
+        return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.DELETING.name())
+                .lt(KnowledgeDocEntity::getUpdatedAt, before)
+                .orderByAsc(KnowledgeDocEntity::getUpdatedAt)
+                .last("LIMIT " + Math.max(1, limit)));
+    }
+
     /** RAG 有效文档集：`READY` 且课程索引版本匹配。 */
     public List<Long> validDocIds(Long userId, Long courseId, int courseIndexVersion) {
         return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()

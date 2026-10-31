@@ -84,6 +84,38 @@ public class KnowledgeVectorCleanupService {
         return false;
     }
 
+    /**
+     * GC 重放：单次直接调用 Python 清理，不重试、不重复写补偿队列。
+     *
+     * <p>调用方是 `rag.ingest.vector-compensation` 消费者：失败由消费者把原消息停放到
+     * parking 队列，避免“清理失败 → 再写补偿 → 再消费”的无限循环。
+     */
+    public boolean cleanupDirect(String scope, Long userId, Long courseId, Long docId,
+                                 Integer courseIndexVersion, Integer staleParseVersion) {
+        Map<String, Object> body = base(scope, userId);
+        if (courseId != null) {
+            body.put("course_id", String.valueOf(courseId));
+        }
+        if (docId != null) {
+            body.put("doc_id", String.valueOf(docId));
+        }
+        if (courseIndexVersion != null) {
+            body.put("course_index_version", courseIndexVersion);
+        }
+        if (staleParseVersion != null) {
+            body.put("stale_parse_version", staleParseVersion);
+        }
+        try {
+            pythonClient.deleteJson(PythonAiEngineClient.VECTORS_PATH, body, userId,
+                    CLEANUP_TIMEOUT);
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("GC 向量清理失败 scope={} userId={} error={}", scope, userId,
+                    e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
     private static boolean isTransient(ErrorCode code) {
         return code == ErrorCode.UPSTREAM_MODEL_ERROR
                 || code == ErrorCode.UPSTREAM_TIMEOUT

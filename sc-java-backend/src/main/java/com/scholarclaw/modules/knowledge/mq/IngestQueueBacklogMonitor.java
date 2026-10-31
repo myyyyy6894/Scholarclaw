@@ -12,9 +12,9 @@ import org.springframework.stereotype.Component;
 /**
  * 停放/补偿队列积压巡检（P6 复核补强）。
  *
- * <p>`rag.ingest.parking` 与 `rag.ingest.vector-compensation` 当前**没有自动消费者**，
- * 由 TASK-902 GC 重放。若不监控，故障会以“记录已持久化但无人处理”的形式静默累积，
- * 陈旧向量还会占用 Top-K 降低召回。本巡检只负责发现并告警，**不宣称已自动恢复**。
+ * <p>`rag.ingest.vector-compensation` 由 TASK-902 的 {@link VectorCompensationListener}
+ * 自动重放；重放仍失败的消息会转入 `rag.ingest.parking`，parking **没有自动消费者**。
+ * 两个队列出现积压都说明存在未自动恢复的故障，本巡检只负责发现并告警。
  */
 @Component
 @ConditionalOnProperty(name = "sc.mq.ingest.enabled", havingValue = "true",
@@ -45,7 +45,7 @@ public class IngestQueueBacklogMonitor {
             fixedDelayString = "${sc.mq.ingest.backlog-monitor.interval-ms:300000}")
     public void reportBacklog() {
         checkQueue(parkingQueue, "死信停放");
-        checkQueue(compensationQueue, "向量清理补偿");
+        checkQueue(compensationQueue, "向量补偿（消费者重放失败停放）");
     }
 
     /** 返回队列积压条数；查询失败返回 -1（broker 不可用时不影响业务）。 */

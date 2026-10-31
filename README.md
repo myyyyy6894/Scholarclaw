@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P9 / TASK-901（领域事件级联清理）已实现，状态 `IN_REVIEW`，待负责人验收。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
+**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P9 / TASK-901（级联清理）与 TASK-902（孤儿资源扫描与 GC）已实现，状态 `IN_REVIEW`，待负责人验收。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
 
 **证据边界（不要混写）**：P8 自动化 E2E 使用 `scripts/e2e/p8_mock_onebot.py` 协议替身（P8 API 48/48、浏览器 10/10），**不是真实 NapCat/QQ**；真实 QQ 已手工验证私聊入站、回复与真实 DeepSeek DDL 提取（task 827）；真实 QQ 主动提醒（T-6h）已验证（task 923 → 通知 1327 `SENT_IM`）；**群聊 `@` 真实回复、群文件下载/群权限、真实平台限流/风控仍未验证**，负责人已接受为上线前补测项（RISK-103/104）。IM 投递语义为「正常路径至少一次 + 本地去重」，**不是严格恰好一次**（RISK-110）。任务状态以 `TASK_TRACKER.md` §1 为准。
 
@@ -254,7 +254,9 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 | Redis 探针方式（Java） | `SC_REDIS_POOL_PROBE` | `true` | `true`＝连接池级 `PING`（能证明凭据正确）；`false`＝退回 TCP 可达性 |
 | IM 主动推送总开关（Java） | `SC_IM_PUSH_ENABLED` | `false` | `false`＝所有通知只落站内信并置 `FALLBACK_WEB_ONLY`；`true` 才由出站调度器调用 OneBot。**验收/演示真实 QQ 主动提醒时必须显式打开，结束后恢复 `false`** |
 | Agent 路由读取超时（Java） | `SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS` | `60` | `AUTO_ROUTE` 调用 Python 的读取超时（秒）。该调用可能含意图分类 + DDL 提取两次模型请求，真实供应商在 1600 `max_tokens` 下可超过 15s |
-| DDL 提取读取超时（Java） | `SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS` | `60` | 单次 DDL 提取调用 Python 的读取超时（秒），需覆盖模型最多 2 次重试 |
+| DDL 提取读取超时（Java） | `SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS` | `60` | 单次 DDL 提取调用 Python 的读取超时（秒），需覆盖模型最多 2 次重试 ||
+| 删除 GC 开关/周期（Java） | `SC_DELETION_GC_ENABLED` / `SC_DELETION_GC_INTERVAL_MS` | `true` / `3600000` | 每 60 分钟扫描 `DEACTIVATING` 用户、`DELETING` 文档、`is_deleting` 课程与 raw 孤儿文件并幂等重放 |
+| 删除 GC 阈值（Java） | `SC_DELETION_GC_STALE_MINUTES` / `SC_DELETION_GC_ORPHAN_FILE_MINUTES` | `10` / `60` | 只处理滞留超过阈值的记录/文件，避免与在途请求竞争 |
 | OneBot 访问令牌（Java） | `SC_ONEBOT_ACCESS_TOKEN` | 空 | 入站 Bearer / `X-Signature` HMAC-SHA1 校验密钥。**留空时入站一律拒绝**。NapCat 侧的 token 需在 WebUI 中单独配置为相同值；该变量**不会**注入 `sc-napcat-onebot` 容器 |
 | OneBot Action API 基址（Java） | `SC_ONEBOT_BASE_URL` | compose 注入 `http://sc-napcat-onebot:3000` | 出站回复/`get_file` 目标；未注入时入站仍可验签，但无法回复或取文件 |
 | OneBot 发送者白名单（Java） | `SC_ONEBOT_ALLOWED_SENDERS` | 空 | 叠加在 `t_user_config` 绑定之上的可选 `user_id` 白名单；留空表示只按绑定校验 |

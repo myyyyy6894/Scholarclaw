@@ -93,6 +93,21 @@ public class UserDeactivationService {
     }
 
     /**
+     * GC 重放：对仍处于 `DEACTIVATING` 的用户重新发布注销事件，触发各模块再次清理。
+     * 幂等；用户行不存在或已 ACTIVE 时直接返回。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void retryCleanup(Long userId) {
+        UserConfigEntity current = userConfigMapper.selectById(userId);
+        if (current == null
+                || !STATUS_DEACTIVATING.equals(current.getAccountStatus())) {
+            return;
+        }
+        eventPublisher.publishEvent(new UserDeactivatingEvent(userId));
+        log.info("账号注销 GC 重放 userId={}", userId);
+    }
+
+    /**
      * 所有模块完成清理后：先清理 Redis `sc:u:{uid}:*`（保留注销阻断键），再物理删除用户行。
      * Redis 清理失败时保留用户行，交给 GC 重试，避免“用户行没了但 Redis 仍有业务键”。
      */

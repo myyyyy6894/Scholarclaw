@@ -233,6 +233,15 @@ public class CourseMutationService {
         eventPublisher.publishEvent(new CourseDeletingEvent(userId, courseId));
     }
 
+    /** GC 兜底：物理删除已软删课程行；条件限定 `is_deleting=1`，重复执行幂等。 */
+    @Transactional(rollbackFor = Exception.class)
+    public int purgeSoftDeleted(Long userId, Long courseId) {
+        return courseNamespaceMapper.delete(Wrappers.<CourseNamespaceEntity>lambdaQuery()
+                .eq(CourseNamespaceEntity::getCourseId, courseId)
+                .eq(CourseNamespaceEntity::getUserId, userId)
+                .eq(CourseNamespaceEntity::getIsDeleting, 1));
+    }
+
     /** 切换结果：更新后的课程行 + 事务内统计到的待重建文档数。 */
     public record EmbeddingChangeResult(CourseNamespaceEntity course, int reindexingDocCount) {
     }

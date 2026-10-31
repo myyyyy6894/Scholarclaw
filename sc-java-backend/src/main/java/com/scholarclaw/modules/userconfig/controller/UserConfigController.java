@@ -9,6 +9,7 @@ import com.scholarclaw.common.response.Result;
 import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.common.security.BaseUrlSecurityValidator;
 import com.scholarclaw.common.security.SecurityContextUtils;
+import com.scholarclaw.modules.userconfig.dto.DeactivateAccountRequest;
 import com.scholarclaw.modules.userconfig.dto.ModelConfigUpdateRequest;
 import com.scholarclaw.modules.userconfig.dto.ModelProbeRequest;
 import com.scholarclaw.modules.userconfig.dto.ModelProbeVO;
@@ -20,6 +21,7 @@ import com.scholarclaw.modules.userconfig.service.ModelConfigSaveService;
 import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.modules.userconfig.service.UserCourseCountProvider;
+import com.scholarclaw.modules.userconfig.service.UserDeactivationService;
 import jakarta.validation.Valid;
 import java.time.DateTimeException;
 import java.time.LocalTime;
@@ -73,6 +75,7 @@ public class UserConfigController {
     private final ModelKeyBindingRules modelKeyBindingRules;
     private final UserCourseCountProvider userCourseCountProvider;
     private final ModelConfigSaveService modelConfigSaveService;
+    private final UserDeactivationService userDeactivationService;
 
     public UserConfigController(UserConfigService userConfigService,
                                 AesGcmCryptoService cryptoService,
@@ -81,7 +84,8 @@ public class UserConfigController {
                                 ModelConfigRules modelConfigRules,
                                 ModelKeyBindingRules modelKeyBindingRules,
                                 UserCourseCountProvider userCourseCountProvider,
-                                ModelConfigSaveService modelConfigSaveService) {
+                                ModelConfigSaveService modelConfigSaveService,
+                                UserDeactivationService userDeactivationService) {
         this.userConfigService = userConfigService;
         this.cryptoService = cryptoService;
         this.baseUrlSecurityValidator = baseUrlSecurityValidator;
@@ -90,6 +94,7 @@ public class UserConfigController {
         this.modelKeyBindingRules = modelKeyBindingRules;
         this.userCourseCountProvider = userCourseCountProvider;
         this.modelConfigSaveService = modelConfigSaveService;
+        this.userDeactivationService = userDeactivationService;
     }
 
     /** `API-USER-001`：查询当前用户配置与脱敏密钥视图。 */
@@ -308,6 +313,15 @@ public class UserConfigController {
                 userId, request.timezone(), dndStart, dndEnd,
                 platform == null ? null : platform.toUpperCase(Locale.ROOT), imUid);
         return Result.ok("偏好设置已更新", toVO(updated, cryptoService, modelConfigRules));
+    }
+
+    /** `API-USER-006`：二次确认注销当前账号，立即封禁并异步物理擦除全部个人数据。 */
+    @PostMapping("/account/deactivate")
+    public Result<Void> deactivateAccount(
+            @Valid @RequestBody DeactivateAccountRequest request) {
+        Long userId = SecurityContextUtils.requireCurrentUserId();
+        userDeactivationService.deactivate(userId, request.password(), request.confirmText());
+        return Result.ok("账号已注销，所有关联个人数据正在执行物理擦除", null);
     }
 
     /** `API-USER-005`：销毁已保存的 API Key（幂等，重复调用同样成功）。 */

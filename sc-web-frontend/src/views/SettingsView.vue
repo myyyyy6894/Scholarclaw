@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 
 import {
   clearApiKeys,
+  deactivateAccount,
   getUserConfig,
   probeModel,
   saveModelConfig,
@@ -64,6 +65,11 @@ const savingPrefs = ref(false)
 const probingChat = ref(false)
 const probingEmbedding = ref(false)
 const clearingTarget = ref<ClearKeysTarget | null>(null)
+
+const deactivatePassword = ref('')
+const deactivateConfirm = ref('')
+const deactivateBusy = ref(false)
+
 
 const CHAT_PROVIDERS: Array<{ value: ChatProvider; label: string }> = [
   { value: 'OPENAI_COMPATIBLE', label: 'OpenAI 兼容' },
@@ -273,6 +279,41 @@ async function clearKeys(target: ClearKeysTarget): Promise<void> {
     notifyError(error)
   } finally {
     clearingTarget.value = null
+  }
+}
+
+async function onDeactivateAccount(): Promise<void> {
+  if (deactivateBusy.value) {
+    return
+  }
+  if (deactivatePassword.value.trim() === '') {
+    notifyWarning('请输入当前密码')
+    return
+  }
+  if (deactivateConfirm.value.trim() !== 'CONFIRM_DEACTIVATE') {
+    notifyWarning('请输入 CONFIRM_DEACTIVATE 确认')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '注销后当前登录立即失效，课程、课件、父块、向量、DDL 任务、会话与通知会被物理擦除，且不可恢复。确定继续？',
+      '注销账号',
+      { type: 'error', confirmButtonText: '确认注销', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  deactivateBusy.value = true
+  try {
+    await deactivateAccount(deactivatePassword.value, deactivateConfirm.value.trim())
+    deactivatePassword.value = ''
+    deactivateConfirm.value = ''
+    notifySuccess('账号已注销，所有个人数据正在物理擦除')
+    goToLogin()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    deactivateBusy.value = false
   }
 }
 
@@ -584,6 +625,43 @@ function goToLogin(): void {
             @click="onClearKeys('ALL')"
           >
             销毁全部 Key
+          </el-button>
+        </div>
+      </el-card>
+
+      <el-card class="sc-card-gap" shadow="never">
+        <template #header>
+          <span>注销账号</span>
+        </template>
+        <el-alert
+          type="error"
+          :closable="false"
+          show-icon
+          title="高危操作"
+          description="注销后当前登录立即失效，课程、课件、父块、向量、DDL 任务、会话与通知会被物理擦除，且不可恢复。请输入当前密码并输入 CONFIRM_DEACTIVATE 确认。"
+        />
+        <el-input
+          v-model="deactivatePassword"
+          type="password"
+          show-password
+          placeholder="当前密码"
+          class="sc-settings__full"
+          autocomplete="current-password"
+        />
+        <el-input
+          v-model="deactivateConfirm"
+          placeholder="输入 CONFIRM_DEACTIVATE"
+          class="sc-settings__full"
+        />
+        <div class="sc-settings__row sc-settings__row--end">
+          <span class="sc-settings__hint">该操作不可撤销，也不会保留任何个人数据。</span>
+          <el-button
+            type="danger"
+            :loading="deactivateBusy"
+            :disabled="deactivateBusy"
+            @click="onDeactivateAccount"
+          >
+            注销账号
           </el-button>
         </div>
       </el-card>

@@ -367,6 +367,48 @@ public class KnowledgeDocService {
         return requireOwnedDoc(userId, docId);
     }
 
+    /**
+     * 删除清理完成：`DELETING -> DELETED`（{@code 04} `API-DOC-005` 第二阶段）。
+     *
+     * <p>行保留不物理删除，用于拦截迟到 MQ 回调；返回 `false` 表示状态已被其他路径改变，
+     * 调用方不得据此回滚已删除的向量或文件。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean markDeleted(Long userId, Long docId) {
+        if (userId == null || docId == null) {
+            return false;
+        }
+        return docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
+                .eq(KnowledgeDocEntity::getDocId, docId)
+                .eq(KnowledgeDocEntity::getUserId, userId)
+                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.DELETING.name())
+                .set(KnowledgeDocEntity::getStatus, DocumentStatus.DELETED.name())
+                .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())) == 1;
+    }
+
+    /** 课程清理使用：列出课程下全部文档行（含删除态），只读。 */
+    public List<KnowledgeDocEntity> listByCourse(Long userId, Long courseId) {
+        return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getUserId, userId)
+                .eq(KnowledgeDocEntity::getCourseId, courseId));
+    }
+
+    /** 账号注销清理使用：列出用户全部文档行，只读。 */
+    public List<KnowledgeDocEntity> listByUser(Long userId) {
+        return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getUserId, userId));
+    }
+
+    /** 账号注销第二阶段：物理删除用户全部文档行（须在父块/向量/文件清理完成后调用）。 */
+    @Transactional(rollbackFor = Exception.class)
+    public int deleteAllByUser(Long userId) {
+        if (userId == null) {
+            return 0;
+        }
+        return docMapper.delete(Wrappers.<KnowledgeDocEntity>lambdaQuery()
+                .eq(KnowledgeDocEntity::getUserId, userId));
+    }
+
     /** RAG 有效文档集：`READY` 且课程索引版本匹配。 */
     public List<Long> validDocIds(Long userId, Long courseId, int courseIndexVersion) {
         return docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()

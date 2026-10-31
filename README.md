@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收，TASK-801~805 全部 `DONE`）；下一阶段 P9 / TASK-901。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
+**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P9 / TASK-901（领域事件级联清理）已实现，状态 `IN_REVIEW`，待负责人验收。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
 
 **证据边界（不要混写）**：P8 自动化 E2E 使用 `scripts/e2e/p8_mock_onebot.py` 协议替身（P8 API 48/48、浏览器 10/10），**不是真实 NapCat/QQ**；真实 QQ 已手工验证私聊入站、回复与真实 DeepSeek DDL 提取（task 827）；真实 QQ 主动提醒（T-6h）已验证（task 923 → 通知 1327 `SENT_IM`）；**群聊 `@` 真实回复、群文件下载/群权限、真实平台限流/风控仍未验证**，负责人已接受为上线前补测项（RISK-103/104）。IM 投递语义为「正常路径至少一次 + 本地去重」，**不是严格恰好一次**（RISK-110）。任务状态以 `TASK_TRACKER.md` §1 为准。
 

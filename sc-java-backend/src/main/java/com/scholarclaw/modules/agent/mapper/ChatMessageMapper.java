@@ -34,4 +34,8 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
 
     @Delete("DELETE FROM t_chat_message WHERE user_id = #{userId} AND course_id = #{courseId}")
     int deleteByCourse(@Param("userId") Long userId, @Param("courseId") Long courseId);
+
+    /** 账号注销：物理删除用户全部会话（TASK-901）。 */
+    @Delete("DELETE FROM t_chat_message WHERE user_id = #{userId}")
+    int deleteByUser(@Param("userId") Long userId);
 }

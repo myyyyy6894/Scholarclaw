@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { resetApiClient } from '@/api/client'
 import {
   clearApiKeys,
+  deactivateAccount,
   getUserConfig,
   probeModel,
   saveModelConfig,
@@ -162,5 +163,23 @@ describe('user config api', () => {
     expect(captured(fetchMock, 1).url).toBe('/api/v1/user/model-config/keys?target=CHAT')
     expect(captured(fetchMock, 2).url).toBe('/api/v1/user/model-config/keys?target=EMBEDDING')
     expect(captured(fetchMock, 0).method).toBe('DELETE')
+  })
+
+  it('注销账号使用 POST，password 与 confirm_text 放在请求体', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(jsonResponse({ code: 'OK', message: 'ok', data: null, trace_id: 'tr_1', timestamp: '2026-10-31T13:00:00+08:00' })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await deactivateAccount('Password2026!', 'CONFIRM_DEACTIVATE')
+
+    const request = captured(fetchMock)
+    expect(request.url).toBe('/api/v1/user/account/deactivate')
+    expect(request.method).toBe('POST')
+    expect(JSON.parse(request.body ?? '{}')).toEqual({
+      password: 'Password2026!',
+      confirm_text: 'CONFIRM_DEACTIVATE',
+    })
+    expect(request.url).not.toContain('Password2026!')
   })
 })

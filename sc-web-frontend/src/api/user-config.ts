@@ -107,3 +107,16 @@ export function updatePreferences(request: PreferencesUpdateRequest): Promise<Us
 export function clearApiKeys(target: ClearKeysTarget = 'ALL'): Promise<UserConfig> {
   return apiRequest<UserConfig>(`/v1/user/model-config/keys?target=${target}`, { method: 'DELETE' })
 }
+
+/**
+ * `API-USER-006`：二次确认注销当前账号。
+ *
+ * 成功后原 JWT 立即被 Redis 注销键封禁；调用方必须清理本地会话并回到登录页。
+ * 请求体按契约使用 snake_case（`confirm_text`），不做前端自动转换。
+ */
+export function deactivateAccount(password: string, confirmText: string): Promise<null> {
+  return apiRequest<null>('/v1/user/account/deactivate', {
+    method: 'POST',
+    body: { password, confirm_text: confirmText },
+  })
+}

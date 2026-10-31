@@ -8,9 +8,9 @@ import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.knowledge.dto.DeleteDocVO;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
+import com.scholarclaw.modules.knowledge.service.KnowledgeDeletionService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
-import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,8 +25,8 @@ import org.springframework.web.bind.annotation.RestController;
  * `SC_MANUAL_INGEST_ENABLED=false` 时仍返回 `501 FEATURE_NOT_AVAILABLE`，用于关闭生产端。
  * TASK-506 起消费者默认开启，Web 入口按文档状态展示重试/重建。
  *
- * <p>`API-DOC-005` 只做第一阶段 `DELETING`：文档删除会**立即**调用向量清理（失败重试一次并写入
- * `rag.ingest.vector-compensation`）；物理文件删除仍属 TASK-901/902，GC 仅作最终兜底。
+ * <p>`API-DOC-005` 分两阶段：第一阶段 `DELETING` + 清空父块；提交后立即清理向量、物理文件并置
+ * `DELETED`。外部资源失败时保留 `DELETING`，由 TASK-902 的 GC 继续重试（不作为成功返回）。
  */
 @RestController
 @RequestMapping("/api/v1/docs")
@@ -34,19 +34,19 @@ public class KnowledgeDocActionController {
 
     private final KnowledgeDocService docService;
     private final KnowledgeIngestService ingestService;
-    private final KnowledgeVectorCleanupService vectorCleanupService;
+    private final KnowledgeDeletionService deletionService;
     private final CourseService courseService;
     private final boolean manualIngestEnabled;
 
     public KnowledgeDocActionController(
             KnowledgeDocService docService,
             KnowledgeIngestService ingestService,
-            KnowledgeVectorCleanupService vectorCleanupService,
+            KnowledgeDeletionService deletionService,
             CourseService courseService,
             @Value("${sc.knowledge.manual-ingest-enabled:true}") boolean manualIngestEnabled) {
         this.docService = docService;
         this.ingestService = ingestService;
-        this.vectorCleanupService = vectorCleanupService;
+        this.deletionService = deletionService;
         this.courseService = courseService;
         this.manualIngestEnabled = manualIngestEnabled;
     }
@@ -74,12 +74,15 @@ public class KnowledgeDocActionController {
         Long parsed = parseDocId(docId);
         Long userId = SecurityContextUtils.requireCurrentUserId();
         KnowledgeDocEntity deleted = docService.softDelete(userId, parsed);
-        vectorCleanupService.cleanupDocument(userId, deleted.getCourseId(), parsed, null);
+        boolean finalized = deletionService.finalizeDocumentDeletion(userId, deleted, null);
         // 删除可能是 REBUILD_FAILED 课程里最后一份阻塞文档，提交后按真实统计收敛
         courseService.refreshIndexStatus(userId, deleted.getCourseId(),
                 deleted.getCourseIndexVersion() == null ? 1 : deleted.getCourseIndexVersion());
-        return Result.ok("已标记为 DELETING；向量清理已提交，物理文件等待后续 GC",
-                new DeleteDocVO(parsed, deleted.getStatus()));
+        KnowledgeDocEntity current = docService.requireOwnedDoc(userId, parsed);
+        String message = finalized
+                ? "文档已删除：向量、物理文件与元数据清理完成"
+                : "已标记为 DELETING；向量或物理文件清理未完成，将由后台 GC 重试";
+        return Result.ok(message, new DeleteDocVO(parsed, current.getStatus()));
     }
 
     /**

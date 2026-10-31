@@ -13,9 +13,9 @@ import com.scholarclaw.common.exception.GlobalExceptionHandler;
 import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
+import com.scholarclaw.modules.knowledge.service.KnowledgeDeletionService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeIngestService;
-import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
@@ -41,7 +41,7 @@ class KnowledgeDocActionControllerTest {
 
     private KnowledgeDocService docService;
     private KnowledgeIngestService ingestService;
-    private KnowledgeVectorCleanupService cleanupService;
+    private KnowledgeDeletionService deletionService;
     private com.scholarclaw.modules.course.service.CourseService courseService;
     private MockMvc mockMvc;
 
@@ -49,11 +49,11 @@ class KnowledgeDocActionControllerTest {
     void setUp() {
         docService = mock(KnowledgeDocService.class);
         ingestService = mock(KnowledgeIngestService.class);
-        cleanupService = mock(KnowledgeVectorCleanupService.class);
+        deletionService = mock(KnowledgeDeletionService.class);
         courseService = mock(com.scholarclaw.modules.course.service.CourseService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new KnowledgeDocActionController(docService, ingestService,
-                                cleanupService, courseService, true))
+                                deletionService, courseService, true))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -94,7 +94,7 @@ class KnowledgeDocActionControllerTest {
     void retryBlockedWhenManualIngestDisabled() throws Exception {
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new KnowledgeDocActionController(docService, ingestService,
-                                cleanupService, courseService, false))
+                                deletionService, courseService, false))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())
@@ -108,18 +108,22 @@ class KnowledgeDocActionControllerTest {
     }
 
     @Test
-    @DisplayName("delete 返回 deleted_doc_id 与 DELETING")
-    void deleteReturnsDeleting() throws Exception {
+    @DisplayName("delete 完成第二阶段后返回 DELETED")
+    void deleteReturnsDeletedAfterFinalize() throws Exception {
         KnowledgeDocEntity deleted = doc();
         deleted.setStatus("DELETING");
         when(docService.softDelete(USER_ID, DOC_ID)).thenReturn(deleted);
+        when(deletionService.finalizeDocumentDeletion(USER_ID, deleted, null)).thenReturn(true);
+        KnowledgeDocEntity finalized = doc();
+        finalized.setStatus("DELETED");
+        when(docService.requireOwnedDoc(USER_ID, DOC_ID)).thenReturn(finalized);
 
         mockMvc.perform(delete("/api/v1/docs/50001"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.deleted_doc_id").value("50001"))
-                .andExpect(jsonPath("$.data.status").value("DELETING"));
-        org.mockito.Mockito.verify(cleanupService)
-                .cleanupDocument(USER_ID, 2001L, DOC_ID, null);
+                .andExpect(jsonPath("$.data.status").value("DELETED"));
+        org.mockito.Mockito.verify(deletionService)
+                .finalizeDocumentDeletion(USER_ID, deleted, null);
         org.mockito.Mockito.verify(courseService)
                 .refreshIndexStatus(USER_ID, 2001L, 1);
     }

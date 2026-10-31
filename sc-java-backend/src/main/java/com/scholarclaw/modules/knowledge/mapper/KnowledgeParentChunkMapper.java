@@ -18,6 +18,10 @@ public interface KnowledgeParentChunkMapper extends BaseMapper<KnowledgeParentCh
     @Delete("DELETE FROM t_knowledge_parent_chunk WHERE user_id = #{userId} AND course_id = #{courseId}")
     int deleteByCourse(@Param("userId") Long userId, @Param("courseId") Long courseId);
 
+    /** 账号注销：物理删除用户全部父块（TASK-901）。 */
+    @Delete("DELETE FROM t_knowledge_parent_chunk WHERE user_id = #{userId}")
+    int deleteByUser(@Param("userId") Long userId);
+
     /**
      * `API-INT-JAVA-002` 的四重权威校验（TASK-602，`04` §4.9.6 / `02` §5.2.2）。
      *

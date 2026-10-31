@@ -1,5 +1,6 @@
 package com.scholarclaw.modules.auth.service;
 
+import com.scholarclaw.common.security.AccountDeactivationKey;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -23,8 +24,7 @@ import org.springframework.stereotype.Service;
 public class TokenRevocationService {
 
     private static final String BLACKLIST_KEY = "sc:u:%d:jwt_blacklist:%s";
-    private static final String DEACTIVATED_KEY = "sc:u:%d:deactivated";
-    private static final long DEACTIVATED_TTL_SECONDS = 604800L;
+    private static final long DEACTIVATED_TTL_SECONDS = AccountDeactivationKey.TTL.toSeconds();
 
     private final StringRedisTemplate redisTemplate;
 
@@ -72,7 +72,7 @@ public class TokenRevocationService {
     }
 
     private static String deactivatedKey(Long userId) {
-        return DEACTIVATED_KEY.formatted(userId);
+        return AccountDeactivationKey.of(userId);
     }
 
     /** token 可用性判定结果。 */

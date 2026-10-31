@@ -101,7 +101,9 @@ class UserConfigControllerTest {
                 new ModelConfigRules(false, ""),
                 new ModelKeyBindingRules(),
                 courseCountProvider,
-                new ModelConfigSaveService(userConfigService, migrationPort, courseCountProvider));
+                new ModelConfigSaveService(userConfigService, migrationPort, courseCountProvider),
+                org.mockito.Mockito.mock(
+                        com.scholarclaw.modules.userconfig.service.UserDeactivationService.class));
         return MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))

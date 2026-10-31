@@ -133,6 +133,64 @@ public class StorageService {
         }
     }
 
+    /**
+     * 按 `storage_rel_path` 删除单个文档的 raw 文件（TASK-901）。
+     *
+     * <p>路径来自数据库，仍然强制归一化并校验落在存储根目录内；
+     * 文件不存在视为幂等成功，权限/IO 错误返回 `false` 交给 GC 重试。
+     */
+    public boolean deleteRawByRelativePath(String relativePath) {
+        if (relativePath == null || relativePath.isBlank()) {
+            return true;
+        }
+        Path path = root.resolve(relativePath).normalize();
+        ensureWithinRoot(path);
+        try {
+            Files.deleteIfExists(path);
+            return true;
+        } catch (IOException e) {
+            log.error("清理 raw 文件失败 path={} error={}", path, e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /** 递归删除某课程的 raw 目录；目录不存在视为幂等成功。 */
+    public boolean deleteRawDirectoryForCourse(Long userId, Long courseId) {
+        return deleteDirectory(root.resolve("raw").resolve(String.valueOf(userId))
+                .resolve(String.valueOf(courseId)));
+    }
+
+    /** 递归删除某用户的 raw 目录；目录不存在视为幂等成功。 */
+    public boolean deleteRawDirectoryForUser(Long userId) {
+        return deleteDirectory(root.resolve("raw").resolve(String.valueOf(userId)));
+    }
+
+    private boolean deleteDirectory(Path directory) {
+        Path normalized = directory.normalize();
+        ensureWithinRoot(normalized);
+        if (!Files.exists(normalized)) {
+            return true;
+        }
+        List<Path> paths;
+        try (var stream = Files.walk(normalized)) {
+            paths = stream.sorted(java.util.Comparator.reverseOrder()).toList();
+        } catch (IOException e) {
+            log.error("遍历待清理目录失败 path={} error={}",
+                    normalized, e.getClass().getSimpleName());
+            return false;
+        }
+        for (Path path : paths) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException e) {
+                log.error("清理目录项失败 path={} error={}",
+                        path, e.getClass().getSimpleName());
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void ensureWithinRoot(Path candidate) {
         if (!candidate.startsWith(root)) {
             throw new IllegalArgumentException("路径越界");

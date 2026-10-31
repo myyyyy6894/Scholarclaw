@@ -7,6 +7,28 @@
   </head>
   <body>
     <div id="app"></div>
+    <!-- 主题预置：在应用脚本之前套用已保存的主题，避免首屏从浅色闪到深色。
+         只读取 sc.theme（纯前端偏好，不含任何密钥）。 -->
+    <script>
+      (function () {
+        var root = document.documentElement
+        try {
+          var raw = window.localStorage.getItem('sc.theme')
+          var mode = raw === null ? 'system' : JSON.parse(raw)
+          if (mode !== 'light' && mode !== 'dark' && mode !== 'system') {
+            mode = 'system'
+          }
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          var dark = mode === 'dark' || (mode === 'system' && prefersDark)
+          root.dataset.theme = dark ? 'dark' : 'light'
+          if (dark) {
+            root.classList.add('dark')
+          }
+        } catch (error) {
+          root.dataset.theme = 'light'
+        }
+      })()
+    </script>
     <!-- 运行期配置（非密钥）：容器启动时按 SC_NAPCAT_WEBUI_URL 生成，本地开发为默认空值 -->
     <script src="/runtime-config.js"></script>
     <script type="module" src="/src/main.ts"></script>

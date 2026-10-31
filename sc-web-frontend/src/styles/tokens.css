@@ -1,0 +1,125 @@
+/**
+ * ScholarClaw 设计令牌（`docs/ui_picture/前端基调图片.png`）。
+ *
+ * 约定：
+ * 1. 颜色、字号、圆角、阴影、间距只在本文件定义；页面与组件一律引用变量，
+ *    不写字面色值，深色模式才能只靠 `[data-theme="dark"]` 整体切换。
+ * 2. 主色与语义色在深色模式下保持不变，仅替换底色、表面、文字、边框。
+ * 3. 文件末尾保留旧变量别名：P1 只改造外壳，尚未重构的页面仍引用
+ *    `--sc-brand` / `--sc-muted` / `--sc-radius` 等旧名，不能在这之前断掉。
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ---------- 品牌与语义色 ---------- */
+  --sc-primary: #4f8cff;
+  --sc-primary-strong: #3d6fd8;
+  --sc-primary-soft: #eef4ff;
+  --sc-accent: #8b5cf6;
+  --sc-success: #10b981;
+  --sc-success-soft: #ecfdf5;
+  --sc-warning: #f59e0b;
+  --sc-warning-soft: #fffbeb;
+  --sc-danger: #ef4444;
+  --sc-danger-soft: #fef2f2;
+
+  /* ---------- 中性色 ---------- */
+  --sc-text: #1f2937;
+  --sc-text-secondary: #64748b;
+  --sc-text-placeholder: #94a3b8;
+  --sc-border: #e2e8f0;
+  --sc-border-strong: #cbd5e1;
+  --sc-bg: #f7f9fc;
+  --sc-surface: #ffffff;
+  --sc-surface-muted: #f8faff;
+  --sc-surface-hover: #f5f9ff;
+  --sc-active: #eef4ff;
+  --sc-topbar-bg: rgba(247, 249, 252, 0.9);
+  --sc-overlay: rgba(15, 23, 42, 0.42);
+
+  /* ---------- 字体 ---------- */
+  /* woff2 到位后只需在此处补 @font-face 并调整首选项，不改组件。 */
+  --sc-font-sans: "Inter", "Source Han Sans SC", "Noto Sans SC", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --sc-font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --sc-font-title: 24px;
+  --sc-font-title-weight: 600;
+  --sc-font-heading: 18px;
+  --sc-font-heading-weight: 600;
+  --sc-font-body: 14px;
+  --sc-font-body-weight: 400;
+  --sc-font-caption: 12px;
+  --sc-font-hint: 11px;
+
+  /* ---------- 圆角 / 阴影 ---------- */
+  --sc-radius-card: 12px;
+  --sc-radius-button: 8px;
+  --sc-radius-pill: 999px;
+  --sc-shadow: 0 8px 24px rgba(15, 31, 61, 0.06);
+  --sc-shadow-hover: 0 12px 30px rgba(15, 31, 61, 0.1);
+
+  /* ---------- 间距 / 尺寸 ---------- */
+  --sc-page-pad: 28px;
+  --sc-card-gap: 16px;
+  --sc-card-pad: 20px;
+  --sc-sidebar-width: 240px;
+  --sc-sidebar-rail-width: 72px;
+  --sc-topbar-height: 64px;
+  --sc-content-max-width: 1440px;
+
+  /* ---------- 层级 ---------- */
+  --sc-z-topbar: 10;
+  --sc-z-overlay: 40;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --sc-primary-soft: rgba(79, 140, 255, 0.16);
+  --sc-success-soft: rgba(16, 185, 129, 0.14);
+  --sc-warning-soft: rgba(245, 158, 11, 0.14);
+  --sc-danger-soft: rgba(239, 68, 68, 0.14);
+
+  --sc-text: #e2e8f0;
+  --sc-text-secondary: #94a3b8;
+  --sc-text-placeholder: #64748b;
+  --sc-border: #334155;
+  --sc-border-strong: #475569;
+  --sc-bg: #0f172a;
+  --sc-surface: #1e293b;
+  --sc-surface-muted: #172033;
+  --sc-surface-hover: #24324a;
+  --sc-active: #1e3a5f;
+  --sc-topbar-bg: rgba(15, 23, 42, 0.88);
+  --sc-overlay: rgba(2, 6, 23, 0.6);
+
+  --sc-shadow: 0 8px 24px rgba(2, 6, 23, 0.32);
+  --sc-shadow-hover: 0 12px 30px rgba(2, 6, 23, 0.44);
+}
+
+/* ---------- 旧变量别名（P2~P5 逐页移除） ---------- */
+:root {
+  --sc-brand: var(--sc-primary);
+  --sc-brand-strong: var(--sc-primary-strong);
+  --sc-brand-soft: var(--sc-primary-soft);
+  --sc-accent-legacy: var(--sc-accent);
+  --sc-muted: var(--sc-text-secondary);
+  --sc-radius: var(--sc-radius-card);
+  --sc-radius-sm: var(--sc-radius-button);
+  --sc-shadow-soft: var(--sc-shadow);
+  --sc-page-gap: var(--sc-card-gap);
+  --sc-text-title: var(--sc-font-title);
+  --sc-text-heading: var(--sc-font-heading);
+  --sc-text-body: var(--sc-font-body);
+  --sc-text-caption: var(--sc-font-caption);
+  --sc-font: var(--sc-font-sans);
+}
+
+@media (max-width: 900px) {
+  :root {
+    --sc-page-pad: 16px;
+    --sc-card-gap: 14px;
+  }
+}

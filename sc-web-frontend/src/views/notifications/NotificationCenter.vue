@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
+import { X } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 
 import {
@@ -10,6 +11,7 @@ import {
   type NotificationItem,
 } from '@/api/notifications'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 import { notifyError } from '@/utils/notify'
 import {
   bizTypeLabel,
@@ -20,24 +22,24 @@ import {
   notificationTarget,
   outboundStatusLabel,
   readStatusParam,
-  unreadBadge,
 } from '@/views/notifications/notification-center'
 
 /**
- * 顶部站内通知中心（TASK-802）。
+ * 站内通知中心（TASK-802，P1 改为右侧抽屉）。
  *
  * 只调用 `API-NOTIF-001/002`：列表始终按后端 `created_at DESC` 分页，未读数独立返回；
  * 标记已读后重新拉取第一页，避免前端本地推算 `read_at` 或未读数。
- * 轮询仅刷新第一页与未读数，不猜测推送状态；IM 实际投递状态由 TASK-804 更新。
+ *
+ * 抽屉由 `ui` store 控制，顶栏铃铛与侧栏「消息通知」共用同一个入口；
+ * 未读数同步写入 store，侧栏角标不再重复请求接口。
  */
-
 const PAGE_SIZE = 10
 const POLL_INTERVAL_MS = 60_000
 
 const auth = useAuthStore()
+const ui = useUiStore()
 const router = useRouter()
 
-const visible = ref(false)
 const filter = ref<NotificationFilter>('UNREAD')
 const items = ref<NotificationItem[]>([])
 const unreadCount = ref(0)
@@ -45,6 +47,17 @@ const page = ref(1)
 const totalPages = ref(0)
 const loading = ref(false)
 const markingAll = ref(false)
+
+const drawerOpen = computed({
+  get: () => ui.notificationDrawerOpen,
+  set: (value: boolean) => {
+    if (value) {
+      ui.openNotificationDrawer()
+    } else {
+      ui.closeNotificationDrawer()
+    }
+  },
+})
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -78,6 +91,7 @@ async function refresh(reset: boolean): Promise<void> {
     })
     items.value = mergeNotificationPage(items.value, data.items, reset)
     unreadCount.value = data.unread_count
+    ui.setUnreadNotificationCount(data.unread_count)
     page.value = data.page
     totalPages.value = data.total_pages
   } catch (error) {
@@ -90,11 +104,6 @@ async function refresh(reset: boolean): Promise<void> {
 function handleFilterChange(): void {
   page.value = 1
   totalPages.value = 0
-  void refresh(true)
-}
-
-function handleShow(): void {
-  visible.value = true
   void refresh(true)
 }
 
@@ -125,10 +134,16 @@ async function openNotification(item: NotificationItem): Promise<void> {
   } catch (error) {
     notifyError(error)
   } finally {
-    visible.value = false
+    drawerOpen.value = false
     await router.push({ name: notificationTarget(item.biz_type) })
   }
 }
+
+watch(drawerOpen, (open) => {
+  if (open) {
+    void refresh(true)
+  }
+})
 
 watch(
   () => auth.isAuthenticated,
@@ -141,7 +156,8 @@ watch(
       items.value = []
       unreadCount.value = 0
       totalPages.value = 0
-      visible.value = false
+      ui.setUnreadNotificationCount(0)
+      drawerOpen.value = false
     }
   },
   { immediate: true },
@@ -151,91 +167,79 @@ onBeforeUnmount(stopPolling)
 </script>
 
 <template>
-  <el-popover
+  <el-drawer
     v-if="auth.isAuthenticated"
-    v-model:visible="visible"
-    placement="bottom-end"
-    :width="400"
-    trigger="click"
-    @show="handleShow"
+    v-model="drawerOpen"
+    class="notification-drawer"
+    :with-header="false"
+    size="380px"
   >
-    <template #reference>
-      <button
-        type="button"
-        class="sc-notification-trigger"
-        aria-label="站内通知"
-        title="站内通知"
-      >
-        <el-badge
-          :value="unreadBadge(unreadCount)"
-          :hidden="unreadCount <= 0"
-          :max="99"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5.5-6.84V3a1.5 1.5 0 0 0-3 0v1.16A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"
-            />
-          </svg>
-        </el-badge>
-      </button>
-    </template>
-
-    <div class="sc-notification-panel">
-      <header class="sc-notification-panel__header">
-        <div>
+    <div class="notification-panel">
+      <header class="notification-panel__header">
+        <div class="notification-panel__title">
           <strong>站内通知</strong>
-          <span v-if="unreadCount > 0" class="sc-notification-panel__count">
+          <span v-if="unreadCount > 0" class="notification-panel__count">
             {{ unreadCount }} 条未读
           </span>
         </div>
-        <el-button
-          text
-          size="small"
-          :disabled="!canMarkAll(unreadCount)"
-          :loading="markingAll"
-          @click="markAll"
-        >
-          全部已读
-        </el-button>
+        <div class="notification-panel__actions">
+          <el-button
+            text
+            size="small"
+            :disabled="!canMarkAll(unreadCount)"
+            :loading="markingAll"
+            @click="markAll"
+          >
+            全部已读
+          </el-button>
+          <button
+            type="button"
+            class="notification-panel__close"
+            aria-label="关闭通知中心"
+            @click="drawerOpen = false"
+          >
+            <X :size="18" :stroke-width="1.8" />
+          </button>
+        </div>
       </header>
 
       <el-radio-group
         v-model="filter"
         size="small"
-        class="sc-notification-panel__filter"
+        class="notification-panel__filter"
         @change="handleFilterChange"
       >
         <el-radio-button value="UNREAD">未读</el-radio-button>
         <el-radio-button value="ALL">全部</el-radio-button>
       </el-radio-group>
 
-      <div v-loading="loading" class="sc-notification-panel__body">
+      <div v-loading="loading" class="notification-panel__body">
         <el-empty
           v-if="items.length === 0 && !loading"
           description="暂无通知"
           :image-size="56"
         />
-        <ul v-else class="sc-notification-list">
+        <ul v-else class="notification-list">
           <li v-for="item in items" :key="item.notification_id">
             <button
               type="button"
-              class="sc-notification-item"
-              :class="{ 'sc-notification-item--unread': item.read_status === 'UNREAD' }"
+              class="notification-item"
+              :class="{ 'notification-item--unread': item.read_status === 'UNREAD' }"
               @click="openNotification(item)"
             >
-              <span class="sc-notification-item__top">
+              <span class="notification-item__top">
                 <el-tag size="small" :type="bizTypeTagType(item.biz_type)">
                   {{ bizTypeLabel(item.biz_type) }}
                 </el-tag>
-                <span class="sc-notification-item__time">
+                <span class="notification-item__time">
                   {{ formatNotificationTime(item.created_at) }}
                 </span>
               </span>
-              <strong class="sc-notification-item__title">{{ item.title }}</strong>
-              <span class="sc-notification-item__content">{{ item.content }}</span>
-              <span class="sc-notification-item__meta">
+              <strong class="notification-item__title">{{ item.title }}</strong>
+              <span class="notification-item__content">{{ item.content }}</span>
+              <span class="notification-item__meta">
                 <span>{{ outboundStatusLabel(item.outbound_status) }}</span>
-                <span v-if="item.read_status === 'UNREAD'" class="sc-notification-item__dot">
+                <span v-if="item.read_status === 'UNREAD'" class="notification-item__dot">
                   未读
                 </span>
               </span>
@@ -247,7 +251,7 @@ onBeforeUnmount(stopPolling)
           v-if="page < totalPages"
           text
           size="small"
-          class="sc-notification-panel__more"
+          class="notification-panel__more"
           :loading="loading"
           @click="refresh(false)"
         >
@@ -255,154 +259,176 @@ onBeforeUnmount(stopPolling)
         </el-button>
       </div>
     </div>
-  </el-popover>
+  </el-drawer>
 </template>
 
 <style scoped>
-.sc-notification-trigger {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
+:global(.notification-drawer .el-drawer__body) {
   padding: 0;
-  border: 1px solid var(--sc-border);
-  border-radius: 12px;
-  background: var(--sc-surface);
-  color: var(--sc-muted);
-  cursor: pointer;
-  transition: color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.sc-notification-trigger:hover,
-.sc-notification-trigger:focus-visible {
-  color: var(--sc-brand-strong);
-  border-color: var(--sc-brand);
-  box-shadow: var(--sc-shadow-soft);
-  outline: none;
-}
-
-.sc-notification-trigger svg {
-  width: 19px;
-  height: 19px;
-  fill: currentColor;
-}
-
-.sc-notification-panel {
+.notification-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  height: 100%;
+  padding: 20px;
 }
 
-.sc-notification-panel__header {
+.notification-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.sc-notification-panel__header strong {
-  font-size: 15px;
+.notification-panel__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
-.sc-notification-panel__count {
-  margin-left: 8px;
+.notification-panel__title strong {
+  color: var(--sc-text);
+  font-size: var(--sc-font-heading);
+  font-weight: var(--sc-font-heading-weight);
+}
+
+.notification-panel__count {
   color: var(--sc-danger);
-  font-size: 12px;
+  font-size: var(--sc-font-caption);
   font-weight: 600;
 }
 
-.sc-notification-panel__filter {
+.notification-panel__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.notification-panel__close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--sc-text-placeholder);
+  background: transparent;
+  cursor: pointer;
+}
+
+.notification-panel__close:hover {
+  color: var(--sc-text);
+  background: var(--sc-surface-hover);
+}
+
+.notification-panel__filter {
   align-self: flex-start;
 }
 
-.sc-notification-panel__body {
-  min-height: 80px;
-  max-height: 420px;
+.notification-panel__body {
+  flex: 1;
+  min-height: 120px;
   overflow-y: auto;
 }
 
-.sc-notification-list {
+.notification-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.sc-notification-item {
+.notification-item {
   display: flex;
   flex-direction: column;
   gap: 4px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 12px;
   border: 1px solid transparent;
-  border-radius: 10px;
-  background: #f8faff;
+  border-radius: var(--sc-radius-card);
+  background: var(--sc-surface-muted);
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.18s ease, border-color 0.18s ease;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
 }
 
-.sc-notification-item:hover,
-.sc-notification-item:focus-visible {
-  border-color: var(--sc-brand);
-  background: var(--sc-brand-soft);
+.notification-item:hover,
+.notification-item:focus-visible {
+  border-color: var(--sc-primary);
+  background: var(--sc-primary-soft);
   outline: none;
 }
 
-.sc-notification-item--unread {
-  border-color: #dce8ff;
-  background: #f2f7ff;
+.notification-item--unread {
+  border-color: var(--sc-border);
+  background: var(--sc-surface);
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-notification-item__top {
+.notification-item__top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.sc-notification-item__time {
-  color: var(--sc-muted);
-  font-size: 11px;
+.notification-item__time {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
   white-space: nowrap;
 }
 
-.sc-notification-item__title {
+.notification-item__title {
   color: var(--sc-text);
   font-size: 13px;
   line-height: 1.45;
   word-break: break-word;
 }
 
-.sc-notification-item__content {
+.notification-item__content {
   display: -webkit-box;
   overflow: hidden;
-  color: var(--sc-muted);
-  font-size: 12px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
   line-height: 1.55;
   word-break: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
-.sc-notification-item__meta {
+.notification-item__meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: var(--sc-muted);
-  font-size: 11px;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-notification-item__dot {
+.notification-item__dot {
   color: var(--sc-danger);
   font-weight: 600;
 }
 
-.sc-notification-panel__more {
+.notification-panel__more {
   display: block;
-  margin: 8px auto 0;
+  margin: 10px auto 0;
+}
+
+@media (max-width: 480px) {
+  :global(.notification-drawer) {
+    max-width: 92vw;
+  }
+
+  .notification-panel {
+    padding: 16px;
+  }
 }
 </style>

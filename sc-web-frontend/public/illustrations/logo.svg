@@ -1,0 +1,21 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130">
+  <defs>
+    <linearGradient id="brand" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#315FEA"></stop>
+      <stop offset="55%" stop-color="#527BFA"></stop>
+      <stop offset="100%" stop-color="#9A83F4"></stop>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <path d="M59 20 C35 29 19 51 22 75 C24 94 39 106 58 105 C43 91 42 72 55 55 C65 42 79 33 91 28 C81 22 70 18 59 20Z" fill="url(#brand)"></path>
+    <path d="M68 43 C52 55 47 73 56 89 C64 103 81 108 96 99 C81 97 72 87 72 74 C72 61 82 50 99 41 C88 39 77 39 68 43Z" fill="#4777F2"></path>
+    <path d="M90 19 C77 31 73 46 81 58 C89 70 104 73 117 65 C103 63 97 54 99 44 C101 35 109 28 122 24 C111 18 100 16 90 19Z" fill="#8C83F3"></path>
+    <path d="M43 72 C54 61 66 57 77 61 C69 69 67 79 72 88 C61 87 51 82 43 72Z" fill="#315FEA"></path>
+    <path d="M77 83 C91 71 105 69 119 76 C107 82 101 94 104 105 C91 101 82 94 77 83Z" fill="url(#brand)"></path>
+  </g>
+
+  <text x="139" y="60" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700" fill="#182D59">ScholarClaw</text>
+  <text x="141" y="91" font-family="sans-serif" font-size="20" letter-spacing="5" fill="#6179B4">智 学 爪</text>
+</svg>

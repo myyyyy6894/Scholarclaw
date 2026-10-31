@@ -1,35 +1,13 @@
-:root {
-  /* 品牌与中性色（参考 docs/前端基调图片.png） */
-  --sc-brand: #4f8cff;
-  --sc-brand-strong: #3d6fd8;
-  --sc-brand-soft: #e8f0ff;
-  --sc-brand-deep: #0d1b36;
-  --sc-accent: #7b5cff;
-  --sc-success: #10b981;
-  --sc-warning: #f59e0b;
-  --sc-danger: #ef4444;
-  --sc-bg: #f1f5f9;
-  --sc-surface: #ffffff;
-  --sc-text: #1f2937;
-  --sc-muted: #64748b;
-  --sc-border: #e6edf7;
-
-  /* 圆角、阴影与间距 */
-  --sc-radius: 14px;
-  --sc-radius-sm: 10px;
-  --sc-shadow: 0 12px 30px rgba(15, 31, 61, 0.07);
-  --sc-shadow-soft: 0 6px 18px rgba(15, 31, 61, 0.05);
-  --sc-page-gap: 20px;
-  --sc-content-max-width: 1440px;
-
-  /* 字体层级 */
-  --sc-font: "Inter", "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", Arial, sans-serif;
-  --sc-text-title: 24px;
-  --sc-text-heading: 18px;
-  --sc-text-body: 14px;
-  --sc-text-caption: 12px;
-}
+/**
+ * 全局重置与 Element Plus 变量覆盖。
+ *
+ * 设计令牌在 `tokens.css`，这里只做两件事：
+ * 1. 重置浏览器默认样式，让页面背景、字体、滚动行为统一；
+ * 2. 把 Element Plus 的 CSS 变量指向项目令牌，避免组件库默认蓝色/圆角与参考图冲突。
+ *
+ * 深色主题通过 `html.dark`（Element Plus 官方约定）+ `[data-theme="dark"]`（项目令牌）双写，
+ * 两者由 `composables/use-theme.ts` 同步设置。
+ */
 
 * {
   box-sizing: border-box;
@@ -44,59 +22,239 @@ body,
 }
 
 body {
-  font-family: var(--sc-font);
   background-color: var(--sc-bg);
   color: var(--sc-text);
-  font-size: var(--sc-text-body);
+  font-family: var(--sc-font-sans);
+  font-size: var(--sc-font-body);
+  font-weight: var(--sc-font-body-weight);
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 h1,
 h2,
 h3,
-p {
+h4,
+p,
+figure {
   margin: 0;
 }
 
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+a {
+  color: var(--sc-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--sc-primary-strong);
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--sc-font-mono);
+}
+
+:focus-visible {
+  outline: 2px solid var(--sc-primary);
+  outline-offset: 2px;
+}
+
+/* ---------- 页面容器 ---------- */
 .sc-page {
+  width: 100%;
   max-width: var(--sc-content-max-width);
   margin: 0 auto;
 }
 
 .sc-card-gap {
-  margin-bottom: var(--sc-page-gap);
+  margin-bottom: var(--sc-card-gap);
 }
 
-/* Element Plus 卡片统一为参考图的圆角、柔和阴影与清晰边框 */
+/* ---------- Element Plus：品牌与中性色 ---------- */
+:root {
+  --el-color-primary: var(--sc-primary);
+  --el-color-primary-light-3: #7fadff;
+  --el-color-primary-light-5: #a5c6ff;
+  --el-color-primary-light-7: #c9dcff;
+  --el-color-primary-light-8: #dbe8ff;
+  --el-color-primary-light-9: var(--sc-primary-soft);
+  --el-color-primary-dark-2: var(--sc-primary-strong);
+  --el-color-success: var(--sc-success);
+  --el-color-warning: var(--sc-warning);
+  --el-color-danger: var(--sc-danger);
+  --el-color-error: var(--sc-danger);
+
+  --el-font-family: var(--sc-font-sans);
+  --el-font-size-base: var(--sc-font-body);
+
+  --el-text-color-primary: var(--sc-text);
+  --el-text-color-regular: var(--sc-text-secondary);
+  --el-text-color-secondary: var(--sc-text-secondary);
+  --el-text-color-placeholder: var(--sc-text-placeholder);
+  --el-text-color-disabled: var(--sc-text-placeholder);
+
+  --el-border-color: var(--sc-border);
+  --el-border-color-light: var(--sc-border);
+  --el-border-color-lighter: var(--sc-border);
+  --el-border-color-extra-light: var(--sc-border);
+  --el-border-color-dark: var(--sc-border-strong);
+  --el-border-color-darker: var(--sc-border-strong);
+
+  --el-bg-color: var(--sc-surface);
+  --el-bg-color-page: var(--sc-bg);
+  --el-bg-color-overlay: var(--sc-surface);
+  --el-fill-color: var(--sc-surface-muted);
+  --el-fill-color-light: var(--sc-surface-muted);
+  --el-fill-color-lighter: var(--sc-surface-muted);
+  --el-fill-color-blank: var(--sc-surface);
+
+  --el-border-radius-base: var(--sc-radius-button);
+  --el-border-radius-small: 6px;
+  --el-border-radius-round: var(--sc-radius-pill);
+
+  --el-box-shadow-light: var(--sc-shadow);
+  --el-box-shadow: var(--sc-shadow);
+  --el-mask-color: var(--sc-overlay);
+}
+
+html.dark {
+  --el-bg-color: var(--sc-surface);
+  --el-bg-color-page: var(--sc-bg);
+  --el-bg-color-overlay: var(--sc-surface);
+  --el-fill-color: var(--sc-surface-muted);
+  --el-fill-color-light: var(--sc-surface-muted);
+  --el-fill-color-lighter: var(--sc-surface-muted);
+  --el-fill-color-blank: var(--sc-surface);
+  --el-text-color-primary: var(--sc-text);
+  --el-text-color-regular: var(--sc-text-secondary);
+  --el-text-color-secondary: var(--sc-text-secondary);
+  --el-text-color-placeholder: var(--sc-text-placeholder);
+  --el-border-color: var(--sc-border);
+  --el-border-color-light: var(--sc-border);
+  --el-border-color-lighter: var(--sc-border);
+  --el-border-color-extra-light: var(--sc-border);
+  --el-border-color-dark: var(--sc-border-strong);
+  --el-border-color-darker: var(--sc-border-strong);
+  --el-mask-color: var(--sc-overlay);
+}
+
+/* ---------- Element Plus：组件外观 ---------- */
 .el-card {
   border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius);
-  box-shadow: var(--sc-shadow-soft);
+  border-radius: var(--sc-radius-card);
+  background: var(--sc-surface);
+  box-shadow: var(--sc-shadow);
+  color: var(--sc-text);
 }
 
 .el-card__header {
-  padding: 16px 20px;
+  padding: 16px var(--sc-card-pad);
   border-bottom: 1px solid var(--sc-border);
+  font-size: var(--sc-font-body);
   font-weight: 600;
 }
 
+.el-card__body {
+  padding: var(--sc-card-pad);
+}
+
+.el-button {
+  border-radius: var(--sc-radius-button);
+  font-weight: 500;
+}
+
+.el-button--primary {
+  box-shadow: 0 6px 16px rgba(79, 140, 255, 0.22);
+}
+
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  border-radius: var(--sc-radius-button);
+}
+
 .el-tag {
-  border-radius: 999px;
-  font-weight: 600;
+  border-radius: var(--sc-radius-pill);
+  font-weight: 500;
 }
 
 .el-table {
   --el-table-border-color: var(--sc-border);
-  --el-table-header-bg-color: #f7faff;
-  --el-table-row-hover-bg-color: #f5f9ff;
+  --el-table-header-bg-color: var(--sc-surface-muted);
+  --el-table-header-text-color: var(--sc-text-secondary);
+  --el-table-row-hover-bg-color: var(--sc-surface-hover);
+  --el-table-bg-color: var(--sc-surface);
+  --el-table-tr-bg-color: var(--sc-surface);
+  --el-table-text-color: var(--sc-text);
+  border-radius: var(--sc-radius-button);
 }
 
-.el-button {
-  border-radius: var(--sc-radius-sm);
+.el-table th.el-table__cell {
+  font-weight: 600;
 }
 
-@media (max-width: 900px) {
-  :root {
-    --sc-page-gap: 14px;
+.el-dialog,
+.el-drawer,
+.el-popover.el-popper,
+.el-dropdown__popper {
+  border-radius: var(--sc-radius-card);
+}
+
+.el-message-box {
+  border-radius: var(--sc-radius-card);
+}
+
+.el-empty__description p {
+  color: var(--sc-text-secondary);
+}
+
+.el-divider {
+  border-color: var(--sc-border);
+}
+
+/* ---------- 滚动条 ---------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sc-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: var(--sc-radius-pill);
+  background: var(--sc-border-strong);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- 主题切换过渡 ---------- */
+html.is-theme-ready body,
+html.is-theme-ready .app-shell,
+html.is-theme-ready .app-sidebar,
+html.is-theme-ready .app-topbar {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

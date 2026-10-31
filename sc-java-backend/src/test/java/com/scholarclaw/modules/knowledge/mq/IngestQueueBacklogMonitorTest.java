@@ -12,10 +12,11 @@ import org.springframework.amqp.rabbit.core.RabbitAdmin;
 class IngestQueueBacklogMonitorTest {
 
     private static final String PARKING = "rag.ingest.parking";
+    private static final String PARKING_MANUAL = "rag.ingest.parking.manual";
     private static final String COMPENSATION = "rag.ingest.vector-compensation";
 
     private static IngestQueueBacklogMonitor monitor(RabbitAdmin admin) {
-        return new IngestQueueBacklogMonitor(admin, PARKING, COMPENSATION, 1);
+        return new IngestQueueBacklogMonitor(admin, PARKING, PARKING_MANUAL, COMPENSATION, 1);
     }
 
     @Test

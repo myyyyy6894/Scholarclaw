@@ -4,10 +4,14 @@ import com.scholarclaw.common.filter.TraceContext;
 import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.course.service.CourseService.StaleCourse;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
+import com.scholarclaw.modules.knowledge.entity.VectorCleanupOutboxEntity;
+import com.scholarclaw.modules.knowledge.service.ChromaReconciliationScanner;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDeletionService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import com.scholarclaw.modules.knowledge.service.OrphanResourceScanner;
 import com.scholarclaw.modules.knowledge.service.OrphanResourceScanner.OrphanScanResult;
+import com.scholarclaw.modules.knowledge.service.VectorCleanupOutboxService;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.modules.userconfig.service.UserDeactivationService;
 import java.time.Clock;
@@ -55,6 +59,9 @@ public class DeletionGcScheduler {
     private final KnowledgeDeletionService deletionService;
     private final CourseService courseService;
     private final OrphanResourceScanner orphanScanner;
+    private final VectorCleanupOutboxService outboxService;
+    private final KnowledgeVectorCleanupService vectorCleanupService;
+    private final ChromaReconciliationScanner chromaScanner;
     private final StringRedisTemplate redisTemplate;
     private final Clock clock;
     private final boolean enabled;
@@ -62,6 +69,8 @@ public class DeletionGcScheduler {
     private final long orphanFileMinutes;
     private final int batchSize;
     private final Duration lockTtl;
+    private final boolean chromaReconcileEnabled;
+    private final Duration outboxLease;
 
     public DeletionGcScheduler(UserConfigService userConfigService,
                                UserDeactivationService userDeactivationService,
@@ -69,6 +78,9 @@ public class DeletionGcScheduler {
                                KnowledgeDeletionService deletionService,
                                CourseService courseService,
                                OrphanResourceScanner orphanScanner,
+                               VectorCleanupOutboxService outboxService,
+                               KnowledgeVectorCleanupService vectorCleanupService,
+                               ChromaReconciliationScanner chromaScanner,
                                StringRedisTemplate redisTemplate,
                                Clock clock,
                                @Value("${sc.deletion-gc.enabled:true}") boolean enabled,
@@ -77,13 +89,20 @@ public class DeletionGcScheduler {
                                long orphanFileMinutes,
                                @Value("${sc.deletion-gc.batch-size:200}") int batchSize,
                                @Value("${sc.deletion-gc.lock-ttl-seconds:300}")
-                               long lockTtlSeconds) {
+                               long lockTtlSeconds,
+                               @Value("${sc.deletion-gc.chroma-reconcile-enabled:true}")
+                               boolean chromaReconcileEnabled,
+                               @Value("${sc.deletion-gc.outbox-lease-seconds:120}")
+                               long outboxLeaseSeconds) {
         this.userConfigService = userConfigService;
         this.userDeactivationService = userDeactivationService;
         this.docService = docService;
         this.deletionService = deletionService;
         this.courseService = courseService;
         this.orphanScanner = orphanScanner;
+        this.outboxService = outboxService;
+        this.vectorCleanupService = vectorCleanupService;
+        this.chromaScanner = chromaScanner;
         this.redisTemplate = redisTemplate;
         this.clock = clock;
         this.enabled = enabled;
@@ -91,6 +110,8 @@ public class DeletionGcScheduler {
         this.orphanFileMinutes = Math.max(1, orphanFileMinutes);
         this.batchSize = Math.max(1, batchSize);
         this.lockTtl = Duration.ofSeconds(Math.max(1, lockTtlSeconds));
+        this.chromaReconcileEnabled = chromaReconcileEnabled;
+        this.outboxLease = Duration.ofSeconds(Math.max(30, outboxLeaseSeconds));
     }
 
     @Scheduled(initialDelayString = "${sc.deletion-gc.initial-delay-ms:60000}",
@@ -118,20 +139,30 @@ public class DeletionGcScheduler {
                 log.debug("删除 GC 已被其他实例持有，本轮跳过");
                 return null;
             }
-            LocalDateTime threshold = LocalDateTime.now(clock)
-                    .minusMinutes(staleMinutes);
+            LocalDateTime now = LocalDateTime.now(clock);
+            LocalDateTime threshold = now.minusMinutes(staleMinutes);
             int users = purgeUsers(threshold);
             int docs = purgeDocuments(threshold);
             int courses = purgeCourses(threshold);
+            int outbox = purgeVectorOutbox(now);
+            int manual = escalateStaleOutbox(now);
             OrphanScanResult orphans = orphanScanner.scanOrphanRawFiles(
                     Duration.ofMinutes(orphanFileMinutes), batchSize);
+            ChromaReconciliationScanner.ScanResult chroma = chromaReconcileEnabled
+                    ? chromaScanner.reconcile(batchSize)
+                    : new ChromaReconciliationScanner.ScanResult(0, 0, 0);
             GcResult result = new GcResult(users, docs, courses, orphans.scanned(),
-                    orphans.deleted(), orphans.failed());
-            if (users + docs + courses + orphans.deleted() + orphans.failed() > 0) {
-                log.info("删除 GC 完成 users={} docs={} courses={} orphanScanned={} "
-                                + "orphanDeleted={} orphanFailed={}",
-                        users, docs, courses, orphans.scanned(), orphans.deleted(),
-                        orphans.failed());
+                    orphans.deleted(), orphans.failed(), outbox, manual,
+                    chroma.scanned(), chroma.deleted(), chroma.failed());
+            if (users + docs + courses + outbox + manual + orphans.deleted()
+                    + orphans.failed() + chroma.deleted() + chroma.failed() > 0) {
+                log.info("删除 GC 完成 users={} docs={} courses={} vectorOutbox={} "
+                                + "outboxManual={} orphanScanned={} orphanDeleted={} "
+                                + "orphanFailed={} chromaScanned={} chromaDeleted={} "
+                                + "chromaFailed={}",
+                        users, docs, courses, outbox, manual, orphans.scanned(),
+                        orphans.deleted(), orphans.failed(), chroma.scanned(),
+                        chroma.deleted(), chroma.failed());
             } else {
                 log.debug("删除 GC 完成：无滞留资源");
             }
@@ -180,8 +211,15 @@ public class DeletionGcScheduler {
         List<StaleCourse> courses = courseService.listStaleDeleting(threshold, batchSize);
         for (StaleCourse course : courses) {
             try {
-                deletionService.finalizeCourseDeletion(course.userId(), course.courseId(),
-                        course.indexVersion());
+                boolean cleared = deletionService.finalizeCourseDeletion(course.userId(),
+                        course.courseId(), course.indexVersion());
+                if (!cleared) {
+                    // 课程行必须等向量/文件/文档清理完成后才能物理删除；否则残留文档
+                    // 会失去 course 归属，ChromaDB 也再没有可靠入口可重试。
+                    log.warn("删除 GC：课程资源未清理完成，保留课程行 courseId={}",
+                            course.courseId());
+                    continue;
+                }
                 courseService.purgeSoftDeleted(course.userId(), course.courseId());
                 cleaned++;
             } catch (RuntimeException e) {
@@ -190,6 +228,69 @@ public class DeletionGcScheduler {
             }
         }
         return cleaned;
+    }
+
+    /** 重放持久化向量清理 outbox；返回本轮完成数。 */
+    private int purgeVectorOutbox(LocalDateTime now) {
+        int cleaned = 0;
+        List<VectorCleanupOutboxEntity> tasks = outboxService.findDue(now, batchSize);
+        for (VectorCleanupOutboxEntity task : tasks) {
+            if (!outboxService.claim(task.getCleanupId(), now, outboxLease)) {
+                continue;
+            }
+            boolean ok;
+            try {
+                ok = vectorCleanupService.cleanupDirect(task.getScope(), task.getUserId(),
+                        task.getCourseId(), task.getDocId(),
+                        task.getCourseIndexVersion(), task.getStaleParseVersion());
+            } catch (RuntimeException e) {
+                ok = false;
+                log.error("删除 GC：向量补偿重放异常 cleanupId={} scope={} error={}",
+                        task.getCleanupId(), task.getScope(), e.getClass().getSimpleName());
+            }
+            if (ok) {
+                outboxService.markDone(task.getCleanupId());
+                cleaned++;
+            } else {
+                int retryCount = (task.getRetryCount() == null ? 0 : task.getRetryCount()) + 1;
+                outboxService.markRetry(task.getCleanupId(), retryCount,
+                        "向量清理重放失败", now.plus(retryBackoff(retryCount)));
+                log.warn("删除 GC：向量补偿重放失败，已安排重试 cleanupId={} scope={} retry={}",
+                        task.getCleanupId(), task.getScope(), retryCount);
+            }
+        }
+        return cleaned;
+    }
+
+    /**
+     * 超过 24 小时仍未完成的补偿升级为 `MANUAL`，并输出人工介入告警。
+     *
+     * @return 本轮升级为人工处理的数量
+     */
+    private int escalateStaleOutbox(LocalDateTime now) {
+        int manual = outboxService.markStaleManual(now.minusHours(24));
+        if (manual > 0) {
+            log.error("[GC_MANUAL_INTERVENTION_REQUIRED] 向量清理补偿超过 24 小时未完成，"
+                    + "已标记 MANUAL count={}，请检查 sc-python-ai / ChromaDB 并按 trace_id 人工重放",
+                    manual);
+        }
+        return manual;
+    }
+
+    static Duration retryBackoff(int retryCount) {
+        if (retryCount <= 1) {
+            return Duration.ofMinutes(1);
+        }
+        if (retryCount == 2) {
+            return Duration.ofMinutes(5);
+        }
+        if (retryCount == 3) {
+            return Duration.ofMinutes(15);
+        }
+        if (retryCount == 4) {
+            return Duration.ofHours(1);
+        }
+        return Duration.ofHours(6);
     }
 
     private LockAttempt acquireLock() {
@@ -219,6 +320,8 @@ public class DeletionGcScheduler {
 
     /** 单轮统计。 */
     public record GcResult(int users, int documents, int courses,
-                           int orphanScanned, int orphanDeleted, int orphanFailed) {
+                           int orphanScanned, int orphanDeleted, int orphanFailed,
+                           int vectorOutboxCleaned, int outboxManual,
+                           int chromaScanned, int chromaDeleted, int chromaFailed) {
     }
 }

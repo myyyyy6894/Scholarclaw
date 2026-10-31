@@ -204,6 +204,24 @@ public class CourseService implements UserCourseCountProvider {
                 .toList();
     }
 
+    /**
+     * GC：列出全部活动课程（`is_deleting=0`）的用户/课程/当前索引版本，
+     * 用于与 ChromaDB Collection 做孤儿对账。
+     *
+     * <p>只读；跨用户全量扫描，不包含正在删除的课程（其 Collection 应被清理）。
+     */
+    public List<ActiveCourseRef> listActiveCourseRefs() {
+        return courseNamespaceMapper.selectList(Wrappers.<CourseNamespaceEntity>lambdaQuery()
+                        .eq(CourseNamespaceEntity::getIsDeleting, 0)
+                        .select(CourseNamespaceEntity::getUserId,
+                                CourseNamespaceEntity::getCourseId,
+                                CourseNamespaceEntity::getIndexVersion))
+                .stream()
+                .map(entity -> new ActiveCourseRef(entity.getUserId(), entity.getCourseId(),
+                        entity.getIndexVersion()))
+                .toList();
+    }
+
     /** GC：物理删除已软删课程行；重复执行幂等。 */
     public int purgeSoftDeleted(Long userId, Long courseId) {
         return courseMutationService.purgeSoftDeleted(userId, courseId);
@@ -213,10 +231,27 @@ public class CourseService implements UserCourseCountProvider {
     public record StaleCourse(Long userId, Long courseId, Integer indexVersion) {
     }
 
-    /** `API-COURSE-004`：第一阶段软删，事件监听方负责文档/DDL/会话；物理清理由 GC 兜底。 */
+    /** 活动课程引用（用于 ChromaDB 孤儿 Collection 对账）。 */
+    public record ActiveCourseRef(Long userId, Long courseId, Integer indexVersion) {
+    }
+
+    /**
+     * `API-COURSE-004`：第一阶段软删，事件监听方负责文档/DDL/会话；物理清理由 GC 兜底。
+     *
+     * <p><b>幂等（P9 复核）：</b>同一用户重复删除返回 200 与原结果；只有从未拥有或
+     * 其他用户的课程才返回 404。课程行被 GC 物理删除后由
+     * {@code t_course_deletion_receipt} 墓碑判定，不泄露资源存在性。
+     */
     public DeleteCourseVO deleteCourse(Long userId, Long courseId) {
-        getActiveCourse(userId, courseId);
-        courseMutationService.softDelete(userId, courseId);
+        if (courseMutationService.hasDeletionReceipt(userId, courseId)) {
+            return new DeleteCourseVO(courseId);
+        }
+        CourseMutationService.SoftDeleteOutcome outcome =
+                courseMutationService.softDelete(userId, courseId);
+        if (outcome == CourseMutationService.SoftDeleteOutcome.NOT_FOUND) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        // DELETED 与 ALREADY_DELETING 都返回原结果：并发/重复删除幂等。
         return new DeleteCourseVO(courseId);
     }
 

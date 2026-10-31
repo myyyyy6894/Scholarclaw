@@ -12,10 +12,13 @@ import static org.mockito.Mockito.when;
 import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.course.service.CourseService.StaleCourse;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
+import com.scholarclaw.modules.knowledge.service.ChromaReconciliationScanner;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDeletionService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService;
 import com.scholarclaw.modules.knowledge.service.OrphanResourceScanner;
 import com.scholarclaw.modules.knowledge.service.OrphanResourceScanner.OrphanScanResult;
+import com.scholarclaw.modules.knowledge.service.VectorCleanupOutboxService;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.modules.userconfig.service.UserDeactivationService;
 import java.time.Clock;
@@ -41,6 +44,9 @@ class DeletionGcSchedulerTest {
     private KnowledgeDeletionService deletionService;
     private CourseService courseService;
     private OrphanResourceScanner orphanScanner;
+    private VectorCleanupOutboxService outboxService;
+    private KnowledgeVectorCleanupService vectorCleanupService;
+    private ChromaReconciliationScanner chromaScanner;
     private StringRedisTemplate redisTemplate;
     private DeletionGcScheduler scheduler;
 
@@ -53,15 +59,22 @@ class DeletionGcSchedulerTest {
         deletionService = mock(KnowledgeDeletionService.class);
         courseService = mock(CourseService.class);
         orphanScanner = mock(OrphanResourceScanner.class);
+        outboxService = mock(VectorCleanupOutboxService.class);
+        vectorCleanupService = mock(KnowledgeVectorCleanupService.class);
+        chromaScanner = mock(ChromaReconciliationScanner.class);
         redisTemplate = mock(StringRedisTemplate.class);
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.setIfAbsent(any(), any(), any(Duration.class))).thenReturn(true);
         when(orphanScanner.scanOrphanRawFiles(any(Duration.class), anyInt()))
                 .thenReturn(new OrphanScanResult(0, 0, 0));
+        when(outboxService.findDue(any(), anyInt())).thenReturn(List.of());
+        when(chromaScanner.reconcile(anyInt()))
+                .thenReturn(new ChromaReconciliationScanner.ScanResult(0, 0, 0));
         scheduler = new DeletionGcScheduler(userConfigService, userDeactivationService,
-                docService, deletionService, courseService, orphanScanner, redisTemplate,
-                CLOCK, true, 10, 60, 100, 300);
+                docService, deletionService, courseService, orphanScanner, outboxService,
+                vectorCleanupService, chromaScanner, redisTemplate, CLOCK, true, 10, 60,
+                100, 300, true, 120);
     }
 
     @Test
@@ -105,6 +118,19 @@ class DeletionGcSchedulerTest {
         assertThat(result.users()).isEqualTo(1);
         assertThat(result.documents()).isZero();
         verify(userDeactivationService).retryCleanup(12L);
+    }
+
+    @Test
+    @DisplayName("课程向量/文件未清理完成：不得物理删除课程行")
+    void keepsCourseRowWhenFinalizeFails() {
+        when(courseService.listStaleDeleting(any(), anyInt()))
+                .thenReturn(List.of(new StaleCourse(11L, 21L, 3)));
+        when(deletionService.finalizeCourseDeletion(11L, 21L, 3)).thenReturn(false);
+
+        DeletionGcScheduler.GcResult result = scheduler.runOnce();
+
+        assertThat(result.courses()).isZero();
+        verify(courseService, never()).purgeSoftDeleted(11L, 21L);
     }
 
     @Test

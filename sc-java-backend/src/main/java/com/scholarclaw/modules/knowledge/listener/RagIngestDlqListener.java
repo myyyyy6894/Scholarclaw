@@ -54,8 +54,15 @@ public class RagIngestDlqListener {
     public void onDeadLetter(Message message) {
         JsonNode payload = parse(message.getBody());
         if (payload == null) {
-            log.warn("死信消息不是合法 JSON，忽略");
-            return;
+            // 非法 JSON 不得静默 ACK：停放到 parking，交给自动重放/人工队列。
+            String source = message.getMessageProperties().getConsumerQueue();
+            String messageId = message.getMessageProperties().getMessageId();
+            String traceId = TraceContext.currentTraceId();
+            if (parkingPublisher.publish(message.getBody(), traceId, messageId, source, 0)) {
+                log.error("死信消息不是合法 JSON，已停放到 parking messageId={}", messageId);
+                return;
+            }
+            throw new IllegalStateException("死信消息不是合法 JSON 且停放失败");
         }
         bindContext(payload);
         try {
@@ -141,19 +148,34 @@ public class RagIngestDlqListener {
     private void parkOrRequeue(Message message, RuntimeException cause) {
         String messageId = message.getMessageProperties().getMessageId();
         String traceId = TraceContext.currentTraceId();
+        String source = message.getMessageProperties().getConsumerQueue();
+        int attempt = intHeader(message, IngestParkingPublisher.ATTEMPT_HEADER);
         log.error("死信处理遇瞬态异常，尝试停放 messageId={} error={}",
                 messageId, cause.getClass().getSimpleName());
-        for (int attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt++) {
-            if (parkingPublisher.publish(message.getBody(), traceId, messageId)) {
+        for (int retry = 1; retry <= TRANSIENT_ATTEMPTS; retry++) {
+            if (parkingPublisher.publish(message.getBody(), traceId, messageId, source,
+                    attempt)) {
                 log.error("死信已停放至 {} messageId={}",
                         parkingPublisher.parkingQueue(), messageId);
                 return;
             }
-            sleepBackoff(attempt);
+            sleepBackoff(retry);
         }
         // 停放也失败：抛出触发容器重投，宁可重复处理也不能丢消息
         log.error("死信停放失败，交给容器重投 messageId={}", messageId);
         throw cause;
+    }
+
+    private static int intHeader(Message message, String name) {
+        Object value = message.getMessageProperties().getHeaders().get(name);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return value == null ? 0 : Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static void sleepBackoff(int attempt) {

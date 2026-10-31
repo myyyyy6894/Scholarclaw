@@ -43,7 +43,8 @@ class CourseMutationServiceTest {
         ObjectProvider<CourseDocumentStatsProvider> providerHolder = mock(ObjectProvider.class);
         when(providerHolder.getIfAvailable()).thenReturn(provider);
         service = new CourseMutationService(mapper, mock(ApplicationEventPublisher.class),
-                providerHolder, mock(com.scholarclaw.modules.userconfig.service.UserConfigService.class));
+                providerHolder, mock(com.scholarclaw.modules.userconfig.service.UserConfigService.class),
+                mock(CourseDeletionReceiptService.class));
     }
 
     @Test
@@ -135,22 +136,31 @@ class CourseMutationServiceTest {
     @Test
     @DisplayName("软删除先锁定课程行，再更新；课程不存在时 404 且不执行 UPDATE")
     void softDeleteLocksCourseRowBeforeUpdate() {
-        when(mapper.selectActiveCourseForUpdate(10001L, 2001L)).thenReturn(course(1));
+        when(mapper.selectCourseForUpdate(10001L, 2001L)).thenReturn(course(1));
         when(mapper.update(any(), any())).thenReturn(1);
 
-        service.softDelete(10001L, 2001L);
+        assertThat(service.softDelete(10001L, 2001L))
+                .isEqualTo(CourseMutationService.SoftDeleteOutcome.DELETED);
 
         org.mockito.InOrder order = org.mockito.Mockito.inOrder(mapper);
-        order.verify(mapper).selectActiveCourseForUpdate(10001L, 2001L);
+        order.verify(mapper).selectCourseForUpdate(10001L, 2001L);
         order.verify(mapper).update(any(), any());
 
-        when(mapper.selectActiveCourseForUpdate(10001L, 2001L)).thenReturn(null);
-        org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> service.softDelete(10001L, 2001L))
-                .isInstanceOf(com.scholarclaw.common.exception.BusinessException.class)
-                .satisfies(ex -> assertThat(
-                        ((com.scholarclaw.common.exception.BusinessException) ex).getErrorCode())
-                        .isEqualTo(com.scholarclaw.common.exception.ErrorCode.RESOURCE_NOT_FOUND));
+        when(mapper.selectCourseForUpdate(10001L, 2001L)).thenReturn(null);
+        assertThat(service.softDelete(10001L, 2001L))
+                .isEqualTo(CourseMutationService.SoftDeleteOutcome.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("并发重复删除：后到请求看到 is_deleting=1 返回 ALREADY_DELETING")
+    void softDeleteIsIdempotentWhenAlreadyDeleting() {
+        CourseNamespaceEntity deleting = course(1);
+        deleting.setIsDeleting(1);
+        when(mapper.selectCourseForUpdate(10001L, 2001L)).thenReturn(deleting);
+
+        assertThat(service.softDelete(10001L, 2001L))
+                .isEqualTo(CourseMutationService.SoftDeleteOutcome.ALREADY_DELETING);
+        verify(mapper, org.mockito.Mockito.never()).update(any(), any());
     }
 
     private static CourseNamespaceEntity course(int version) {

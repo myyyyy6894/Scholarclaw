@@ -5,8 +5,10 @@ import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
+import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -44,11 +46,34 @@ public class IngestMqConfig {
         return QueueBuilder.durable(dlq).build();
     }
 
-    /** 死信二次处理仍失败时的持久化停放队列；刻意不绑定消费者。 */
+    /** 死信二次处理仍失败时的持久化停放队列；由 ParkingReplayListener 限速重放。 */
     @Bean
     public Queue ingestParkingQueue(
             @Value("${sc.mq.ingest.parking:rag.ingest.parking}") String parking) {
         return QueueBuilder.durable(parking).build();
+    }
+
+    /** 自动重放超过上限后的人工队列；只保留消息与告警，不再自动消费。 */
+    @Bean
+    public Queue ingestParkingManualQueue(
+            @Value("${sc.mq.ingest.parking-manual:rag.ingest.parking.manual}")
+            String parkingManual) {
+        return QueueBuilder.durable(parkingManual).build();
+    }
+
+    /**
+     * parking 自动重放专用容器：手动 ACK，确保“重放成功并确认后才 ACK 原消息”，
+     * 避免先 ACK 再发布造成的消息丢失窗口。
+     */
+    @Bean
+    public SimpleRabbitListenerContainerFactory parkingReplayContainerFactory(
+            ConnectionFactory connectionFactory) {
+        SimpleRabbitListenerContainerFactory factory =
+                new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+        factory.setPrefetchCount(1);
+        return factory;
     }
 
     /** 向量清理最终失败时的持久化补偿队列；由 TASK-902 GC 消费/重放。 */

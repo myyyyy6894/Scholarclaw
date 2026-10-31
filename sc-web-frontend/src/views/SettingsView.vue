@@ -34,7 +34,7 @@ import {
 } from '@/views/settings/model-config-form'
 import type { ModelConfigFormState, SingleProbeType } from '@/views/settings/model-config-form'
 import { useModelProbeResults } from '@/views/settings/use-model-probe-results'
-import { resolveNapcatWebuiUrl } from '@/views/settings/napcat-entry'
+import { readRuntimeNapcatWebuiUrl, resolveNapcatWebuiUrl } from '@/views/settings/napcat-entry'
 import {
   createPreferencesForm,
   PreferencesValidationError,
@@ -90,7 +90,10 @@ const IM_PLATFORMS = [
 ]
 
 // QQ 扫码登录由独立 NapCat 协议端完成；这里只提供跳转，不代理其登录页。
-const napcatWebuiUrl = resolveNapcatWebuiUrl(import.meta.env.VITE_NAPCAT_WEBUI_URL)
+const napcatWebuiUrl = resolveNapcatWebuiUrl(
+  import.meta.env.VITE_NAPCAT_WEBUI_URL,
+  readRuntimeNapcatWebuiUrl(),
+)
 
 const chatKeyPlaceholder = computed(() =>
   modelForm.value.hasSavedChatKey
@@ -568,10 +571,14 @@ function goToLogin(): void {
           </el-row>
           <div class="sc-settings__row">
             <span class="sc-settings__hint">
-              QQ 扫码登录由独立的 NapCat 协议端完成；登录后请让 QQ 号与上方绑定保持一致。
-              远程部署时需通过
+              IM 绑定是可选的：不绑定也能使用全部 Web 功能，站内通知照常送达。
+              绑定后由部署者运行的机器人 QQ 把提醒推送到你的 QQ。
+              QQ 扫码登录由独立的 NapCat 协议端完成（入口仅供部署者运维使用）；登录后请让 QQ 号与上方绑定保持一致。
+              远程部署时由部署者用
+              <code>SC_NAPCAT_WEBUI_URL</code>
+              （运行期，重启 Web 生效）或
               <code>VITE_NAPCAT_WEBUI_URL</code>
-              配置浏览器可达的地址。
+              （构建期）指向浏览器可达的地址，默认仅本机。
             </span>
             <el-link
               type="primary"

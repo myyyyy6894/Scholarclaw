@@ -205,4 +205,17 @@ public class UserConfigService {
     public static boolean isDeactivating(UserConfigEntity entity) {
         return entity != null && "DEACTIVATING".equals(entity.getAccountStatus());
     }
+
+    /**
+     * JWT 过滤器的数据库兜底：用户行不存在（已完成注销）或处于 `DEACTIVATING` 都视为不可用。
+     *
+     * <p>只在 Redis 注销键未命中且无活跃负缓存时调用，避免每个请求都查库。
+     */
+    public boolean isAccountDeactivatedOrMissing(Long userId) {
+        if (userId == null) {
+            return true;
+        }
+        UserConfigEntity entity = userConfigMapper.selectById(userId);
+        return entity == null || isDeactivating(entity);
+    }
 }

@@ -28,10 +28,10 @@ public class DocumentVectorCleanupListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onDocumentVectorCleanup(DocumentVectorCleanupEvent event) {
-        boolean cleaned = cleanupService.cleanupDocument(event.userId(), event.courseId(),
+        var result = cleanupService.cleanupDocument(event.userId(), event.courseId(),
                 event.docId(), event.parseVersion());
-        if (!cleaned) {
-            log.warn("文档向量补偿清理未完成 docId={} parseVersion={}",
+        if (!result.handled()) {
+            log.warn("文档向量补偿清理未完成且未落库 docId={} parseVersion={}",
                     event.docId(), event.parseVersion());
         }
     }

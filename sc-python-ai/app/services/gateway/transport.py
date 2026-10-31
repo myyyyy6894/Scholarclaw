@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from urllib.parse import urlsplit
@@ -33,6 +34,7 @@ from app.core.exceptions import (
     UpstreamModelRateLimitedError,
     UpstreamTimeoutError,
 )
+from app.services.gateway import ssrf_guard
 
 #: 可安全重试的上游状态码（`NFR-REL-01` / `04` §6.2）。
 RETRYABLE_UPSTREAM_STATUS = frozenset({429, 502, 503, 504})
@@ -49,6 +51,60 @@ NON_200_SUCCESS_MESSAGE = "上游模型返回了非 200 的成功状态，无法
 SleepFunction = Callable[[float], Awaitable[None]]
 
 
+class PinnedAsyncTransport(httpx.AsyncBaseTransport):
+    """连接前 IP 钉扎：解析并校验一次，随后直接连接该 IP，保留原 Host 与 TLS SNI。
+
+    这是 P9 复核第 9 项对 DNS rebinding 的闭合：`ssrf_guard` 的 URL 预校验仍然保留，
+    但真正建连时不再让 httpcore 二次解析域名。实现方式：
+
+    * 解析主机名并逐条校验全部结果（硬拒绝元数据/链路本地；白名单只允许本地地址）；
+    * 把请求 URL 的 host 改成已校验的 IP，显式设置 `Host` 头为原主机名；
+    * 通过 `sni_hostname` 扩展让 TLS 证书仍按原主机名校验。
+
+    重定向已在客户端关闭（`follow_redirects=False`），因此不存在跨主机跳转绕过。
+    """
+
+    def __init__(self, *, allow_local: bool, allowed_origins: tuple[str, ...],
+                 ssl_context: ssl.SSLContext | None = None) -> None:
+        self._allow_local = allow_local
+        self._allowed_origins = tuple(allowed_origins)
+        # ssl_context 仅供集成测试注入自签名 CA；生产保持 None 使用系统信任库。
+        self._inner = httpx.AsyncHTTPTransport(
+            retries=0, verify=ssl_context if ssl_context is not None else True)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        port = request.url.port
+        addresses = await ssrf_guard.resolve_and_validate_host_async(
+            host, port, allow_local=self._allow_local,
+            allowed_origins=self._allowed_origins)
+        # 优先 IPv4：部分上游只监听 A 记录；全部地址都已校验，选择任一都不放宽策略。
+        pinned = next((address for address in addresses if address.version == 4),
+                      addresses[0])
+        pinned_host = str(pinned)
+        if pinned.version == 6:
+            pinned_host = f"[{pinned_host}]"
+        pinned_url = request.url.copy_with(host=pinned_host)
+        default_port = 443 if request.url.scheme == "https" else 80
+        host_header = host if port in (None, default_port) else f"{host}:{port}"
+        headers = request.headers.copy()
+        headers["host"] = host_header
+        extensions = dict(request.extensions)
+        extensions["sni_hostname"] = host
+        try:
+            body = request.content
+        except httpx.RequestNotRead:
+            # 极少数流式上传场景：先读入内存再重建请求；模型网关只发送 JSON，不会走到这里。
+            body = await request.aread()
+        pinned_request = httpx.Request(
+            request.method, pinned_url, headers=headers,
+            content=body, extensions=extensions)
+        return await self._inner.handle_async_request(pinned_request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
 def build_async_client(
     *,
     connect_timeout: float,
@@ -56,11 +112,14 @@ def build_async_client(
     write_timeout: float | None = None,
     pool_timeout: float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    allow_local: bool = False,
+    allowed_origins: tuple[str, ...] = (),
+    ssl_context: ssl.SSLContext | None = None,
 ) -> httpx.AsyncClient:
     """构造符合安全约束的出站客户端。
 
-    :param transport: 仅用于测试注入（如 `httpx.MockTransport`）；生产环境保持 `None`。
-    调用方负责在使用完毕后 `aclose()`。
+    :param transport: 仅用于测试注入（如 `httpx.MockTransport`）；生产环境保持 `None`，
+        此时使用 {@link PinnedAsyncTransport} 做连接前 IP 钉扎。
     """
     timeout = httpx.Timeout(
         connect=connect_timeout,
@@ -68,11 +127,16 @@ def build_async_client(
         write=read_timeout if write_timeout is None else write_timeout,
         pool=read_timeout if pool_timeout is None else pool_timeout,
     )
+    client_transport = transport
+    if client_transport is None:
+        client_transport = PinnedAsyncTransport(
+            allow_local=allow_local, allowed_origins=allowed_origins,
+            ssl_context=ssl_context)
     return httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=False,
         trust_env=False,
-        transport=transport,
+        transport=client_transport,
     )
 
 

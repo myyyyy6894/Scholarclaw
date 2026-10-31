@@ -6,6 +6,7 @@ import com.scholarclaw.common.event.UserCleanupCompletedEvent;
 import com.scholarclaw.common.event.UserDeactivatingEvent;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
 import com.scholarclaw.modules.course.mapper.CourseNamespaceMapper;
+import com.scholarclaw.modules.course.service.CourseDeletionReceiptService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -27,11 +28,14 @@ public class UserDeactivatingCourseListener {
             UserDeactivatingCourseListener.class);
 
     private final CourseNamespaceMapper courseNamespaceMapper;
+    private final CourseDeletionReceiptService receiptService;
     private final ApplicationEventPublisher eventPublisher;
 
     public UserDeactivatingCourseListener(CourseNamespaceMapper courseNamespaceMapper,
+                                          CourseDeletionReceiptService receiptService,
                                           ApplicationEventPublisher eventPublisher) {
         this.courseNamespaceMapper = courseNamespaceMapper;
+        this.receiptService = receiptService;
         this.eventPublisher = eventPublisher;
     }
 
@@ -53,7 +57,9 @@ public class UserDeactivatingCourseListener {
             int deleted = courseNamespaceMapper.delete(
                     Wrappers.<CourseNamespaceEntity>lambdaQuery()
                             .eq(CourseNamespaceEntity::getUserId, event.userId()));
-            log.info("账号注销：课程行物理删除完成 userId={} rows={}", event.userId(), deleted);
+            int receipts = receiptService.deleteByUser(event.userId());
+            log.info("账号注销：课程行物理删除完成 userId={} rows={} receipts={}",
+                    event.userId(), deleted, receipts);
         } catch (RuntimeException e) {
             log.error("账号注销：课程行清理失败 userId={} error={}",
                     event.userId(), e.getClass().getSimpleName());

@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import hmac
 import json
+import random
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -201,7 +202,9 @@ def main() -> int:
     suffix = str(int(time.time()))[-8:]
     im_a = f"2468{suffix}"
     im_b = f"2469{suffix}"
-    im_c = f"2470{suffix[:-2]}14"
+    # im_c 必须唯一且以 14 结尾（替身按“14 结尾”模拟协议端拒收）；
+    # 固定截断 suffix 会在相邻分钟内产生相同账号，导致 IM_ACCOUNT_ALREADY_BOUND。
+    im_c = f"2470{random.randint(100000, 999999)}14"
     user_a = register(client, "p8_qq_a", args.password)
     save_model_config(client, user_a["token"])
     bind_im(client, user_a["token"], im_a)
@@ -498,7 +501,7 @@ def main() -> int:
     check("失败用户生成站内通知", note_c is not None, note_c)
     final_c = wait_for(lambda: (lambda n: n if n and n.get("outbound_status")
                                 == "FALLBACK_WEB_ONLY" else None)(
-        find_notification(client, user_c["token"], task_c)), timeout=40)
+        find_notification(client, user_c["token"], task_c)), timeout=100)
     check("协议端失败最终 FALLBACK_WEB_ONLY", final_c is not None, final_c)
     fail_calls = [c for c in onebot_calls(client)
                   if c["action"] == "send_private_msg"

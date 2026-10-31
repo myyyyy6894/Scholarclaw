@@ -134,6 +134,25 @@ class MigrationScriptTest {
                 .hasMessageContaining("校验和");
     }
 
+    @Test
+    @DisplayName("V1.0.5 新增向量清理 outbox 与课程删除回执，回滚脚本可删除两表")
+    void p9ReviewRecoveryMigrationIsComplete() throws IOException {
+        String sql = MigrationScript.fromResource(new ClassPathResource(
+                "db/migration/V1.0.5__p9_review_recovery.sql")).sql();
+
+        assertThat(sql).contains("CREATE TABLE IF NOT EXISTS `t_vector_cleanup_outbox`")
+                .contains("uk_vector_cleanup_dedup")
+                .contains("idx_vector_cleanup_retry")
+                .contains("CREATE TABLE IF NOT EXISTS `t_course_deletion_receipt`")
+                .contains("uk_course_deletion_receipt");
+
+        String rollback = new ClassPathResource(
+                "db/rollback/U1.0.5__rollback_p9_review_recovery.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(rollback).contains("DROP TABLE IF EXISTS `t_vector_cleanup_outbox`")
+                .contains("DROP TABLE IF EXISTS `t_course_deletion_receipt`");
+    }
+
     private static MigrationScript scriptOf(String fileName, String sql) throws IOException {
         // ByteArrayResource#getFilename() 恒为 null（它只实现 getDescription），必须匿名覆盖
         return MigrationScript.fromResource(new ByteArrayResource(sql.getBytes()) {

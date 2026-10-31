@@ -1,0 +1,94 @@
+{
+  "version": "2.0",
+  "created_at": "YYYY-MM-DD",
+  "description": "真实课程 RAG 评测集模板。复制为 rag_golden_dataset.real.json 后补齐 2 门课程、3~5 份文字版 PDF、30~50 道人工标注题；本模板本身不满足准出条件，eval_quality.py 会拒绝运行。",
+  "dataset_kind": "real-annotated",
+  "source": "real_course_pdf",
+  "annotation": {
+    "annotator_ids": ["annotator-a", "annotator-b"],
+    "annotated_at": "YYYY-MM-DDTHH:MM:SS+08:00",
+    "reviewed_by": "reviewer-c",
+    "review_status": "APPROVED",
+    "annotation_spec": "两人独立标注 query→文档名/页码→采分点；分歧由第三人仲裁并写入 arbitration；review_status 只能是 APPROVED 或 ARBITRATED。",
+    "arbitration": [
+      {
+        "question_id": "Q01",
+        "arbiter": "reviewer-c",
+        "decision": "采纳 annotator-a 的页码范围",
+        "at": "YYYY-MM-DDTHH:MM:SS+08:00"
+      }
+    ]
+  },
+  "corpus_snapshot": {
+    "note": "pdf_path 相对仓库根目录；sha256 必须与文件实际内容一致，评测前会逐份校验。",
+    "documents": {
+      "db_tx": {
+        "pdf_path": "eval/corpus/db_tx.pdf",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  },
+  "courses": [
+    {
+      "key": "db",
+      "course_name": "数据库系统概念",
+      "documents": [
+        {
+          "key": "db_tx",
+          "doc_name": "第5章_事务处理.pdf",
+          "pdf_path": "eval/corpus/db_tx.pdf",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "key": "os",
+      "course_name": "操作系统",
+      "documents": [
+        {
+          "key": "os_sched",
+          "doc_name": "第3章_进程与调度.pdf",
+          "pdf_path": "eval/corpus/os_sched.pdf",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "Q01",
+      "course_key": "db",
+      "category": "answerable",
+      "query": "严格两阶段锁协议要求事务持有哪些锁直到提交或回滚？",
+      "reference": {
+        "doc_name": "第5章_事务处理.pdf",
+        "page_start": 1,
+        "page_end": 2
+      },
+      "key_points": ["持有所有排他锁", "直到提交或回滚"],
+      "annotation": {
+        "annotator_id": "annotator-a",
+        "annotated_at": "YYYY-MM-DDTHH:MM:SS+08:00",
+        "reviewed_by": "reviewer-c",
+        "review_status": "APPROVED",
+        "arbitration_note": null
+      }
+    },
+    {
+      "id": "N01",
+      "course_key": "db",
+      "category": "unanswerable_in_corpus",
+      "query": "课件中给出的 MySQL 8.0 默认事务隔离级别是什么？",
+      "reference": null,
+      "key_points": [],
+      "expected": "rejection",
+      "annotation": {
+        "annotator_id": "annotator-b",
+        "annotated_at": "YYYY-MM-DDTHH:MM:SS+08:00",
+        "reviewed_by": "reviewer-c",
+        "review_status": "APPROVED",
+        "arbitration_note": null
+      }
+    }
+  ]
+}

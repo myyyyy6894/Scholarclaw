@@ -28,7 +28,8 @@ class IngestParkingPublisherTest {
                 any(MessagePostProcessor.class), any(CorrelationData.class));
 
         IngestParkingPublisher publisher = new IngestParkingPublisher(
-                template, "rag.ingest.exchange", "rag.ingest.parking", 100);
+                template, "rag.ingest.exchange", "rag.ingest.parking",
+                "rag.ingest.parking.manual", 100);
 
         assertThat(publisher.publish("{}".getBytes(StandardCharsets.UTF_8),
                 "tr_cron_0123456789ab", "job_1")).isTrue();
@@ -40,7 +41,8 @@ class IngestParkingPublisherTest {
     @DisplayName("确认超时返回 false")
     void timesOut() {
         IngestParkingPublisher publisher = new IngestParkingPublisher(
-                mock(RabbitTemplate.class), "rag.ingest.exchange", "rag.ingest.parking", 50);
+                mock(RabbitTemplate.class), "rag.ingest.exchange", "rag.ingest.parking",
+                "rag.ingest.parking.manual", 50);
 
         assertThat(publisher.publish("{}".getBytes(StandardCharsets.UTF_8), null, "job_1"))
                 .isFalse();

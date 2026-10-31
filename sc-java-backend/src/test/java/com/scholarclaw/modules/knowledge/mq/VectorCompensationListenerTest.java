@@ -2,6 +2,7 @@ package com.scholarclaw.modules.knowledge.mq;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -40,7 +41,7 @@ class VectorCompensationListenerTest {
         listener.handle(body("DOCUMENT", "11", "21", "31", null, "2"));
 
         verify(cleanupService).cleanupDirect("DOCUMENT", 11L, 21L, 31L, null, 2);
-        verify(parkingPublisher, never()).publish(any(), any(), any());
+        verify(parkingPublisher, never()).publish(any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -48,11 +49,12 @@ class VectorCompensationListenerTest {
     void parksWhenReplayFails() {
         when(cleanupService.cleanupDirect(eq("USER_ALL"), eq(11L), isNull(), isNull(),
                 isNull(), isNull())).thenReturn(false);
-        when(parkingPublisher.publish(any(), eq("tr_test"), isNull())).thenReturn(true);
+        when(parkingPublisher.publish(any(), eq("tr_test"), isNull(), isNull(), eq(0)))
+                .thenReturn(true);
 
         listener.handle(body("USER_ALL", "11", null, null, null, null));
 
-        verify(parkingPublisher).publish(any(), eq("tr_test"), isNull());
+        verify(parkingPublisher).publish(any(), eq("tr_test"), isNull(), isNull(), eq(0));
     }
 
     @Test
@@ -60,7 +62,7 @@ class VectorCompensationListenerTest {
     void throwsWhenParkingFails() {
         when(cleanupService.cleanupDirect(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(false);
-        when(parkingPublisher.publish(any(), any(), any())).thenReturn(false);
+        when(parkingPublisher.publish(any(), any(), any(), any(), anyInt())).thenReturn(false);
 
         assertThatThrownBy(() -> listener.handle(
                 body("COURSE_COLLECTION", "11", "21", null, "3", null)))
@@ -68,13 +70,26 @@ class VectorCompensationListenerTest {
     }
 
     @Test
-    @DisplayName("非法 JSON / 未知 scope：忽略且不清理")
-    void ignoresInvalidMessages() {
+    @DisplayName("非法 JSON / 未知 scope：不得静默 ACK，必须停放 parking")
+    void parksInvalidMessages() {
+        when(parkingPublisher.publish(any(), any(), any(), any(), anyInt())).thenReturn(true);
+
         listener.handle("not-json".getBytes(StandardCharsets.UTF_8));
         listener.handle(body("UNKNOWN", "11", null, null, null, null));
 
         verify(cleanupService, never()).cleanupDirect(any(), any(), any(), any(), any(), any());
-        verify(parkingPublisher, never()).publish(any(), any(), any());
+        verify(parkingPublisher, org.mockito.Mockito.times(2))
+                .publish(any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("非法消息且停放失败：抛异常让容器重投")
+    void throwsWhenInvalidMessageCannotPark() {
+        when(parkingPublisher.publish(any(), any(), any(), any(), anyInt())).thenReturn(false);
+
+        assertThatThrownBy(() -> listener.handle(
+                "not-json".getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     private static byte[] body(String scope, String userId, String courseId, String docId,

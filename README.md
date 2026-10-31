@@ -2,7 +2,7 @@
 
 面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
 
-**当前进度：P0~P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P9 / TASK-901（级联清理）、TASK-902（孤儿资源扫描与 GC）、TASK-903（安全回归）、TASK-904（两条核心业务闭环验收）、TASK-905（性能与 RAG 基线）与 TASK-906（部署与交付文档）已实现，**P9 全部任务 `IN_REVIEW`，待负责人逐项验收**；证据见 `SECURITY_REGRESSION.md`、`MVP_ACCEPTANCE.md`、`PERFORMANCE_BASELINE.md` 与 `DELIVERY.md`（性能数字为本地 mock 口径，不代表真实供应商）。** P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台与 Golden Dataset 链路基线；TASK-606 仍缺真实课程 PDF、人工标注与真实供应商 Key，**其替身基线不代表真实质量，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
+**当前进度：P0~P5、P7、P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P6 的 TASK-601~605 已验收 `DONE`，但 TASK-606（真实 RAG Golden Dataset 质量准出）于 2026-10-31 复核改为 `IN_REVIEW` / `BLOCKED`——现有 Hit@4/拒答数字来自合成语料与哈希向量替身，只算链路冒烟，不能作为质量准出证据**；P9 / TASK-901（级联清理）、TASK-902（孤儿资源扫描与 GC）、TASK-903（安全回归）、TASK-904（两条核心业务闭环验收）、TASK-905（性能与 RAG 基线）与 TASK-906（部署与交付文档）已实现，**P9 全部任务 `IN_REVIEW`，待负责人逐项验收**；证据见 `SECURITY_REGRESSION.md`、`MVP_ACCEPTANCE.md`、`PERFORMANCE_BASELINE.md` 与 `DELIVERY.md`（性能数字为本地 mock 口径，不代表真实供应商）。P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台；TASK-606 已建立真实评测框架（`tests/eval_quality.py` + 真实数据集模板），但**真实课程 PDF、人工标注与真实供应商 Key 尚未提供，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
 
 **证据边界（不要混写）**：P8 自动化 E2E 使用 `scripts/e2e/p8_mock_onebot.py` 协议替身（P8 API 48/48、浏览器 10/10），**不是真实 NapCat/QQ**；真实 QQ 已手工验证私聊入站、回复与真实 DeepSeek DDL 提取（task 827）；真实 QQ 主动提醒（T-6h）已验证（task 923 → 通知 1327 `SENT_IM`）；**群聊 `@` 真实回复、群文件下载/群权限、真实平台限流/风控仍未验证**，负责人已接受为上线前补测项（RISK-103/104）。IM 投递语义为「正常路径至少一次 + 本地去重」，**不是严格恰好一次**（RISK-110）。任务状态以 `TASK_TRACKER.md` §1 为准。
 
@@ -12,7 +12,7 @@
 
 | 组成 | 技术基线 | 职责 | 硬约束 |
 |---|---|---|---|
-| `sc-java-backend` | Java 21 + Spring Boot 3.3.x + Spring Security 6 + MyBatis-Plus 3.5.x | 业务与状态权威中心（SoT）：认证鉴权、BYOK 加解密、课程/文档/任务状态机、定时调度、MQ 生产与 DLQ | 单进程**模块化单体**（包级 Strict DAG）；唯一连接 MySQL；唯一持有 `SC_MASTER_KEY` |
+| `sc-java-backend` | Java 21 + Spring Boot 3.5.x + Spring Security 6 + MyBatis-Plus 3.5.x | 业务与状态权威中心（SoT）：认证鉴权、BYOK 加解密、课程/文档/任务状态机、定时调度、MQ 生产与 DLQ | 单进程**模块化单体**（包级 Strict DAG）；唯一连接 MySQL；唯一持有 `SC_MASTER_KEY` |
 | `sc-python-ai` | Python 3.11 + FastAPI 0.115.x + Pydantic v2 + httpx + pypdf | 无状态 AI 计算引擎：意图路由、DDL 结构化提取、PDF/MD/TXT 解析切分、Embedding、ChromaDB 读写、RAG 与引用校验 | **不得**连接 MySQL/Redis；**不得**持有主密钥或数据库凭据；共享卷只读 |
 | Web 工作台 | Vue 3 + TypeScript + Vite + Pinia + Element Plus | 登录与 BYOK 配置、课程与文档管理、SSE 溯源问答、DDL 看板、站内通知 | 不维护多套前端；`BIGINT` ID 全程按十进制字符串处理 |
 | 基础设施 | MySQL 8.0 / Redis 7.2 / RabbitMQ 3.13 / ChromaDB 0.5.x | MySQL 唯一权威源；Redis 只存带 TTL 的运行时状态（不做 MySQL 二级缓存）；RabbitMQ **仅**用于文档解析/重试/重建；ChromaDB 仅作可重建的派生向量索引 | 见 `docs/02` 第 8、13 章 |
@@ -142,7 +142,13 @@ docker compose --profile onebot up -d sc-napcat-onebot
 该容器只加入 `scholarclaw-internal` 网络，端口默认只绑定 `127.0.0.1`；Java 通过
 `SC_ONEBOT_BASE_URL=http://sc-napcat-onebot:3000` 调用它，入站上报地址为
 `http://sc-java-backend:8080/webhooks/onebot/v11`。默认 `docker compose up -d` **不会**创建该容器。
+`.env` 填 `SC_NAPCAT_ACCOUNT=<QQ号>` 可开启快速登录（重启不再扫码）；WebUI 令牌用
+`scripts/napcat/webui.sh` 直接打印登录地址或重设，不必翻 `webui.json`/容器日志。
 详细步骤（登录、HTTP 服务端、上报地址、Token、文件下载 Origin 白名单）见 `DEPLOYMENT.md` §3.1。
+
+**QQ 是可选通道**：由部署者用自己的账号运行 NapCat，终端用户不需要任何 QQ 侧操作。
+Web 工作台功能完整；用户不绑定 QQ 也能正常使用，站内通知始终保留，绑定只是让提醒额外推送到 QQ。
+多用户各自使用自己的 QQ 作为机器人不属于当前架构（一个部署 = 一个机器人 QQ）。
 
 要点提醒：**只有 Nginx 暴露宿主机端口**；`/internal/**` 被 Nginx 阻断为 404；
 Java 与 Python 共享同一 uid（10001）但 Python 对共享卷是只读挂载。
@@ -181,19 +187,19 @@ docker compose logs sc-java-backend | grep 数据库迁移
 docker compose exec -T sc-mysql sh -c 'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -D scholarclaw \
   -e "SELECT version, script, success, execution_ms, applied_at FROM sc_schema_migration"'
 
-# 手工执行（生产建议：用特权账号先迁移，再在 .env 里设 SC_DB_MIGRATION_ENABLED=false）
-for f in sc-java-backend/src/main/resources/db/migration/V*.sql; do
-  docker compose exec -T sc-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' < "$f"
-done
+# 手工迁移（可选；会按版本表跳过已成功版本，并在成功后同步写入 sc_schema_migration 与 checksum）
+bash scripts/db/manual_migrate.sh
 
 # 结构核对：把真实库与 docs/03 的数据字典/索引表/约束名逐项比对（只读，退出码 0=一致）
 python3 scripts/db/verify_mvp_schema.py
 ```
 
-当前版本 **1.0.4**：`V1.0.0` 建 7 张 MVP 表，`V1.0.4` 调整第二次跟进后的 `follow_up_at` 约束；
-回滚脚本为 `db/rollback/U1.0.4__rollback_p8_review_fixes.sql`。`v1.1` 的 `t_ddl_subtask` /
+当前版本 **1.0.5**：`V1.0.0` 建 7 张业务核心表，`V1.0.4` 调整第二次跟进后的 `follow_up_at` 约束，
+`V1.0.5` 新增 `t_vector_cleanup_outbox` 与 `t_course_deletion_receipt` 两张删除恢复辅助表；
+回滚脚本为 `db/rollback/U1.0.4__rollback_p8_review_fixes.sql` 与
+`db/rollback/U1.0.5__rollback_p9_review_recovery.sql`。`v1.1` 的 `t_ddl_subtask` /
 `t_exam_wrong_book` 按 `03` §1.4 留待 `V1.1.0` 增量脚本（`MigrationScriptTest` 有断言守着，防止提前建表）。
-结构核对当前为 **485 项一致**。
+结构核对项数以 `verify_mvp_schema.py` 实际输出为准。
 
 ### 3.6 认证闭环冒烟（已实测）
 
@@ -293,4 +299,4 @@ SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整
 - 当前状态、需求追踪、未决事项台账：`TASK_TRACKER.md`。
 - 环境差异与风险：`ENVIRONMENT.md`。
 
-阶段路线：P0 仓库核验 → P1 工程骨架与容器底座 → P2 认证/BYOK → P3 Python 网关与模型探测 → P4 课程与知识库（`DONE`）→ P5 异步解析与向量索引（`DONE`）→ P6 RAG 与 SSE（`DONE`）→ P7 DDL 闭环（`DONE`）→ P8 提醒/通知/OneBot（`DONE`）→ P9 清理补偿与 MVP 验收。
+阶段路线：P0 仓库核验 → P1 工程骨架与容器底座 → P2 认证/BYOK → P3 Python 网关与模型探测 → P4 课程与知识库（`DONE`）→ P5 异步解析与向量索引（`DONE`）→ P6 RAG 与 SSE（TASK-601~605 `DONE`；TASK-606 质量准出 `BLOCKED`）→ P7 DDL 闭环（`DONE`）→ P8 提醒/通知/OneBot（`DONE`）→ P9 清理补偿与 MVP 验收。

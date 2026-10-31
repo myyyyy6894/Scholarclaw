@@ -46,13 +46,20 @@ public class VectorCompensationListener {
 
     @RabbitListener(queues = "${sc.mq.ingest.vector-compensation:rag.ingest.vector-compensation}")
     public void onMessage(Message message) {
-        handle(message.getBody());
+        String source = message.getMessageProperties().getConsumerQueue();
+        int attempt = intHeader(message, IngestParkingPublisher.ATTEMPT_HEADER);
+        handle(message.getBody(), source, attempt);
     }
 
     /** 供单测直接驱动。 */
     void handle(byte[] rawBody) {
+        handle(rawBody, null, 0);
+    }
+
+    void handle(byte[] rawBody, String source, int attempt) {
         JsonNode payload = parse(rawBody);
         if (payload == null) {
+            parkInvalid(rawBody, source, attempt, "非合法 JSON");
             return;
         }
         String traceId = text(payload, "trace_id");
@@ -68,7 +75,8 @@ public class VectorCompensationListener {
             Integer staleParseVersion = intOrNull(payload, "stale_parse_version");
             if (!"VECTOR_CLEANUP".equals(text(payload, "kind"))
                     || scope == null || !SCOPES.contains(scope) || userId == null) {
-                log.warn("向量补偿消息字段非法，忽略 scope={} userId={}", scope, userId);
+                parkInvalid(rawBody, source, attempt,
+                        "kind/scope/user_id 非法 scope=" + scope);
                 return;
             }
             boolean cleaned = cleanupService.cleanupDirect(scope, userId, courseId, docId,
@@ -78,7 +86,7 @@ public class VectorCompensationListener {
                         scope, userId, courseId, docId);
                 return;
             }
-            boolean parked = parkingPublisher.publish(rawBody, traceId, null);
+            boolean parked = parkingPublisher.publish(rawBody, traceId, null, source, attempt);
             if (!parked) {
                 // 停放失败不能 ACK 丢弃；抛出交由容器重新投递。
                 throw new IllegalStateException("向量补偿重放失败且停放失败");
@@ -87,6 +95,30 @@ public class VectorCompensationListener {
                     scope, userId);
         } finally {
             TraceContext.clear();
+        }
+    }
+
+    /**
+     * 非法消息不得静默 ACK：停放到 parking 并记录原因；停放失败仍抛出重投。
+     */
+    private void parkInvalid(byte[] rawBody, String source, int attempt, String reason) {
+        String traceId = TraceContext.currentTraceId();
+        if (parkingPublisher.publish(rawBody, traceId, null, source, attempt)) {
+            log.error("向量补偿消息非法，已停放到 parking reason={}", reason);
+            return;
+        }
+        throw new IllegalStateException("向量补偿消息非法且停放失败：" + reason);
+    }
+
+    private static int intHeader(Message message, String name) {
+        Object value = message.getMessageProperties().getHeaders().get(name);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return value == null ? 0 : Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 

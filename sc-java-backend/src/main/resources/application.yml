@@ -117,12 +117,17 @@ sc:
       exchange: ${SC_MQ_INGEST_EXCHANGE:rag.ingest.exchange}
       queue: ${SC_MQ_INGEST_QUEUE:rag.ingest.queue}
       dlq: ${SC_MQ_INGEST_DLQ:rag.ingest.dlq}
-      # 死信二次处理仍失败时的持久化停放队列（不绑定消费者）
+      # 死信二次处理仍失败时的持久化停放队列（由 ParkingReplayListener 限速自动重放）
       parking: ${SC_MQ_INGEST_PARKING:rag.ingest.parking}
+      # 自动重放超过上限后的转人工队列（保留原始消息，供人工处理）
+      parking-manual: ${SC_MQ_INGEST_PARKING_MANUAL:rag.ingest.parking.manual}
+      parking-replay-enabled: ${SC_MQ_INGEST_PARKING_REPLAY_ENABLED:true}
+      parking-replay-interval-ms: ${SC_MQ_INGEST_PARKING_REPLAY_INTERVAL_MS:60000}
+      parking-replay-max-attempts: ${SC_MQ_INGEST_PARKING_REPLAY_MAX_ATTEMPTS:3}
       # 向量清理最终失败的持久化补偿队列（由 TASK-902 GC 重放）
       vector-compensation: ${SC_MQ_INGEST_VECTOR_COMPENSATION:rag.ingest.vector-compensation}
       confirm-timeout-ms: ${SC_MQ_INGEST_CONFIRM_TIMEOUT_MS:5000}
-      # 停放/补偿队列积压巡检：当前无自动消费者，仅发现并告警（重放属 TASK-902）。
+      # 停放/补偿队列积压巡检：parking 已有自动重放，超过上限转人工队列仍需告警。
       backlog-monitor:
         initial-delay-ms: 60000
         interval-ms: 300000
@@ -200,6 +205,10 @@ sc:
     orphan-file-minutes: ${SC_DELETION_GC_ORPHAN_FILE_MINUTES:60}
     batch-size: ${SC_DELETION_GC_BATCH_SIZE:200}
     lock-ttl-seconds: ${SC_DELETION_GC_LOCK_TTL_SECONDS:300}
+    # 向量清理 outbox 租约与 ChromaDB 孤儿 Collection 对账（TASK-902 复核）
+    outbox-lease-seconds: ${SC_DELETION_GC_OUTBOX_LEASE_SECONDS:120}
+    chroma-reconcile-enabled: ${SC_DELETION_GC_CHROMA_RECONCILE_ENABLED:true}
+    chroma-reconcile-read-timeout-seconds: ${SC_DELETION_GC_CHROMA_READ_TIMEOUT_SECONDS:30}
   internal:
     # Java <-> Python 内部调用鉴权令牌（02 §13.2：仅注入 sc-java-backend 与 sc-python-ai）。
     # 默认留空表示“未注入”：此时 InternalTokenAuthFilter 对所有 /internal/** 请求一律拒绝（fail-closed），

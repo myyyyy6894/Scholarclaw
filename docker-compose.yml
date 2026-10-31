@@ -256,6 +256,10 @@ services:
       SC_MQ_INGEST_QUEUE: ${SC_MQ_INGEST_QUEUE:-rag.ingest.queue}
       SC_MQ_INGEST_DLQ: ${SC_MQ_INGEST_DLQ:-rag.ingest.dlq}
       SC_MQ_INGEST_PARKING: ${SC_MQ_INGEST_PARKING:-rag.ingest.parking}
+      SC_MQ_INGEST_PARKING_MANUAL: ${SC_MQ_INGEST_PARKING_MANUAL:-rag.ingest.parking.manual}
+      SC_MQ_INGEST_PARKING_REPLAY_ENABLED: ${SC_MQ_INGEST_PARKING_REPLAY_ENABLED:-true}
+      SC_MQ_INGEST_PARKING_REPLAY_INTERVAL_MS: ${SC_MQ_INGEST_PARKING_REPLAY_INTERVAL_MS:-60000}
+      SC_MQ_INGEST_PARKING_REPLAY_MAX_ATTEMPTS: ${SC_MQ_INGEST_PARKING_REPLAY_MAX_ATTEMPTS:-3}
       SC_MQ_INGEST_VECTOR_COMPENSATION: ${SC_MQ_INGEST_VECTOR_COMPENSATION:-rag.ingest.vector-compensation}
       SC_MQ_INGEST_CONFIRM_TIMEOUT_MS: ${SC_MQ_INGEST_CONFIRM_TIMEOUT_MS:-5000}
       SC_ZOMBIE_SCAN_STALE_MINUTES: ${SC_ZOMBIE_SCAN_STALE_MINUTES:-15}
@@ -275,6 +279,9 @@ services:
       SC_DELETION_GC_ORPHAN_FILE_MINUTES: ${SC_DELETION_GC_ORPHAN_FILE_MINUTES:-60}
       SC_DELETION_GC_BATCH_SIZE: ${SC_DELETION_GC_BATCH_SIZE:-200}
       SC_DELETION_GC_LOCK_TTL_SECONDS: ${SC_DELETION_GC_LOCK_TTL_SECONDS:-300}
+      SC_DELETION_GC_OUTBOX_LEASE_SECONDS: ${SC_DELETION_GC_OUTBOX_LEASE_SECONDS:-120}
+      SC_DELETION_GC_CHROMA_RECONCILE_ENABLED: ${SC_DELETION_GC_CHROMA_RECONCILE_ENABLED:-true}
+      SC_DELETION_GC_CHROMA_READ_TIMEOUT_SECONDS: ${SC_DELETION_GC_CHROMA_READ_TIMEOUT_SECONDS:-30}
     volumes:
       # 共享卷读写（Java 负责落盘与物理删除）
       - vol_shared_storage:/data/scholarclaw/storage
@@ -392,6 +399,9 @@ services:
       - "${SC_WEB_HTTP_PORT:-80}:80"
     environment:
       TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      # 运行期覆盖 NapCat WebUI 跳转地址（非密钥）；改完重启本容器即可，无需重建镜像。
+      # 留空则沿用构建期 VITE_NAPCAT_WEBUI_URL / 默认 http://127.0.0.1:6099。
+      SC_NAPCAT_WEBUI_URL: ${SC_NAPCAT_WEBUI_URL:-}
     mem_limit: 128m
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
@@ -406,6 +416,8 @@ services:
   # WebUI：http://127.0.0.1:${SC_NAPCAT_WEBUI_PORT:-6099}（扫码登录 QQ）
   # 说明：社区镜像 tag 无法在无真实 QQ 登录态时验证；生产部署前请 pin 具体版本。
   #       3000/6099 只绑定 127.0.0.1，不暴露到局域网/公网。
+  # SC_NAPCAT_ACCOUNT 非空时，entrypoint 用 `qq -q <QQ号>` 快速登录，复用卷内登录态，
+  # 不必每次扫码；登录态失效时仍会回落到二维码登录。
   # ---------------------------------------------------------------------------
   sc-napcat-onebot:
     image: mlikiowa/napcat-docker:latest
@@ -419,6 +431,11 @@ services:
       - "${SC_NAPCAT_HTTP_BIND:-127.0.0.1}:${SC_NAPCAT_HTTP_PORT:-3000}:3000"
     environment:
       TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      # 快速登录 QQ 号；留空=每次启动走二维码登录（旧行为）。
+      ACCOUNT: ${SC_NAPCAT_ACCOUNT:-}
+      # WebUI 访问令牌；**仅在 webui.json 不存在（首次部署/重建配置卷）时生效**。
+      # 已有部署改用 scripts/napcat/webui.sh set <新令牌>。
+      WEBUI_TOKEN: ${SC_NAPCAT_WEBUI_TOKEN:-}
     volumes:
       - vol_napcat_qq:/app/.config/QQ
       - vol_napcat_config:/app/napcat/config

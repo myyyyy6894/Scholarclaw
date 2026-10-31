@@ -8,10 +8,12 @@ import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.common.security.AccountDeactivationKey;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.mapper.UserConfigMapper;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ScanOptions;
@@ -19,6 +21,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 账号注销（{@code 04} `API-USER-006`、{@code 06} TASK-901）。
@@ -42,15 +46,18 @@ public class UserDeactivationService {
     private final PasswordEncoder passwordEncoder;
     private final StringRedisTemplate redisTemplate;
     private final ApplicationEventPublisher eventPublisher;
+    private final long deactivatedTtlSeconds;
 
     public UserDeactivationService(UserConfigMapper userConfigMapper,
                                    PasswordEncoder passwordEncoder,
                                    StringRedisTemplate redisTemplate,
-                                   ApplicationEventPublisher eventPublisher) {
+                                   ApplicationEventPublisher eventPublisher,
+                                   @Value("${sc.jwt.ttl-seconds:604800}") long jwtTtlSeconds) {
         this.userConfigMapper = userConfigMapper;
         this.passwordEncoder = passwordEncoder;
         this.redisTemplate = redisTemplate;
         this.eventPublisher = eventPublisher;
+        this.deactivatedTtlSeconds = AccountDeactivationKey.ttlFor(jwtTtlSeconds).toSeconds();
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -103,6 +110,8 @@ public class UserDeactivationService {
                 || !STATUS_DEACTIVATING.equals(current.getAccountStatus())) {
             return;
         }
+        // GC 重放也要重新确认阻断键：键可能因 TTL/Redis 清理而缺失，不能假定它还在。
+        blockImmediately(userId);
         eventPublisher.publishEvent(new UserDeactivatingEvent(userId));
         log.info("账号注销 GC 重放 userId={}", userId);
     }
@@ -126,13 +135,47 @@ public class UserDeactivationService {
     }
 
     private void blockImmediately(Long userId) {
+        String key = AccountDeactivationKey.of(userId);
         try {
-            redisTemplate.opsForValue().set(AccountDeactivationKey.of(userId), "1",
-                    AccountDeactivationKey.TTL);
+            redisTemplate.opsForValue().set(key, "1",
+                    Duration.ofSeconds(deactivatedTtlSeconds));
         } catch (RuntimeException e) {
             // 无法立即封禁时不得继续注销，否则旧 JWT 仍可访问已被删除的数据。
             throw new BusinessException(ErrorCode.INTERNAL_ERROR,
                     "无法写入注销阻断键，请稍后重试。");
+        }
+
+        // 关键顺序（P9 复核第 6 项）：阻断键写成功后**立即**注册回滚撤销，
+        // 不能等后续 Redis 命令完成；否则 activeMarker 删除失败会把用户卡在
+        // “ACTIVE 但 JWT 被封禁”的状态。
+        // 先写 Redis 再更新 MySQL：数据库事务回滚时必须撤销阻断键。
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            if (status == TransactionSynchronization.STATUS_COMMITTED) {
+                                return;
+                            }
+                            try {
+                                redisTemplate.delete(key);
+                                log.warn("账号注销事务未提交，已撤销阻断键 userId={} status={}",
+                                        userId, status);
+                            } catch (RuntimeException e) {
+                                log.error("账号注销事务未提交且撤销阻断键失败 userId={} "
+                                                + "error={}", userId,
+                                        e.getClass().getSimpleName());
+                            }
+                        }
+                    });
+        }
+
+        // 活跃负缓存是 auth 模块的优化项，删除失败不能阻断注销；DB 兜底仍会拒绝旧 JWT。
+        try {
+            redisTemplate.delete(AccountDeactivationKey.activeMarker(userId));
+        } catch (RuntimeException e) {
+            log.warn("删除活跃负缓存失败，注销继续（数据库兜底仍生效） userId={} error={}",
+                    userId, e.getClass().getSimpleName());
         }
     }
 

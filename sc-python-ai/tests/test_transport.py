@@ -293,3 +293,128 @@ def test_safe_url_for_log_strips_query_and_fragment() -> None:
 def test_retryable_status_set_matches_document() -> None:
     assert transport.RETRYABLE_UPSTREAM_STATUS == frozenset({429, 502, 503, 504})
     assert len(transport.BACKOFF_SECONDS) == 2, "NFR-REL-01：最多 2 次重试"
+
+
+async def test_pinned_transport_connects_to_validated_ip_and_keeps_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P9 复核第 9 项：连接前解析一次并钉扎 IP，Host/SNI 仍保留原主机名。"""
+    import ipaddress
+
+    from app.services.gateway import ssrf_guard
+
+    async def fake_resolve(host, port, **kwargs):  # noqa: ANN001
+        assert host == "api.example.com"
+        return (ipaddress.ip_address("93.184.216.34"),)
+
+    monkeypatch.setattr(ssrf_guard, "resolve_and_validate_host_async", fake_resolve)
+    captured: dict[str, httpx.Request] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json={"ok": True})
+
+    pinned = transport.PinnedAsyncTransport(allow_local=False, allowed_origins=())
+    await pinned._inner.aclose()
+    pinned._inner = httpx.MockTransport(handler)
+
+    request = httpx.Request("POST", "https://api.example.com/v1/chat",
+                            json={"model": "m"})
+    response = await pinned.handle_async_request(request)
+
+    assert response.status_code == 200
+    sent = captured["request"]
+    assert sent.url.host == "93.184.216.34"
+    assert sent.headers["host"] == "api.example.com"
+    assert sent.extensions["sni_hostname"] == "api.example.com"
+    await pinned.aclose()
+
+
+async def test_pinned_transport_rejects_when_host_validation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.gateway import ssrf_guard
+
+    async def reject(host, port, **kwargs):  # noqa: ANN001
+        raise BaseUrlRejectedError()
+
+    monkeypatch.setattr(ssrf_guard, "resolve_and_validate_host_async", reject)
+    pinned = transport.PinnedAsyncTransport(allow_local=False, allowed_origins=())
+    request = httpx.Request("GET", "https://metadata.google.internal/")
+    with pytest.raises(BaseUrlRejectedError):
+        await pinned.handle_async_request(request)
+    await pinned.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pinned_transport_real_https_uses_original_sni_and_host(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实 HTTPS：连接钉扎到 IP，但证书校验与 SNI 仍使用原主机名。
+
+    使用本地自签名 CA（不是公网供应商），验证 `sni_hostname` 扩展在真实 TLS 握手中生效；
+    若 httpcore 忽略该扩展，证书主机名校验会因 IP 与 SAN 不匹配而失败。
+    """
+    import http.server
+    import ipaddress
+    import ssl
+    import subprocess
+    import threading
+
+    from app.services.gateway import ssrf_guard
+
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(key), "-out", str(cert), "-days", "1",
+         "-subj", "/CN=pinned.test",
+         "-addext", "subjectAltName=DNS:pinned.test"],
+        check=True, capture_output=True)
+
+    sni_names: list[str | None] = []
+    hosts: list[str | None] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            hosts.append(self.headers.get("Host"))
+            body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args) -> None:  # noqa: ANN002
+            return
+
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(str(cert), str(key))
+    server_ctx.set_servername_callback(
+        lambda _sslobj, server_name, _ctx: sni_names.append(server_name))
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.socket = server_ctx.wrap_socket(httpd.socket, server_side=True)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+    async def fake_resolve(host, port, **kwargs):  # noqa: ANN001
+        assert host == "pinned.test"
+        return (ipaddress.ip_address("127.0.0.1"),)
+
+    monkeypatch.setattr(ssrf_guard, "resolve_and_validate_host_async", fake_resolve)
+    client_ctx = ssl.create_default_context(cafile=str(cert))
+    pinned = transport.PinnedAsyncTransport(
+        allow_local=True, allowed_origins=(f"https://pinned.test:{port}",),
+        ssl_context=client_ctx)
+    try:
+        async with httpx.AsyncClient(transport=pinned, trust_env=False,
+                                     follow_redirects=False) as client:
+            response = await client.get(f"https://pinned.test:{port}/probe")
+        assert response.status_code == 200
+        assert sni_names == ["pinned.test"]
+        assert hosts == [f"pinned.test:{port}"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)

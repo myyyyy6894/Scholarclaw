@@ -2,6 +2,7 @@ package com.scholarclaw.modules.knowledge.controller;
 
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import com.scholarclaw.common.enums.DocumentStatus;
 import com.scholarclaw.common.response.Result;
 import com.scholarclaw.common.security.SecurityContextUtils;
 import com.scholarclaw.modules.course.service.CourseService;
@@ -74,10 +75,17 @@ public class KnowledgeDocActionController {
         Long parsed = parseDocId(docId);
         Long userId = SecurityContextUtils.requireCurrentUserId();
         KnowledgeDocEntity deleted = docService.softDelete(userId, parsed);
-        boolean finalized = deletionService.finalizeDocumentDeletion(userId, deleted, null);
-        // 删除可能是 REBUILD_FAILED 课程里最后一份阻塞文档，提交后按真实统计收敛
-        courseService.refreshIndexStatus(userId, deleted.getCourseId(),
-                deleted.getCourseIndexVersion() == null ? 1 : deleted.getCourseIndexVersion());
+        boolean finalized;
+        if (DocumentStatus.DELETED.name().equals(deleted.getStatus())) {
+            // 墓碑幂等：同一用户重复删除已 DELETED 文档，返回 200 与原状态，不再重放清理。
+            finalized = true;
+        } else {
+            finalized = deletionService.finalizeDocumentDeletion(userId, deleted, null);
+            // 删除可能是 REBUILD_FAILED 课程里最后一份阻塞文档，提交后按真实统计收敛
+            courseService.refreshIndexStatus(userId, deleted.getCourseId(),
+                    deleted.getCourseIndexVersion() == null ? 1
+                            : deleted.getCourseIndexVersion());
+        }
         KnowledgeDocEntity current = docService.requireOwnedDoc(userId, parsed);
         String message = finalized
                 ? "文档已删除：向量、物理文件与元数据清理完成"

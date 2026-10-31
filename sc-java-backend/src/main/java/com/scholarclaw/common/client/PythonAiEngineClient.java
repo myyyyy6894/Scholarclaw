@@ -50,6 +50,8 @@ public class PythonAiEngineClient {
     public static final String PROBE_PATH = "/internal/ai/v1/model/probe";
     /** Python 侧内部向量清理路径（`04` §4.9.4）。 */
     public static final String VECTORS_PATH = "/internal/ai/v1/rag/vectors";
+    /** Python 侧内部 ChromaDB Collection 列表（TASK-902 孤儿对账，只读）。 */
+    public static final String VECTOR_COLLECTIONS_PATH = "/internal/ai/v1/rag/collections";
     /** Python 侧内部 RAG 流式问答路径（`04` §4.9.3，TASK-604）。 */
     public static final String RAG_QA_STREAM_PATH = "/internal/ai/v1/rag/qa-stream";
     /** Python 侧内部意图路由与 DDL 提取路径（`04` §4.9.2，TASK-701/704）。 */
@@ -112,6 +114,11 @@ public class PythonAiEngineClient {
     /** 发起内部 JSON DELETE（向量清理等幂等操作）。 */
     public JsonNode deleteJson(String path, Object body, Long userId, Duration readTimeout) {
         return sendJson("DELETE", path, body, userId, readTimeout);
+    }
+
+    /** 发起内部 JSON GET（无请求体；ChromaDB Collection 对账使用）。 */
+    public JsonNode getJson(String path, Long userId, Duration readTimeout) {
+        return sendJson("GET", path, null, userId, readTimeout, false);
     }
 
     /**
@@ -200,6 +207,11 @@ public class PythonAiEngineClient {
 
     private JsonNode sendJson(String method, String path, Object body, Long userId,
                               Duration readTimeout) {
+        return sendJson(method, path, body, userId, readTimeout, true);
+    }
+
+    private JsonNode sendJson(String method, String path, Object body, Long userId,
+                              Duration readTimeout, boolean withBody) {
         if (baseUrl.isBlank()) {
             log.error("sc-python-ai 内部基址未配置，无法发起内部调用 path={}", path);
             throw new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR, "AI 引擎地址未配置，请联系管理员。");
@@ -222,7 +234,9 @@ public class PythonAiEngineClient {
             builder.header(TraceContext.USER_ID_HEADER, String.valueOf(userId));
         }
         HttpRequest request = builder
-                .method(method, HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                .method(method, withBody
+                        ? HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)
+                        : HttpRequest.BodyPublishers.noBody())
                 .build();
 
         HttpResponse<String> response;

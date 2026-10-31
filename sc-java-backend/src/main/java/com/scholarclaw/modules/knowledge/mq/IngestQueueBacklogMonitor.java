@@ -10,11 +10,12 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 停放/补偿队列积压巡检（P6 复核补强）。
+ * 停放/补偿队列积压巡检（P6 复核补强、P9 复核更新）。
  *
- * <p>`rag.ingest.vector-compensation` 由 TASK-902 的 {@link VectorCompensationListener}
- * 自动重放；重放仍失败的消息会转入 `rag.ingest.parking`，parking **没有自动消费者**。
- * 两个队列出现积压都说明存在未自动恢复的故障，本巡检只负责发现并告警。
+ * <p>`rag.ingest.vector-compensation` 由 {@link VectorCompensationListener} 消费；
+ * 重放仍失败的消息转入 `rag.ingest.parking`，由 {@link ParkingReplayListener} 限速自动重放。
+ * 超过自动重放上限的消息转入 `rag.ingest.parking.manual`，**该队列没有自动消费者**，
+ * 出现积压即表示需要人工介入。本巡检只告警，不修改消息。
  */
 @Component
 @ConditionalOnProperty(name = "sc.mq.ingest.enabled", havingValue = "true",
@@ -25,17 +26,21 @@ public class IngestQueueBacklogMonitor {
 
     private final RabbitAdmin rabbitAdmin;
     private final String parkingQueue;
+    private final String manualQueue;
     private final String compensationQueue;
     private final int warnThreshold;
 
     public IngestQueueBacklogMonitor(
             RabbitAdmin rabbitAdmin,
             @Value("${sc.mq.ingest.parking:rag.ingest.parking}") String parkingQueue,
+            @Value("${sc.mq.ingest.parking-manual:rag.ingest.parking.manual}")
+            String manualQueue,
             @Value("${sc.mq.ingest.vector-compensation:rag.ingest.vector-compensation}")
             String compensationQueue,
             @Value("${sc.mq.ingest.backlog-monitor.warn-threshold:1}") int warnThreshold) {
         this.rabbitAdmin = rabbitAdmin;
         this.parkingQueue = parkingQueue;
+        this.manualQueue = manualQueue;
         this.compensationQueue = compensationQueue;
         this.warnThreshold = warnThreshold;
     }
@@ -44,7 +49,8 @@ public class IngestQueueBacklogMonitor {
             initialDelayString = "${sc.mq.ingest.backlog-monitor.initial-delay-ms:60000}",
             fixedDelayString = "${sc.mq.ingest.backlog-monitor.interval-ms:300000}")
     public void reportBacklog() {
-        checkQueue(parkingQueue, "死信停放");
+        checkQueue(parkingQueue, "死信停放（自动重放中）");
+        checkQueue(manualQueue, "人工介入（自动重放已达上限）");
         checkQueue(compensationQueue, "向量补偿（消费者重放失败停放）");
     }
 
@@ -57,8 +63,8 @@ public class IngestQueueBacklogMonitor {
             }
             int count = info.getMessageCount();
             if (count >= warnThreshold) {
-                log.warn("MQ 积压待人工处理 queue={} label={} messages={} "
-                                + "（当前无自动消费者，由 TASK-902 重放；陈旧向量可能占用 Top-K 降低召回）",
+                log.warn("MQ 积压待处理 queue={} label={} messages={}"
+                                + "（parking 会自动重放；manual/补偿积压需人工介入）",
                         queue, label, count);
             }
             return count;

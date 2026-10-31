@@ -3,7 +3,9 @@
 
 提供：
 * `POST .../chat/completions`：非流式返回最小 choices；`stream=true` 时返回 SSE 增量；
-* `POST .../embeddings`：返回 8 维向量（用于维度回填与检索链路）。
+* `POST .../embeddings`：返回 8 维向量（用于维度回填与检索链路）；
+* `POST /redirect/<301|302|303|307|308>/...`：返回对应重定向到 `/redirect-target`；
+  `/redirect-target` 会记录 Authorization，`GET /__redirect_calls` 返回记录（SSRF 回归用）。
 
 RAG E2E 约定（只在测试中使用）：
 * 从 Prompt 中提取首个 `文件名：... 页码：start-end`，默认输出该页面的合法引用；
@@ -31,6 +33,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DIM = 8
 _CONTEXT = re.compile(r"文件名：(.+?)\s+页码：(\d+)-(\d+)")
+#: 重定向目标被真实访问时记录请求头；E2E 用它断言“未跟随、未携带 Authorization”。
+REDIRECT_CALLS: list[dict[str, str | None]] = []
 
 
 def _chat_answer(payload: dict) -> str:
@@ -77,9 +81,38 @@ class Handler(BaseHTTPRequestHandler):
     timeout = 10
     protocol_version = "HTTP/1.1"
 
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 接口
+        path = self.path.split("?", 1)[0]
+        if path == "/__redirect_calls":
+            body = json.dumps({"calls": REDIRECT_CALLS}, ensure_ascii=False).encode()
+            self._json(body)
+            return
+        if path == "/__redirect_reset":
+            REDIRECT_CALLS.clear()
+            self._json(b'{"ok":true}')
+            return
+        self.send_error(404)
+
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 接口
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length)
+        path = self.path.split("?", 1)[0]
+        if "/redirect-target" in path:
+            REDIRECT_CALLS.append({
+                "path": self.path,
+                "authorization": self.headers.get("Authorization"),
+            })
+            self._json(b'{"ok":true}')
+            return
+        redirect = re.search(r"/redirect/(301|302|303|307|308)/", path)
+        if redirect:
+            # 301/302/303/307/308 一律返回 Location；访问目标会被记录，
+            # 用于验证 Java/Python 没有跟随重定向、也没有把 Authorization 带到目标。
+            self.send_response(int(redirect.group(1)))
+            self.send_header("Location", "/redirect-target")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         try:
             payload = json.loads(raw or b"{}")
         except json.JSONDecodeError:

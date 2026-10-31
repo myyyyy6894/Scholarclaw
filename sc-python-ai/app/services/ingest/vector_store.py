@@ -140,6 +140,13 @@ class ChromaVectorStore:
     def collection_name(self, user_id: str, course_id: str, version: int) -> str:
         return f"sc_u{user_id}_c{course_id}_v{version}"
 
+    def list_collection_names(self) -> list[str]:
+        """列出本应用管理的全部 Collection 名称（只读，供 Java 侧孤儿对账）。
+
+        只返回 `sc_u` 前缀，避免误把同机 Chroma 中其他应用的集合纳入清理范围。
+        """
+        return sorted(self._list_names("sc_u"))
+
     def _read_collection(self, name: str):
         """只读打开 Collection；不存在返回 None，不隐式创建空集合。"""
         try:

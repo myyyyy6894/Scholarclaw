@@ -33,15 +33,18 @@ public class CourseMutationService {
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectProvider<CourseDocumentStatsProvider> statsProvider;
     private final UserConfigService userConfigService;
+    private final CourseDeletionReceiptService receiptService;
 
     public CourseMutationService(CourseNamespaceMapper courseNamespaceMapper,
                                  ApplicationEventPublisher eventPublisher,
                                  ObjectProvider<CourseDocumentStatsProvider> statsProvider,
-                                 UserConfigService userConfigService) {
+                                 UserConfigService userConfigService,
+                                 CourseDeletionReceiptService receiptService) {
         this.courseNamespaceMapper = courseNamespaceMapper;
         this.eventPublisher = eventPublisher;
         this.statsProvider = statsProvider;
         this.userConfigService = userConfigService;
+        this.receiptService = receiptService;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -214,12 +217,17 @@ public class CourseMutationService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void softDelete(Long userId, Long courseId) {
-        // 先锁定课程行，与 DDL 建单/编辑/确认使用的 getActiveCourseForUpdate 串行化：
-        // 删除先拿到锁时，DDL 写请求会等待并在锁释放后读到 is_deleting=1 而解绑；
-        // DDL 先拿到锁时，删除会等待其提交，随后监听器能看到新任务并解绑。避免 PO-05 并发窗口。
-        if (courseNamespaceMapper.selectActiveCourseForUpdate(userId, courseId) == null) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+    public SoftDeleteOutcome softDelete(Long userId, Long courseId) {
+        // 先锁定课程行（不过滤 is_deleting），与 DDL 建单/编辑/确认使用的
+        // getActiveCourseForUpdate 串行化。并发重复删除时，后到请求看到 is_deleting=1
+        // 即返回 ALREADY_DELETING，而不是 404。
+        CourseNamespaceEntity existing = courseNamespaceMapper.selectCourseForUpdate(userId,
+                courseId);
+        if (existing == null) {
+            return SoftDeleteOutcome.NOT_FOUND;
+        }
+        if (existing.getIsDeleting() != null && existing.getIsDeleting() == 1) {
+            return SoftDeleteOutcome.ALREADY_DELETING;
         }
         int affected = courseNamespaceMapper.update(null, Wrappers.<CourseNamespaceEntity>lambdaUpdate()
                 .eq(CourseNamespaceEntity::getCourseId, courseId)
@@ -228,18 +236,35 @@ public class CourseMutationService {
                 .set(CourseNamespaceEntity::getIsDeleting, 1)
                 .set(CourseNamespaceEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
         if (affected != 1) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+            return SoftDeleteOutcome.ALREADY_DELETING;
         }
+        // 回执与软删同事务：课程行稍后被物理删除，回执保证重复删除仍可返回原结果。
+        receiptService.recordDeleting(userId, courseId);
         eventPublisher.publishEvent(new CourseDeletingEvent(userId, courseId));
+        return SoftDeleteOutcome.DELETED;
+    }
+
+    /** 软删结果：区分“本次删除”“已处于删除中”“不存在”，供删除接口幂等返回。 */
+    public enum SoftDeleteOutcome {
+        DELETED, ALREADY_DELETING, NOT_FOUND
     }
 
     /** GC 兜底：物理删除已软删课程行；条件限定 `is_deleting=1`，重复执行幂等。 */
     @Transactional(rollbackFor = Exception.class)
     public int purgeSoftDeleted(Long userId, Long courseId) {
-        return courseNamespaceMapper.delete(Wrappers.<CourseNamespaceEntity>lambdaQuery()
+        int deleted = courseNamespaceMapper.delete(Wrappers.<CourseNamespaceEntity>lambdaQuery()
                 .eq(CourseNamespaceEntity::getCourseId, courseId)
                 .eq(CourseNamespaceEntity::getUserId, userId)
                 .eq(CourseNamespaceEntity::getIsDeleting, 1));
+        if (deleted > 0) {
+            receiptService.markDeleted(userId, courseId);
+        }
+        return deleted;
+    }
+
+    /** 删除接口幂等判定：该用户是否已删除过该课程（课程行可能已物理删除）。 */
+    public boolean hasDeletionReceipt(Long userId, Long courseId) {
+        return receiptService.exists(userId, courseId);
     }
 
     /** 切换结果：更新后的课程行 + 事务内统计到的待重建文档数。 */

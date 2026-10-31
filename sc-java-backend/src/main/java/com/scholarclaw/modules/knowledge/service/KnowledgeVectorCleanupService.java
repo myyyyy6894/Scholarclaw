@@ -3,6 +3,7 @@ package com.scholarclaw.modules.knowledge.service;
 import com.scholarclaw.common.client.PythonAiEngineClient;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import com.scholarclaw.common.filter.TraceContext;
 import com.scholarclaw.modules.knowledge.mq.VectorCompensationPublisher;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -27,15 +28,18 @@ public class KnowledgeVectorCleanupService {
 
     private final PythonAiEngineClient pythonClient;
     private final VectorCompensationPublisher compensationPublisher;
+    private final VectorCleanupOutboxService outboxService;
 
     public KnowledgeVectorCleanupService(PythonAiEngineClient pythonClient,
-                                         VectorCompensationPublisher compensationPublisher) {
+                                         VectorCompensationPublisher compensationPublisher,
+                                         VectorCleanupOutboxService outboxService) {
         this.pythonClient = pythonClient;
         this.compensationPublisher = compensationPublisher;
+        this.outboxService = outboxService;
     }
 
-    public boolean cleanupDocument(Long userId, Long courseId, Long docId,
-                                   Integer staleParseVersion) {
+    public VectorCleanupResult cleanupDocument(Long userId, Long courseId, Long docId,
+                                               Integer staleParseVersion) {
         Map<String, Object> body = base("DOCUMENT", userId);
         body.put("course_id", String.valueOf(courseId));
         body.put("doc_id", String.valueOf(docId));
@@ -45,7 +49,8 @@ public class KnowledgeVectorCleanupService {
         return cleanup(body, userId);
     }
 
-    public boolean cleanupCourse(Long userId, Long courseId, Integer courseIndexVersion) {
+    public VectorCleanupResult cleanupCourse(Long userId, Long courseId,
+                                              Integer courseIndexVersion) {
         Map<String, Object> body = base("COURSE_COLLECTION", userId);
         body.put("course_id", String.valueOf(courseId));
         if (courseIndexVersion != null) {
@@ -54,34 +59,36 @@ public class KnowledgeVectorCleanupService {
         return cleanup(body, userId);
     }
 
-    public boolean cleanupUser(Long userId) {
+    public VectorCleanupResult cleanupUser(Long userId) {
         return cleanup(base("USER_ALL", userId), userId);
     }
 
     /** Python 要求 `X-User-Id` 与请求体 `user_id` 一致，缺失会被判 400；必须透传真实身份。 */
-    private boolean cleanup(Map<String, Object> body, Long userId) {
+    private VectorCleanupResult cleanup(Map<String, Object> body, Long userId) {
         for (int attempt = 1; attempt <= ATTEMPTS; attempt++) {
             try {
                 pythonClient.deleteJson(PythonAiEngineClient.VECTORS_PATH, body, userId,
                         CLEANUP_TIMEOUT);
-                return true;
+                return VectorCleanupResult.succeeded();
             } catch (BusinessException e) {
                 if (!isTransient(e.getErrorCode()) || attempt == ATTEMPTS) {
-                    reportFailure(body, userId, e.getErrorCode().code(), attempt);
-                    return false;
+                    boolean persisted = reportFailure(body, userId, e.getErrorCode().code(),
+                            attempt);
+                    return VectorCleanupResult.failed(persisted);
                 }
                 log.warn("向量清理瞬态失败，重试一次 scope={} code={}",
                         body.get("scope"), e.getErrorCode().code());
             } catch (RuntimeException e) {
                 if (attempt == ATTEMPTS) {
-                    reportFailure(body, userId, e.getClass().getSimpleName(), attempt);
-                    return false;
+                    boolean persisted = reportFailure(body, userId,
+                            e.getClass().getSimpleName(), attempt);
+                    return VectorCleanupResult.failed(persisted);
                 }
                 log.warn("向量清理异常，重试一次 scope={} error={}",
                         body.get("scope"), e.getClass().getSimpleName());
             }
         }
-        return false;
+        return VectorCleanupResult.failed(false);
     }
 
     /**
@@ -123,24 +130,67 @@ public class KnowledgeVectorCleanupService {
                 || code == ErrorCode.INTERNAL_ERROR;
     }
 
-    private void reportFailure(Map<String, Object> body, Long userId, String reason, int attempts) {
+    /**
+     * 最终失败：先写 MySQL outbox（终态门禁的权威凭据），再尽力发布 MQ 补偿消息。
+     *
+     * @return outbox 是否成功持久化；只有它为 true 时调用方才允许把业务行置为终态
+     */
+    private boolean reportFailure(Map<String, Object> body, Long userId, String reason,
+                                  int attempts) {
         Object scope = body.get("scope");
-        boolean registered = false;
+        Long courseId = asLong(body.get("course_id"));
+        Long docId = asLong(body.get("doc_id"));
+        Integer courseIndexVersion = asInteger(body.get("course_index_version"));
+        Integer staleParseVersion = asInteger(body.get("stale_parse_version"));
+        boolean persisted;
         try {
-            registered = compensationPublisher.publish(String.valueOf(scope), userId,
-                    asLong(body.get("course_id")), asLong(body.get("doc_id")),
-                    asInteger(body.get("course_index_version")),
-                    asInteger(body.get("stale_parse_version")));
+            persisted = outboxService.enqueue(String.valueOf(scope), userId, courseId, docId,
+                    courseIndexVersion, staleParseVersion, TraceContext.currentTraceId());
         } catch (RuntimeException e) {
-            log.error("向量清理补偿登记异常 scope={} error={}", scope,
+            log.error("向量清理补偿 outbox 登记异常 scope={} error={}", scope,
+                    e.getClass().getSimpleName());
+            persisted = false;
+        }
+        // MQ 只用于加速重试；即使发布失败，outbox 仍会在下一轮 GC 被重放。
+        boolean published = false;
+        try {
+            published = compensationPublisher.publish(String.valueOf(scope), userId,
+                    courseId, docId, courseIndexVersion, staleParseVersion);
+        } catch (RuntimeException e) {
+            log.error("向量清理 MQ 补偿登记异常 scope={} error={}", scope,
                     e.getClass().getSimpleName());
         }
-        if (registered) {
-            log.error("向量清理最终失败，补偿已登记 scope={} userId={} reason={} attempts={}",
-                    scope, userId, reason, attempts);
+        if (persisted) {
+            log.error("向量清理最终失败，已写入持久化 outbox scope={} userId={} reason={} "
+                            + "attempts={} mqPublished={}", scope, userId, reason, attempts,
+                    published);
         } else {
-            log.error("向量清理最终失败且补偿登记失败，需人工介入 scope={} userId={} "
-                            + "reason={} attempts={}", scope, userId, reason, attempts);
+            log.error("向量清理最终失败且 outbox 登记失败，业务行将保持删除中并等待重试 "
+                            + "scope={} userId={} reason={} attempts={}", scope, userId, reason,
+                    attempts);
+        }
+        return persisted;
+    }
+
+    /**
+     * 向量清理结果。
+     *
+     * @param confirmed             Python/Chroma 已确认清理
+     * @param compensationPersisted outbox 已持久化（后续由 GC 重放）
+     */
+    public record VectorCleanupResult(boolean confirmed, boolean compensationPersisted) {
+
+        public static VectorCleanupResult succeeded() {
+            return new VectorCleanupResult(true, false);
+        }
+
+        public static VectorCleanupResult failed(boolean compensationPersisted) {
+            return new VectorCleanupResult(false, compensationPersisted);
+        }
+
+        /** 清理是否已“有交代”：确认完成或补偿已落库。 */
+        public boolean handled() {
+            return confirmed || compensationPersisted;
         }
     }
 

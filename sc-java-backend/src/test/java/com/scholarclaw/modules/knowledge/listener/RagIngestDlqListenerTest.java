@@ -3,6 +3,7 @@ package com.scholarclaw.modules.knowledge.listener;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -93,13 +94,13 @@ class RagIngestDlqListenerTest {
     @DisplayName("数据库瞬态异常：不丢消息，停放至 parking 队列并保留 trace")
     void parksMessageOnTransientFailure() {
         when(docMapper.selectOne(any())).thenThrow(new RuntimeException("db down"));
-        when(parkingPublisher.publish(any(), any(), any())).thenReturn(true);
+        when(parkingPublisher.publish(any(), any(), any(), any(), anyInt())).thenReturn(true);
         when(parkingPublisher.parkingQueue()).thenReturn("rag.ingest.parking");
 
         listener.onDeadLetter(message());
 
         verify(parkingPublisher).publish(any(), org.mockito.ArgumentMatchers.eq(
-                "tr_cron_0123456789ab"), any());
+                "tr_cron_0123456789ab"), any(), any(), anyInt());
         assertThat(com.scholarclaw.common.filter.TraceContext.currentTraceId()).isNull();
         assertThat(com.scholarclaw.common.filter.TraceContext.currentUserId()).isNull();
     }
@@ -108,7 +109,7 @@ class RagIngestDlqListenerTest {
     @DisplayName("parking 也失败时必须抛出，交给容器重投而不是静默 ACK")
     void rethrowsWhenParkingFails() {
         when(docMapper.selectOne(any())).thenThrow(new RuntimeException("db down"));
-        when(parkingPublisher.publish(any(), any(), any())).thenReturn(false);
+        when(parkingPublisher.publish(any(), any(), any(), any(), anyInt())).thenReturn(false);
 
         assertThatThrownBy(() -> listener.onDeadLetter(message()))
                 .isInstanceOf(RuntimeException.class);

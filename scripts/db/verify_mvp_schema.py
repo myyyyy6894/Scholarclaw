@@ -3,7 +3,7 @@
 
 比对三个维度，全部取自文档而非迁移脚本本身（拿脚本跟脚本比是自证循环）：
 
-1. **表集合**：文档 §1.4 的 7 张 MVP 表必须全部存在；§4.8/§1.4 的 2 张 `v1.1` 扩展表必须**不存在**。
+1. **表集合**：文档 §1.4 的 7 张业务核心表 + 2 张删除恢复辅助表必须全部存在；§4.8/§1.4 的 2 张 `v1.1` 扩展表必须**不存在**。
 2. **字段**：§4.1~§4.7 数据字典的「字段名 / 数据类型 / 是否可空 / 默认值」逐列比对
    （含 `AUTO_INCREMENT` 与 `GENERATED ... STORED` 的识别）。
 3. **索引与约束**：§5.1 索引总表的「名称 / 唯一性 / 列顺序」+ §4.x/§4.9 中出现的 `chk_*` 约束名。
@@ -32,6 +32,8 @@ MIGRATION_TABLE = "sc_schema_migration"
 MVP_TABLES = [
     "t_user_config", "t_course_namespace", "t_knowledge_doc", "t_knowledge_parent_chunk",
     "t_ddl_task", "t_chat_message", "t_notification_log",
+    # V1.0.5：删除恢复辅助表（P9 复核）
+    "t_vector_cleanup_outbox", "t_course_deletion_receipt",
 ]
 V11_TABLES = ["t_ddl_subtask", "t_exam_wrong_book"]
 
@@ -257,8 +259,8 @@ def main() -> int:
             print("   -", item)
         return 1
     print(f"✅ 结构核对通过：{checks} 项全部一致"
-          f"（7 张 MVP 表、字段类型/可空/默认值/生成列、索引列顺序、CHECK 约束；"
-          f"v1.1 扩展表未创建）")
+          f"（7 张业务核心表 + 2 张删除恢复辅助表；字段类型/可空/默认值/生成列、"
+          f"索引列顺序、CHECK 约束；v1.1 扩展表未创建）")
     return 0
 
 

@@ -346,11 +346,11 @@ public class KnowledgeDocService {
     @Transactional(rollbackFor = Exception.class)
     public KnowledgeDocEntity softDelete(Long userId, Long docId) {
         KnowledgeDocEntity doc = requireOwnedDoc(userId, docId);
-        if (DocumentStatus.DELETING.name().equals(doc.getStatus())) {
+        if (DocumentStatus.DELETING.name().equals(doc.getStatus())
+                || DocumentStatus.DELETED.name().equals(doc.getStatus())) {
+            // P9 复核：DELETED 行是墓碑，重复删除返回原状态而不是 404；
+            // 只有从未拥有或不属于当前用户才由 requireOwnedDoc 返回 404。
             return doc;
-        }
-        if (DocumentStatus.DELETED.name().equals(doc.getStatus())) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         DocumentStateMachine.requireTransition(doc.getStatus(), DocumentStatus.DELETING);
         int affected = docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
@@ -361,6 +361,12 @@ public class KnowledgeDocService {
                 .setSql("parse_version = parse_version + 1, " + CLEAR_INDEX_SNAPSHOT_SQL)
                 .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
         if (affected != 1) {
+            // 并发删除/清理竞态：另一请求可能已把状态推进到 DELETING/DELETED。
+            KnowledgeDocEntity current = requireOwnedDoc(userId, docId);
+            if (DocumentStatus.DELETED.name().equals(current.getStatus())
+                    || DocumentStatus.DELETING.name().equals(current.getStatus())) {
+                return current;
+            }
             throw new BusinessException(ErrorCode.STATE_CONFLICT);
         }
         parentChunkMapper.deleteByDoc(userId, docId);

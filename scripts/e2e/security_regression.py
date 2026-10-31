@@ -260,6 +260,29 @@ def main() -> int:
                                      "model_name": "m"})
         check(f"SSRF {label} 被拒绝", status == 400, (status, text))
 
+    # ---------- 重定向 SSRF（P9 复核第 9 项） ----------
+    # 模型网关必须拒绝 301/302/303/307/308，不能跟随到内网；目标端点记录 Authorization，
+    # 只要目标从未被访问，就同时证明“未跟随 + 未把凭据带到重定向目标”。
+    from urllib.parse import urlsplit
+    parts = urlsplit(MODEL_BASE)
+    mock_origin = f"{parts.scheme}://{parts.netloc}"
+    for code in (301, 302, 303, 307, 308):
+        httpx.post(f"{mock_origin}/__redirect_reset", timeout=10.0, trust_env=False)
+        status, body, text = api(client, "POST", "/api/v1/user/model-config/probe",
+                                 token_a, json={
+                                     "probe_type": "CHAT",
+                                     "provider": "OPENAI_COMPATIBLE",
+                                     "base_url": f"{mock_origin}/redirect/{code}",
+                                     "api_key": "sk-redirect-secret",
+                                     "use_saved_key": False,
+                                     "model_name": "m"})
+        check(f"重定向 {code} 被拒绝（不跟随）",
+              status == 400 and (body.get("code") in ("E-SYS-02", "UPSTREAM_MODEL_ERROR")),
+              (status, text))
+        calls = httpx.get(f"{mock_origin}/__redirect_calls", timeout=10.0,
+                          trust_env=False).json().get("calls", [])
+        check(f"重定向 {code} 目标未被访问且未携带 Authorization", calls == [], calls)
+
     # ---------- 上传安全 ----------
     # 使用唯一内容，避免命中同课程 SHA-256 查重（那是正确行为，不是上传安全问题）
     traversal_content = PDF_BYTES + b"%" + uuid.uuid4().hex.encode() + b"\n"

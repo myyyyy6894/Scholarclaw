@@ -14,6 +14,7 @@ import com.scholarclaw.common.client.PythonAiEngineClient;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.knowledge.mq.VectorCompensationPublisher;
+import com.scholarclaw.modules.knowledge.service.KnowledgeVectorCleanupService.VectorCleanupResult;
 import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,22 +26,28 @@ class KnowledgeVectorCleanupServiceTest {
 
     private PythonAiEngineClient client;
     private VectorCompensationPublisher compensation;
+    private VectorCleanupOutboxService outbox;
     private KnowledgeVectorCleanupService service;
 
     @BeforeEach
     void setUp() {
         client = mock(PythonAiEngineClient.class);
         compensation = mock(VectorCompensationPublisher.class);
-        service = new KnowledgeVectorCleanupService(client, compensation);
+        outbox = mock(VectorCleanupOutboxService.class);
+        when(outbox.enqueue(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
+        service = new KnowledgeVectorCleanupService(client, compensation, outbox);
     }
 
     @Test
     @DisplayName("DOCUMENT 清理发送 scope/user/course/doc/stale_version")
+    @SuppressWarnings("unchecked")
     void sendsDocumentCleanup() {
         when(client.deleteJson(any(), any(), any(), any())).thenReturn(new ObjectMapper().nullNode());
 
-        assertThat(service.cleanupDocument(10001L, 2001L, 50001L, 3)).isTrue();
+        VectorCleanupResult result = service.cleanupDocument(10001L, 2001L, 50001L, 3);
 
+        assertThat(result.confirmed()).isTrue();
+        assertThat(result.handled()).isTrue();
         ArgumentCaptor<Object> body = ArgumentCaptor.forClass(Object.class);
         verify(client).deleteJson(eq(PythonAiEngineClient.VECTORS_PATH), body.capture(),
                 eq(10001L), any(Duration.class));
@@ -51,6 +58,7 @@ class KnowledgeVectorCleanupServiceTest {
                 .containsEntry("doc_id", "50001")
                 .containsEntry("stale_parse_version", 3);
         verify(compensation, never()).publish(any(), any(), any(), any(), any(), any());
+        verify(outbox, never()).enqueue(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -60,22 +68,27 @@ class KnowledgeVectorCleanupServiceTest {
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR))
                 .thenReturn(new ObjectMapper().nullNode());
 
-        assertThat(service.cleanupCourse(10001L, 2001L, 1)).isTrue();
+        assertThat(service.cleanupCourse(10001L, 2001L, 1).confirmed()).isTrue();
 
         verify(client, times(2)).deleteJson(any(), any(), any(), any());
         verify(compensation, never()).publish(any(), any(), any(), any(), any(), any());
+        verify(outbox, never()).enqueue(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
-    @DisplayName("连续瞬态失败：返回 false 并登记持久补偿")
+    @DisplayName("连续瞬态失败：写入 MySQL outbox 并尽力发布 MQ 补偿")
     void recordsCompensationAfterContinuousFailure() {
         when(client.deleteJson(any(), any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_TIMEOUT));
         when(compensation.publish(any(), any(), any(), any(), any(), any())).thenReturn(true);
 
-        assertThat(service.cleanupCourse(10001L, 2001L, 1)).isFalse();
+        VectorCleanupResult result = service.cleanupCourse(10001L, 2001L, 1);
 
+        assertThat(result.confirmed()).isFalse();
+        assertThat(result.compensationPersisted()).isTrue();
+        assertThat(result.handled()).isTrue();
         verify(client, times(2)).deleteJson(any(), any(), any(), any());
+        verify(outbox).enqueue("COURSE_COLLECTION", 10001L, 2001L, null, 1, null, null);
         verify(compensation).publish("COURSE_COLLECTION", 10001L, 2001L, null, 1, null);
     }
 
@@ -86,15 +99,15 @@ class KnowledgeVectorCleanupServiceTest {
                 .thenThrow(new BusinessException(ErrorCode.INTERNAL_ERROR))
                 .thenReturn(new ObjectMapper().nullNode());
 
-        assertThat(service.cleanupDocument(10001L, 2001L, 50001L, 1)).isTrue();
+        assertThat(service.cleanupDocument(10001L, 2001L, 50001L, 1).confirmed()).isTrue();
 
         verify(client, times(2)).deleteJson(any(), any(), any(), any());
         verify(compensation, never()).publish(any(), any(), any(), any(), any(), any());
     }
 
     @Test
-    @DisplayName("补偿发布返回 false 时日志必须报告登记失败")
-    void doesNotClaimCompensationWhenPublishFails() {
+    @DisplayName("MQ 发布失败但 outbox 已落库：仍视为有交代，日志明确 mqPublished=false")
+    void outboxAloneCountsAsHandledWhenMqFails() {
         when(client.deleteJson(any(), any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR));
         when(compensation.publish(any(), any(), any(), any(), any(), any())).thenReturn(false);
@@ -104,15 +117,33 @@ class KnowledgeVectorCleanupServiceTest {
                 new ch.qos.logback.core.read.ListAppender<>();
         appender.start();
         logger.addAppender(appender);
+        VectorCleanupResult result;
         try {
-            assertThat(service.cleanupCourse(10001L, 2001L, 1)).isFalse();
+            result = service.cleanupCourse(10001L, 2001L, 1);
         } finally {
             logger.detachAppender(appender);
         }
+        assertThat(result.handled()).isTrue();
         String logs = appender.list.stream()
                 .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
                 .reduce("", (left, right) -> left + "\n" + right);
-        assertThat(logs).contains("补偿登记失败").doesNotContain("补偿已登记");
+        assertThat(logs).contains("已写入持久化 outbox").contains("mqPublished=false")
+                .doesNotContain("outbox 登记失败");
+    }
+
+    @Test
+    @DisplayName("outbox 登记失败：业务行不得进入终态（handled=false）")
+    void outboxFailureBlocksTerminalState() {
+        when(client.deleteJson(any(), any(), any(), any()))
+                .thenThrow(new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR));
+        when(outbox.enqueue(any(), any(), any(), any(), any(), any(), any())).thenReturn(false);
+        when(compensation.publish(any(), any(), any(), any(), any(), any())).thenReturn(true);
+
+        VectorCleanupResult result = service.cleanupCourse(10001L, 2001L, 1);
+
+        assertThat(result.confirmed()).isFalse();
+        assertThat(result.compensationPersisted()).isFalse();
+        assertThat(result.handled()).isFalse();
     }
 
     @Test
@@ -121,9 +152,11 @@ class KnowledgeVectorCleanupServiceTest {
         when(client.deleteJson(any(), any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.VALIDATION_ERROR));
 
-        assertThat(service.cleanupDocument(10001L, 2001L, 50001L, null)).isFalse();
+        VectorCleanupResult result = service.cleanupDocument(10001L, 2001L, 50001L, null);
 
+        assertThat(result.handled()).isTrue();
         verify(client, times(1)).deleteJson(any(), any(), any(), any());
+        verify(outbox).enqueue("DOCUMENT", 10001L, 2001L, 50001L, null, null, null);
         verify(compensation).publish("DOCUMENT", 10001L, 2001L, 50001L, null, null);
     }
 }

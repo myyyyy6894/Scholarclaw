@@ -17,6 +17,9 @@ FROM scholarclaw/sc-python-ai:1.0.0
 ARG PIP_INDEX_URL=https://pypi.org/simple
 
 USER root
+# 真实 HTTPS/SNI 集成测试需要 openssl 生成自签名证书
+RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements-dev.lock.txt /tmp/requirements-dev.lock.txt
 RUN pip install --index-url "${PIP_INDEX_URL}" -r /tmp/requirements-dev.lock.txt
 

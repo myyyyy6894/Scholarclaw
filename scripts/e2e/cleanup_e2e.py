@@ -2,8 +2,8 @@
 """TASK-901 级联清理端到端验证（真实栈）。
 
 覆盖：
-1. 单文档删除：向量清理 -> 物理文件删除 -> 文档 `DELETED`；
-2. 课程删除：课程行物理删除、文档 `DELETED`、课程 raw 目录消失；
+1. 单文档删除：向量清理 -> 物理文件删除 -> 文档 `DELETED`，重复/跨用户删除幂等；
+2. 课程删除：课程行保留 `is_deleting=1` 等待 GC、回执写入、重复/并发/跨用户删除幂等；
 3. 账号注销：JWT 立即失效、MySQL 各表、Redis 业务键、共享卷用户目录全部清零。
 
 前置：整栈已启动；调用方在仓库根目录执行；`sc-java-backend` 可读取共享卷。
@@ -194,6 +194,15 @@ def main() -> int:
         f"SELECT status FROM t_knowledge_doc WHERE doc_id={doc};"))
     check("文档 raw 文件已删除", not file_exists_in_java(raw_path), raw_path)
 
+    # P9 复核第 4 项：DELETED 行作为墓碑，重复删除返回 200/原状态
+    status, body, text = api(client, "DELETE", f"/api/v1/docs/{doc}", token)
+    check("重复删除文档返回 200 且状态 DELETED",
+          status == 200 and (data_of(body) or {}).get("status") == "DELETED",
+          (status, text))
+    token_other, _, _ = register(client, "p9other")
+    status, body, text = api(client, "DELETE", f"/api/v1/docs/{doc}", token_other)
+    check("其他用户删除该文档返回 404（不泄露存在性）", status == 404, (status, text))
+
     # ---------- 2. 课程删除 ----------
     token_c, uid_c, _ = register(client, "p9course")
     configure_models(client, token_c)
@@ -213,10 +222,13 @@ def main() -> int:
 
     status, body, text = api(client, "DELETE", f"/api/v1/courses/{course_c}", token_c)
     check("删除课程返回 200", status == 200, (status, text))
-    course_gone = wait_for(lambda: not mysql(
-        f"SELECT course_id FROM t_course_namespace WHERE course_id={course_c};"))
-    check("课程行已物理删除", bool(course_gone), mysql(
-        f"SELECT course_id FROM t_course_namespace WHERE course_id={course_c};"))
+    # P9 复核第 2 项：课程行必须等向量/文件/文档清理完成才由 GC 物理删除
+    course_row = mysql(
+        f"SELECT is_deleting FROM t_course_namespace WHERE course_id={course_c};")
+    check("课程行保留 is_deleting=1 等待 GC", course_row == ["1"], course_row)
+    receipt = mysql(f"SELECT result_status FROM t_course_deletion_receipt "
+                    f"WHERE user_id={uid_c} AND course_id={course_c};")
+    check("课程删除回执已写入", receipt and receipt[0] in ("DELETING", "DELETED"), receipt)
     doc_deleted = wait_for(lambda: mysql(
         f"SELECT status FROM t_knowledge_doc WHERE doc_id={doc_c} "
         f"AND status='DELETED';"))
@@ -228,6 +240,21 @@ def main() -> int:
     check("课程删除后 DDL 任务保留且已解绑",
           bool(task_row) and task_row[0].split("\t")[0] == "NULL",
           task_row)
+
+    # P9 复核第 4 项：重复/并发/跨用户删除课程
+    status, body, text = api(client, "DELETE", f"/api/v1/courses/{course_c}", token_c)
+    check("重复删除课程返回 200", status == 200, (status, text))
+    status, body, text = api(client, "DELETE", f"/api/v1/courses/{course_c}", token_other)
+    check("其他用户删除该课程返回 404", status == 404, (status, text))
+
+    import concurrent.futures
+    course_cc = create_course(client, token_c, f"并发删除_{uuid.uuid4().hex[:6]}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(
+            lambda _: api(client, "DELETE", f"/api/v1/courses/{course_cc}", token_c),
+            range(2)))
+    check("并发删除同一课程均返回 200",
+          all(status == 200 for status, _, _ in results), results)
 
     # ---------- 3. 账号注销 ----------
     token_u, uid_u, password_u = register(client, "p9user")

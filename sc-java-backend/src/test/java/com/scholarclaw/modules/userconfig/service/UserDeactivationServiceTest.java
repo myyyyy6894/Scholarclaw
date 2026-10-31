@@ -18,7 +18,12 @@ import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.common.security.AccountDeactivationKey;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.mapper.UserConfigMapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import java.time.Duration;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,10 +34,13 @@ import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class UserDeactivationServiceTest {
 
     private static final Long USER_ID = 10001L;
+    private static final long JWT_TTL_SECONDS = 7L * 24 * 3600;
 
     private UserConfigMapper mapper;
     private PasswordEncoder passwordEncoder;
@@ -40,6 +48,17 @@ class UserDeactivationServiceTest {
     private ValueOperations<String, String> valueOps;
     private ApplicationEventPublisher publisher;
     private UserDeactivationService service;
+
+    /**
+     * 显式注册 MyBatis-Plus 表元数据：{@code lambdaUpdate().set(...)} 依赖该缓存。
+     * 全量测试恰好被其他测试先初始化，单独运行本类会失败（P9 复核第 8 项）。
+     */
+    @BeforeAll
+    static void initMybatisTableInfo() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+                UserConfigEntity.class);
+    }
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -50,7 +69,15 @@ class UserDeactivationServiceTest {
         valueOps = mock(ValueOperations.class);
         publisher = mock(ApplicationEventPublisher.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        service = new UserDeactivationService(mapper, passwordEncoder, redisTemplate, publisher);
+        service = new UserDeactivationService(mapper, passwordEncoder, redisTemplate, publisher,
+                JWT_TTL_SECONDS);
+    }
+
+    @AfterEach
+    void clearSynchronization() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
@@ -88,11 +115,97 @@ class UserDeactivationServiceTest {
         service.deactivate(USER_ID, "Password2026!", "CONFIRM_DEACTIVATE");
 
         verify(valueOps).set(eq(AccountDeactivationKey.of(USER_ID)), eq("1"),
-                eq(AccountDeactivationKey.TTL));
+                eq(AccountDeactivationKey.ttlFor(JWT_TTL_SECONDS)));
+        verify(redisTemplate).delete(AccountDeactivationKey.activeMarker(USER_ID));
         verify(mapper).update(any(), any());
         ArgumentCaptor<Object> event = ArgumentCaptor.forClass(Object.class);
         verify(publisher).publishEvent(event.capture());
         assertThat(event.getValue()).isEqualTo(new UserDeactivatingEvent(USER_ID));
+    }
+
+    @Test
+    @DisplayName("数据库事务回滚：撤销已写入的 Redis 阻断键，避免用户仍 ACTIVE 却被封禁")
+    void rollsBackRedisBlockWhenTransactionFails() {
+        when(mapper.selectById(USER_ID)).thenReturn(account("ACTIVE"));
+        when(passwordEncoder.matches("Password2026!", "hash")).thenReturn(true);
+        when(mapper.update(any(), any())).thenReturn(1);
+        TransactionSynchronizationManager.initSynchronization();
+
+        service.deactivate(USER_ID, "Password2026!", "CONFIRM_DEACTIVATE");
+
+        var synchronizations = TransactionSynchronizationManager.getSynchronizations();
+        assertThat(synchronizations).hasSize(1);
+        synchronizations.get(0).afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+        verify(redisTemplate).delete(AccountDeactivationKey.of(USER_ID));
+    }
+
+    @Test
+    @DisplayName("活跃缓存删除失败：不阻断注销，阻断键与业务状态仍生效")
+    void activeMarkerDeleteFailureDoesNotAbortDeactivation() {
+        when(mapper.selectById(USER_ID)).thenReturn(account("ACTIVE"));
+        when(passwordEncoder.matches("Password2026!", "hash")).thenReturn(true);
+        when(mapper.update(any(), any())).thenReturn(1);
+        when(redisTemplate.delete(AccountDeactivationKey.activeMarker(USER_ID)))
+                .thenThrow(new IllegalStateException("redis delete failed"));
+
+        service.deactivate(USER_ID, "Password2026!", "CONFIRM_DEACTIVATE");
+
+        verify(valueOps).set(eq(AccountDeactivationKey.of(USER_ID)), eq("1"),
+                eq(AccountDeactivationKey.ttlFor(JWT_TTL_SECONDS)));
+        verify(mapper).update(any(), any());
+        verify(publisher).publishEvent(new UserDeactivatingEvent(USER_ID));
+    }
+
+    @Test
+    @DisplayName("MySQL 更新失败：事务回滚撤销阻断键")
+    void rollsBackRedisBlockWhenDatabaseUpdateFails() {
+        when(mapper.selectById(USER_ID)).thenReturn(account("ACTIVE"));
+        when(passwordEncoder.matches("Password2026!", "hash")).thenReturn(true);
+        when(mapper.update(any(), any())).thenThrow(new IllegalStateException("db down"));
+        TransactionSynchronizationManager.initSynchronization();
+
+        assertThatThrownBy(() -> service.deactivate(USER_ID, "Password2026!",
+                "CONFIRM_DEACTIVATE"))
+                .isInstanceOf(IllegalStateException.class);
+
+        TransactionSynchronizationManager.getSynchronizations().get(0)
+                .afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+        verify(redisTemplate).delete(AccountDeactivationKey.of(USER_ID));
+    }
+
+    @Test
+    @DisplayName("事件发布失败：事务回滚撤销阻断键")
+    void rollsBackRedisBlockWhenEventPublishFails() {
+        when(mapper.selectById(USER_ID)).thenReturn(account("ACTIVE"));
+        when(passwordEncoder.matches("Password2026!", "hash")).thenReturn(true);
+        when(mapper.update(any(), any())).thenReturn(1);
+        org.mockito.Mockito.doThrow(new IllegalStateException("event failed"))
+                .when(publisher).publishEvent(new UserDeactivatingEvent(USER_ID));
+        TransactionSynchronizationManager.initSynchronization();
+
+        assertThatThrownBy(() -> service.deactivate(USER_ID, "Password2026!",
+                "CONFIRM_DEACTIVATE"))
+                .isInstanceOf(IllegalStateException.class);
+
+        TransactionSynchronizationManager.getSynchronizations().get(0)
+                .afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+        verify(redisTemplate).delete(AccountDeactivationKey.of(USER_ID));
+    }
+
+    @Test
+    @DisplayName("JWT TTL 超过 7 天：阻断键 TTL 按 JWT TTL + 1 天动态计算")
+    void extendsDeactivatedTtlBeyondJwtLifetime() {
+        long longJwtTtl = 30L * 24 * 3600;
+        UserDeactivationService longLived = new UserDeactivationService(mapper,
+                passwordEncoder, redisTemplate, publisher, longJwtTtl);
+        when(mapper.selectById(USER_ID)).thenReturn(account("ACTIVE"));
+        when(passwordEncoder.matches("Password2026!", "hash")).thenReturn(true);
+        when(mapper.update(any(), any())).thenReturn(1);
+
+        longLived.deactivate(USER_ID, "Password2026!", "CONFIRM_DEACTIVATE");
+
+        verify(valueOps).set(eq(AccountDeactivationKey.of(USER_ID)), eq("1"),
+                eq(Duration.ofSeconds(longJwtTtl + Duration.ofDays(1).toSeconds())));
     }
 
     @Test

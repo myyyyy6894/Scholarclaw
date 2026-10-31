@@ -30,6 +30,8 @@ FROM nginx:1.26-alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+# 运行期配置：启动时按 SC_NAPCAT_WEBUI_URL 生成 runtime-config.js（非密钥跳转地址）。
+COPY --chmod=755 runtime-config.sh /docker-entrypoint.d/40-runtime-config.sh
 
 EXPOSE 80
 

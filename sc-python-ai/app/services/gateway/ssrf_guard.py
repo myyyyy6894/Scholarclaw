@@ -13,11 +13,10 @@
   `SC_LOCAL_MODEL_ALLOWED_ORIGINS` 时，才允许回环/私有地址与非 https 协议。
   白名单**不能**放行内部服务名、内部端口或元数据地址。
 
-**残余风险（必须明确，不得宣称已完全防住 DNS rebinding）：** 本模块在出站前解析一次 DNS
-并校验结果，但 httpx 建立连接时会再次解析；两次解析之间域名仍可能被切换为内网地址。
-当前 MVP 不实现 IP 钉扎（解析出的 IP 用于实际连接、保留原主机名做 SNI/Host），
-因此该窗口仍然存在。缓解手段是：禁止重定向、禁止代理、出站前校验，以及容器网络本身
-不暴露数据库/Redis 端口。若后续网关（TASK-301）需要更强保证，应改为受控 transport + IP 钉扎。
+**DNS rebinding 防护（P9 复核第 9 项）：** 本模块的出站预校验会解析一次 DNS 并校验结果；
+真正的 IP 钉扎在 :class:`app.services.gateway.transport.PinnedAsyncTransport` 中完成——
+连接前解析并校验一次，随后直接连接该 IP，保留原主机名做 Host 与 TLS SNI，httpx/httpcore
+不会再二次解析。重定向已关闭、代理已禁用，两者共同关闭 DNS rebinding 窗口。
 """
 
 from __future__ import annotations
@@ -105,6 +104,40 @@ async def validate_outbound_url_async(
         base_url, allow_local=allow_local, allowed_origins=allowed_origins
     )
     _check_resolved(await _resolve_async(host), whitelisted)
+
+
+async def resolve_and_validate_host_async(
+    host: str,
+    port: int | None,
+    *,
+    allow_local: bool,
+    allowed_origins: tuple[str, ...],
+) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
+    """连接前解析并校验主机，返回**本次实际连接使用**的 IP 列表（IP 钉扎）。
+
+    与 `validate_outbound_url_async` 的区别：这里在 ``connect_tcp`` 阶段调用，解析出的
+    IP 会直接用于建连，不再让 httpx/httpcore 二次解析，从而关闭 DNS rebinding 窗口。
+    调用方必须保留原主机名用于 Host 头与 TLS SNI。
+    """
+    normalized = (host or "").rstrip(".").lower()
+    if not normalized:
+        raise BaseUrlRejectedError()
+    if normalized in HARD_DENIED_HOSTS or normalized in METADATA_HOSTS:
+        raise BaseUrlRejectedError()
+    if port in HARD_DENIED_PORTS:
+        raise BaseUrlRejectedError()
+    if _is_metadata_literal(normalized):
+        raise BaseUrlRejectedError()
+
+    origins = {item.lower() for item in allowed_origins}
+    candidates = {
+        f"http://{_format_host(normalized)}{f':{port}' if port else ''}",
+        f"https://{_format_host(normalized)}{f':{port}' if port else ''}",
+    }
+    whitelisted = allow_local and bool(candidates & origins)
+    addresses = await _resolve_async(normalized)
+    _check_resolved(addresses, whitelisted)
+    return addresses
 
 
 def _validate_structure(

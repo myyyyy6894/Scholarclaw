@@ -85,11 +85,62 @@ docker volume rm vol_napcat_qq vol_napcat_config
 | HTTP Action API | `http://127.0.0.1:${SC_NAPCAT_HTTP_PORT:-3000}` | NapCat 的 HTTP **服务端**端口；入站上报由 NapCat 作为**客户端**发往 Java |
 | 回环绑定 | `SC_NAPCAT_WEBUI_BIND` / `SC_NAPCAT_HTTP_BIND` | 默认 `127.0.0.1`；仅可信内网/VPN 场景才改 `0.0.0.0`，并自行承担暴露风险 |
 | 持久化卷 | `vol_napcat_qq`（`/app/.config/QQ`）、`vol_napcat_config`（`/app/napcat/config`） | 删除卷即丢失 QQ 登录态与 OneBot 配置 |
+| 快速登录 | `SC_NAPCAT_ACCOUNT`（非密钥） | 非空时 entrypoint 用 `qq -q <QQ号>` 复用 `vol_napcat_qq` 中的登录态，容器/QQ worker 重启后不再扫码；登录态失效时自动回落二维码。**首次仍须在 WebUI 扫码一次** |
+| WebUI 令牌 | `SC_NAPCAT_WEBUI_TOKEN` / `scripts/napcat/webui.sh` | 首次部署用环境变量固定；已有部署用脚本读取或重置。**令牌等于机器人 QQ 的控制权**，只给部署/运维人员，不要通过业务前端或 API 下发给普通用户 |
 | 内存上限 | `1024m` | 与架构基线一致 |
+
+**快速登录（推荐）**：`.env` 里填 `SC_NAPCAT_ACCOUNT=<QQ号>` 后重建该容器：
+
+```bash
+docker compose --profile onebot up -d sc-napcat-onebot
+docker compose --profile onebot logs --tail 50 sc-napcat-onebot   # 应看到「正在快速登录」，不再打印二维码
+```
+
+留空则每次启动都走二维码登录（旧行为）。若日志出现 `KickedOffLine` / `serverErrorCode 168`，说明是 QQ 侧风控/登录态失效，需要在手机 QQ 上解除限制后重新扫码一次——容器侧无法绕过。
+
+**WebUI 令牌（首次登录不用翻配置）**
+
+首次部署时在 `.env` 里设定固定令牌，NapCat 会在 `webui.json` 不存在时写入：
+
+```bash
+# .env
+SC_NAPCAT_WEBUI_TOKEN=<自己设定的强随机串，至少 8 位，勿含空白/引号/? ! & = # />
+```
+
+之后登录地址固定为 `http://127.0.0.1:6099/webui?token=<该令牌>`，可存书签。
+**注意：环境变量只在 `webui.json` 不存在时生效**；卷已存在时改 `.env` 不会覆盖旧令牌。
+
+已有部署/忘记令牌时用脚本，不必进容器或翻日志：
+
+```bash
+scripts/napcat/webui.sh            # 直接打印带令牌的登录地址
+scripts/napcat/webui.sh token      # 只打印令牌
+scripts/napcat/webui.sh set <令牌> # 重设令牌并重启 NapCat（QQ 会用 ACCOUNT 快速重登）
+```
+
+**远程访问 NapCat WebUI（部署在服务器时）**
+
+NapCat WebUI 是**机器人 QQ 的管理后台**，默认只绑 `127.0.0.1` 是安全默认，不是只能本机用。三种方式：
+
+1. **SSH 隧道（推荐，零暴露）**：服务端保持默认绑定，操作者本机执行
+   ```bash
+   ssh -L 6099:127.0.0.1:6099 <user>@<server>
+   ```
+   然后在浏览器打开 `scripts/napcat/webui.sh` 打印的地址（`127.0.0.1:6099` 会被转发到服务器）。
+2. **内网 / VPN 直连**：`.env` 里设
+   ```bash
+   SC_NAPCAT_WEBUI_BIND=0.0.0.0            # 或指定内网网卡 IP
+   SC_NAPCAT_WEBUI_URL=http://<server>:6099 # 运行期注入的跳转地址
+   ```
+   重启 `sc-web-nginx` 与 `sc-napcat-onebot` 即可，**不必重建前端镜像**（运行期配置由容器启动脚本写入）。
+   必须用防火墙/安全组只放行可信来源。
+3. **公网直连**：不推荐。当前没有额外认证与 TLS，6099 暴露到公网等于把机器人控制权暴露出去；如确需，请在 Nginx/网关层加 TLS + 独立认证后再放行。
+
+`SC_NAPCAT_WEBUI_HOST` 只影响 `scripts/napcat/webui.sh` 打印的地址（隧道场景保持默认即可）。
 
 **NapCat 侧需要手工配置（不由 Compose 注入）：**
 
-1. WebUI 扫码登录 QQ；
+1. WebUI 首次扫码登录 QQ（之后由 `SC_NAPCAT_ACCOUNT` 快速登录）；
 2. 打开「网络配置 → HTTP 服务器」，启用并设置端口 `3000`、Token 与 Java 的 `SC_ONEBOT_ACCESS_TOKEN` **保持一致**；
 3. 打开「HTTP 客户端 / 上报」，上报地址填 `http://sc-java-backend:8080/webhooks/onebot/v11`，并启用 Message 上报；
 4. 文件下载：若 NapCat 返回本地路径，需在 NapCat 配置中开启 `enableLocalFile2Url`，Java 才收到 `base64`/URL；同机临时文件服务的 Origin 需显式加入 Java 的 `SC_ONEBOT_FILE_ALLOWED_ORIGINS`。
@@ -264,14 +315,14 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 |---|---|
 | HTTPS / 443 | **未启用**。文档提到 80/443 双端口，但项目未定义证书来源；当前只暴露 80。生产化需补 TLS 终止 |
 | 容器日志轮转 | **未配置** `logging` 上限。长期运行建议加 `logging.options.max-size`，否则可能持续占用磁盘 |
-| 数据库迁移 | ✅ **已执行**：`V1.0.0`（7 张 MVP 表）与 `V1.0.4`（第二次跟进 `follow_up_at` 约束）已应用，结构核对 **485 项**一致（见 §13）；`U1.0.4` 回滚脚本已提供。`v1.1` 扩展表按约束未建；只读最小权限账号（`03` §7.4）仍未落地 |
-| Java 与数据层连接 | Java 容器已收到 DB/Redis/MQ 凭据，但**代码尚未引入相应客户端**（TASK-201 之后）。健康检查对这三者目前只做 **TCP 可达性**验证：证明网络通、进程在监听，**不证明**凭据正确或数据库可读写 |
-| OneBot / NapCat 容器 | ✅ **已作为可选 `onebot` profile 纳入编排**（`docker compose --profile onebot up -d sc-napcat-onebot`），仅加入内网、3000/6099 默认绑定 `127.0.0.1`。NapCat 镜像 tag 仍为 `latest`，生产前需 pin；**真实 QQ 主动提醒、群聊 `@`、群文件下载/群权限、平台限流/风控未验收**（见 §3.1） |
-| 内部通信验证 | ✅ 已完成（TASK-105 + 2026-10-19 复核）：契约、环回例外范围、日志关联与脱敏、只读挂载、**双向 `/health` 常驻验证**、依赖故障判定均已实测，见 `INTERNAL_API_VERIFICATION.md`。**Python → Java 的「业务」内部调用（`API-INT-JAVA-001/002/003`）尚未实现**（属 TASK-503），当前 Python → Java 只覆盖健康检查 |
+| 数据库迁移 | ✅ **已执行**：`V1.0.0`（7 张业务核心表）、`V1.0.4`（第二次跟进 `follow_up_at` 约束）与 `V1.0.5`（删除恢复辅助表）已应用，结构核对项数以 `verify_mvp_schema.py` 实际输出为准（见 §13）；`U1.0.4`/`U1.0.5` 回滚脚本已提供。`v1.1` 扩展表按约束未建；只读最小权限账号（`03` §7.4）仍未落地 |
+| Java 与数据层连接 | ✅ 已引入 MyBatis-Plus/MySQL、Redis、RabbitMQ 客户端；健康检查为连接池级探针，能证明凭据正确且可读写（见 §7）。 |
+| OneBot / NapCat 容器 | ✅ **已作为可选 `onebot` profile 纳入编排**（`docker compose --profile onebot up -d sc-napcat-onebot`），仅加入内网、3000/6099 默认绑定 `127.0.0.1`。NapCat 镜像 tag 仍为 `latest`，生产前需 pin；**真实 QQ 主动提醒已手工验证；群聊 `@`、群文件下载/群权限、平台限流/风控未验收**（见 §3.1） |
+| 内部通信验证 | ✅ 已完成（TASK-105 + 2026-10-19 复核）：契约、环回例外范围、日志关联与脱敏、只读挂载、**双向 `/health` 常驻验证**、依赖故障判定均已实测，见 `INTERNAL_API_VERIFICATION.md`。**Python → Java 的业务内部调用（`API-INT-JAVA-001/002/003`）已实现**（TASK-503/604），健康检查仍为常驻双向验证 |
 | Python 依赖锁定范围 | `sc-python-ai/requirements.lock.txt` 锁的是**运行时**依赖（16 个包，全部固定版本）。两点边界：① 不含制品哈希（`pip freeze` 拿不到哈希，无法防"同名同版本被重传"）；② 开发/测试依赖（`pytest`、`pytest-asyncio`）仍是版本区间，未纳入锁文件——等引入 CI 时再评估 |
 | `data.peers` 的覆盖面 | 只有 `sc-java-backend` 会上报 `peers.python_ai`；`sc-python-ai` 的 `peers` 恒为空（Python → Java 方向由容器 healthcheck 承担，避免两个健康接口互调形成无限递归）。若日后希望 Python 也上报该观测，需先为健康接口定义"禁止递归"的显式契约 |
 | 数据库运行时参数（DB-01） | `03` §9.1 的 `READ-COMMITTED` 隔离级别与 `innodb_buffer_pool_size=768M` 属「建议方案」，**未应用**：compose 只固定了 `--default-time-zone=+08:00` 与字符集。需应用时改 `sc-mysql` 的 `command` 并重启数据库容器 |
-| 性能基线 | 未测。属 TASK-905 |
+| 性能基线 | ✅ 本地 mock 链路基线已测（`PERFORMANCE_BASELINE.md`）；真实供应商 TTFT、目标规模 10 份/1000 子块未测，不得对外声明达标 |
 
 ## 11. 本次实测结论（2026-10-18）
 
@@ -302,6 +353,17 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 | 可复现构建 | 用 `requirements.lock.txt` 重建 Python 镜像后 `pip freeze` 与新镜像内实际环境比对 | ✅ 完全一致（`diff` 无差异）；Python 3.11 容器内按锁文件装依赖后 `pytest` **113 项通过** |
 | 时间戳时区 | `date -Is`（宿主与容器）、`docker inspect` 健康日志时间戳 | 宿主与两容器均为 `+08:00`；**Docker daemon 自身的元数据时间戳为 `-07:00`**（daemon 时区），不影响应用——应用时区由 `TZ`/`SC_TIMEZONE` 显式注入，这正是 ENV-01 要求显式固定时区的原因 |
 
+## 12.1 干净环境首次启动复验（2026-10-31）
+
+| 项 | 实测 |
+|---|---|
+| 环境 | 独立 Compose 项目 `scholarclaw-fresh`，全新网络/命名卷/容器名，Nginx `127.0.0.1:18080` |
+| 启动 | `docker compose up -d` 到 7/7 `healthy` 约 40s；Java 应用启动 3.07s（升级后镜像复跑） |
+| 迁移 | 空库自动执行 `V1.0.0`~`V1.0.5` 共 6 个脚本，版本表当前 1.0.5 |
+| 结构 | `verify_mvp_schema.py --quiet` **560 项**一致 |
+| 冒烟 | `auth_byok_smoke.py` 通过；Web `/` 200；Java `data.status=UP`、`peers.python_ai=UP`；Python 双向健康 `HEALTHY` |
+| 边界 | 未在第二台物理主机重放；同一 Docker daemon、同一宿主内核 |
+
 ## 13. 数据库初始化与迁移（TASK-201）
 
 依据 `03` §9~§10 与已定稿的 **P0-03**（有序 SQL + 版本表，**不引入 Flyway/Liquibase**；
@@ -310,22 +372,23 @@ docker logs sc-java-backend 2>&1 | grep 'tr_9a1b2c3d4e5f'   # 按追踪号捞一
 | 项 | 说明 |
 |---|---|
 | 脚本位置 | `sc-java-backend/src/main/resources/db/migration/V{主}.{次}.{修订}__{动词_简述}.sql`（随 jar 打包，无需挂载） |
-| 当前脚本 | `V1.0.0__init_mvp_schema.sql`（7 张 MVP 表，含生成列/唯一索引/CHECK）与 `V1.0.4__p8_review_fixes.sql`（第二次跟进后 `follow_up_at=NULL`，重建 `chk_ddl_time_invariants`）；回滚脚本 `U1.0.4__rollback_p8_review_fixes.sql` |
+| 当前脚本 | `V1.0.0__init_mvp_schema.sql`（7 张业务核心表）、`V1.0.4__p8_review_fixes.sql`（`follow_up_at=NULL` 与 `chk_ddl_time_invariants`）与 `V1.0.5__p9_review_recovery.sql`（`t_vector_cleanup_outbox`、`t_course_deletion_receipt`）；回滚脚本 `U1.0.4`、`U1.0.5` |
 | 执行时机 | Java 启动时（`sc.db.migration.enabled`，默认 `true`）按版本**数值升序**执行；`db-config` 为 `spring.datasource.*`（`serverTimezone=Asia/Shanghai`、utf8mb4） |
 | 幂等 | 版本表 `sc_schema_migration(version PK, script, checksum, success, execution_ms, applied_at)`：已成功的版本跳过；重复启动只打印「均已执行」 |
 | 防漂移 | 已执行脚本内容（SHA-256）变化 → **拒绝启动**；改历史脚本必须新增增量脚本 |
 | 失败处理 | MySQL DDL 无法回滚（`03` §10.3）：失败版本写 `success=0` + 错误摘要，并让应用启动失败；人工修复后 `DELETE FROM sc_schema_migration WHERE version='x.y.z'` 再启动 |
-| 手工执行（备选，**当前未使用**） | 用有 DDL 权限的账号执行同一脚本后，在 `.env` 设 `SC_DB_MIGRATION_ENABLED=false`；版本表会让应用判断「已是最新」。⚠️ **本项目当前没有运维角色**，实际执行路径是「Java 启动自动迁移」；此流程留给将来有运维/多环境时使用 |
-| 结构核对 | `python3 scripts/db/verify_mvp_schema.py`：把真实库与 `docs/03` 的表集合/字段/索引/约束逐项比对（只读，退出码 0=一致）。**2026-10-31 实测 485 项全部一致（版本 1.0.4）** |
+| 手工执行（备选） | `bash scripts/db/manual_migrate.sh`：按版本表跳过已成功版本、校验已执行 checksum、执行后写入 `sc_schema_migration`（版本/文件名/SHA-256/耗时/成功标志）。⚠️ **本项目当前没有专职运维角色**，默认路径仍是「Java 启动自动迁移」；手工路径用于新主机/无 Java 启动权限场景 |
+| 结构核对 | `python3 scripts/db/verify_mvp_schema.py`：把真实库与 `docs/03` 的表集合/字段/索引/约束逐项比对（只读，退出码 0=一致）。**2026-10-31 实测版本 1.0.5；560 项全部一致** |
 | v1.1 边界 | `t_ddl_subtask` / `t_exam_wrong_book` **不建**（`03` §1.4 / DB-04）；`MigrationScriptTest` 有断言防止提前建表 |
-| 已知缺口 | `DB-01` 运行时参数未应用；增量迁移的 `U*.sql` 回滚脚本与只读最小权限账号（`03` §7.4）待后续任务 |
+| 已知缺口 | `DB-01` 运行时参数未应用；`U1.0.4`/`U1.0.5` 已提供，更早增量脚本的回滚仍待补；只读最小权限账号（`03` §7.4）待后续任务 |
 
 执行痕迹示例（实测）：
 
 ```
 sc-java-backend | 数据库迁移：已执行 V1.0.0 init_mvp_schema（353 ms）
 sc-java-backend | 数据库迁移：已执行 V1.0.4 p8_review_fixes（… ms）
-sc-java-backend | 数据库迁移完成：本次执行 2 个脚本，当前版本 1.0.4
+sc-java-backend | 数据库迁移：已执行 V1.0.5 p9_review_recovery（… ms）
+sc-java-backend | 数据库迁移完成：本次执行 3 个脚本，当前版本 1.0.5
 # 重启后：
-sc-java-backend | 数据库迁移：2 个脚本均已执行（当前版本 1.0.4），无待执行项
+sc-java-backend | 数据库迁移：3 个脚本均已执行（当前版本 1.0.5），无待执行项
 ```

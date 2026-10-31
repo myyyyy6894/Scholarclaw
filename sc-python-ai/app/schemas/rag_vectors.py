@@ -34,3 +34,10 @@ class VectorCleanupRequest(BaseModel):
 class VectorCleanupData(BaseModel):
     scope: str
     cleaned: bool
+
+
+class VectorCollectionData(BaseModel):
+    """`GET /rag/collections` 的只读对账结果（不含向量内容）。"""
+
+    names: list[str]
+    count: int

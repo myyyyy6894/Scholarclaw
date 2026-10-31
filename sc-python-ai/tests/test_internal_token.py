@@ -55,10 +55,10 @@ def test_loopback_exemption_applies_to_health_only(client_factory) -> None:
     exempt: list[str] = []
     guarded: list[str] = []
 
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        methods = getattr(route, "methods", None) or set()
-        if not path.startswith("/internal/") or not methods - {"HEAD", "OPTIONS"}:
+    # FastAPI 0.162+ 的 app.routes 是嵌套 _IncludedRouter；OpenAPI paths 是稳定的
+    # 已注册路由视图，且包含全部内部接口（均为 include_in_schema=True）。
+    for path in sorted(app.openapi()["paths"]):
+        if not path.startswith("/internal/"):
             continue
         with client_factory(LOOPBACK_HOST) as client:
             status = client.request("GET", path).status_code
@@ -75,19 +75,18 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
 
     TASK-302 新增 `POST /model/probe`；TASK-504 新增 `DELETE /rag/vectors`；
     TASK-604 新增 `POST /rag/qa-stream`；TASK-701 新增
-    `POST /agent/route-and-extract`（仅 FORCE_DDL_EXTRACT）。均为跨容器调用，
+    `POST /agent/route-and-extract`（仅 FORCE_DDL_EXTRACT）；P9 复核新增
+    `GET /rag/collections`（ChromaDB 孤儿对账，只读）。均为跨容器调用，
     必须携带 `X-Internal-Token`。
     """
     from app.main import create_app
 
-    paths = {
-        getattr(route, "path", "")
-        for route in create_app().routes
-        if getattr(route, "path", "").startswith("/internal/")
-    }
+    paths = {path for path in create_app().openapi()["paths"]
+             if path.startswith("/internal/")}
 
     assert paths == {HEALTH_PATH, "/internal/ai/v1/model/probe",
-                     "/internal/ai/v1/rag/vectors", "/internal/ai/v1/rag/qa-stream",
+                     "/internal/ai/v1/rag/vectors", "/internal/ai/v1/rag/collections",
+                     "/internal/ai/v1/rag/qa-stream",
                      "/internal/ai/v1/agent/route-and-extract"}
 
 

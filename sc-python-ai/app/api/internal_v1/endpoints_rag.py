@@ -18,10 +18,14 @@ from fastapi.responses import StreamingResponse
 from app.core import tracing
 from app.core.exceptions import AiEngineError, AiErrorCode, NonRetryableAiError
 from app.core.logging import get_logger
-from app.core.security import require_internal_identity
+from app.core.security import require_internal_identity, require_internal_token
 from app.schemas.common import InternalResponse
 from app.schemas.rag_qa import RagQaStreamRequest
-from app.schemas.rag_vectors import VectorCleanupData, VectorCleanupRequest
+from app.schemas.rag_vectors import (
+    VectorCleanupData,
+    VectorCleanupRequest,
+    VectorCollectionData,
+)
 from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.ingest.vector_store import ChromaVectorStore
 from app.services.rag.qa_pipeline import (
@@ -66,6 +70,20 @@ async def cleanup_vectors(
         store.delete_user(body.user_id)
     return InternalResponse.ok(VectorCleanupData(scope=body.scope, cleaned=True),
                                message="Vector cleanup completed idempotently")
+
+
+@router.get(
+    "/rag/collections",
+    response_model=InternalResponse[VectorCollectionData],
+    summary="列出本应用管理的 ChromaDB Collection（孤儿对账）",
+)
+async def list_collections(
+    _: Annotated[None, Depends(require_internal_token)],
+) -> InternalResponse[VectorCollectionData]:
+    store = ChromaVectorStore(_settings())
+    names = store.list_collection_names()
+    return InternalResponse.ok(VectorCollectionData(names=names, count=len(names)),
+                               message="Collection list completed")
 
 
 def get_rag_qa_pipeline() -> RagQaPipeline:

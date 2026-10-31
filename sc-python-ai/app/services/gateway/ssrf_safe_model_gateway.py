@@ -13,8 +13,8 @@
 * **日志脱敏**：只记录去掉查询串的 URL、provider/model 与尝试次数；**绝不记录**
   API Key、Authorization 头或请求/响应体。
 
-**残余风险（不得宣称已完全防住 DNS rebinding）：** 校验在出站前解析一次 DNS，httpx 建立
-连接时会再次解析；两次解析之间域名仍可能被切换为内网地址。当前未实现 IP 钉扎。
+* **IP 钉扎**：连接前解析并校验 DNS，随后直接连接该 IP，保留原主机名做 Host/TLS SNI；
+  与禁止重定向、禁止代理共同关闭 DNS rebinding 窗口（P9 复核第 9 项）。
 """
 
 from __future__ import annotations
@@ -91,6 +91,8 @@ class SsrfSafeModelGateway:
                 else self._settings.model_read_timeout_seconds
             ),
             transport=self._http_transport,
+            allow_local=self._settings.allow_local_model_base_url,
+            allowed_origins=self._settings.local_model_allowed_origins,
         )
         return self
 

@@ -40,4 +40,17 @@ public interface CourseNamespaceMapper extends BaseMapper<CourseNamespaceEntity>
             """)
     CourseNamespaceEntity selectActiveCourseForUpdate(@Param("userId") Long userId,
                                                       @Param("courseId") Long courseId);
+
+    /**
+     * 锁定当前用户的课程行（不过滤 `is_deleting`），用于删除幂等判定：
+     * 并发删除时第二个请求会等待行锁，随后看到 `is_deleting=1` 并返回“已删除”。
+     */
+    @Select("""
+            SELECT * FROM t_course_namespace
+            WHERE course_id = #{courseId}
+              AND user_id = #{userId}
+            FOR UPDATE
+            """)
+    CourseNamespaceEntity selectCourseForUpdate(@Param("userId") Long userId,
+                                                @Param("courseId") Long courseId);
 }

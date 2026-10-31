@@ -332,7 +332,66 @@ docker compose ps
 **诚实边界：** 真实 NapCat/真实 QQ、真实供应商模型、真实平台风控与限流行为仍未验证；
 限流/重试/降级在单测与真实 Redis Lua/MySQL 上有证据，但本脚本不会对真实 QQ 产生消息。
 
-## 8. 安全约束
+## 8. TASK-901/902 清理、GC 与 DDL 梯度提醒（真实栈）
+
+这三个脚本都要求真实栈 + 临时 mock 模型/OneBot 替身；**替身只验证协议与链路，不是真实 QQ 或真实供应商质量证据**。
+所有临时 env 必须放在 `/tmp` 文件里通过 `--env-file` 注入，验证后恢复默认 `.env` 并删除 mock。
+
+### 8.1 `cleanup_e2e.py`（TASK-901 级联清理，28 项）
+
+前置：mock 模型 + 本地模型白名单（同 §2.1），因为建课需要真实 Embedding 探测/保存。
+
+```bash
+cp .env /tmp/sc-cleanup.env && chmod 600 /tmp/sc-cleanup.env
+printf '\nSC_ALLOW_LOCAL_MODEL_BASE_URL=true\nSC_LOCAL_MODEL_ALLOWED_ORIGINS=http://<mock-ip>:9000\n' >> /tmp/sc-cleanup.env
+docker run -d --name sc-e2e-mock-model --network scholarclaw-internal \
+  -v "$PWD/scripts/e2e/mock_model_server.py:/server.py:ro" \
+  python:3.11-slim python3 /server.py
+docker compose --env-file /tmp/sc-cleanup.env up -d --force-recreate sc-java-backend sc-python-ai
+sc-python-ai/.venv/bin/python scripts/e2e/cleanup_e2e.py \
+  --base-url http://127.0.0.1 --model-base-url http://<mock-ip>:9000/v1
+```
+
+恢复：`docker compose up -d --force-recreate sc-java-backend sc-python-ai`（不带 `--env-file`，回到默认 `.env`），
+`docker rm -f sc-e2e-mock-model`，删除 `/tmp/sc-cleanup.env`。脚本创建的 `p9*` 账号/数据默认保留，清理需授权（§5）。
+
+### 8.2 `gc_e2e.py`（TASK-902 GC 重放，14 项）
+
+除 mock 模型与白名单外，Java 必须以**短周期 GC** 启动，否则脚本等待超时：
+
+```bash
+cp .env /tmp/sc-gc.env && chmod 600 /tmp/sc-gc.env
+printf '\nSC_ALLOW_LOCAL_MODEL_BASE_URL=true\nSC_LOCAL_MODEL_ALLOWED_ORIGINS=http://<mock-ip>:9000\n' >> /tmp/sc-gc.env
+printf '\nSC_DELETION_GC_INITIAL_DELAY_MS=1000\nSC_DELETION_GC_INTERVAL_MS=3000\nSC_DELETION_GC_STALE_MINUTES=1\nSC_DELETION_GC_ORPHAN_FILE_MINUTES=1\nSC_DELETION_GC_BATCH_SIZE=100\n' >> /tmp/sc-gc.env
+docker compose --env-file /tmp/sc-gc.env up -d --force-recreate sc-java-backend
+sc-python-ai/.venv/bin/python scripts/e2e/gc_e2e.py \
+  --base-url http://127.0.0.1 --model-base-url http://<mock-ip>:9000/v1
+```
+
+脚本覆盖：`DELETING` 文档、`is_deleting=1` 课程（只有清理完成才物理删行）、raw 孤儿文件、`DEACTIVATING`
+用户重放、有效资源不被误删。补偿队列/Chroma 对账的真实故障注入仍需人工制造（停 Python/Chroma），
+不在脚本内自动停容器。恢复同 §8.1。
+
+### 8.3 `ddl_reminder_e2e.py`（DDL 梯度提醒，P9 复核第 3 项）
+
+需要短周期提醒 + `SC_IM_PUSH_ENABLED=true`（验证 DND 初始状态）+ OneBot 协议替身（只接收 Action，不校验真实 QQ）：
+
+```bash
+cp .env /tmp/sc-ddl.env && chmod 600 /tmp/sc-ddl.env
+printf '\nSC_DDL_REMINDER_INITIAL_DELAY_MS=1000\nSC_DDL_REMINDER_INTERVAL_MS=3000\nSC_IM_PUSH_ENABLED=true\nSC_ONEBOT_BASE_URL=http://<mock-ip>:18080\n' >> /tmp/sc-ddl.env
+docker run -d --name sc-e2e-onebot --network scholarclaw-internal \
+  -v "$PWD/scripts/e2e/p8_mock_onebot.py:/mock.py:ro" \
+  python:3.11-slim python3 /mock.py --host 0.0.0.0 --port 18080
+docker compose --env-file /tmp/sc-ddl.env up -d --force-recreate sc-java-backend
+sc-python-ai/.venv/bin/python scripts/e2e/ddl_reminder_e2e.py --base-url http://127.0.0.1
+```
+
+覆盖：T-24h、T-6h、逾期 `OVERDUE`、两次跟进（第二次后 `follow_up_at=NULL`）、DND 内非紧急通知
+`RATE_LIMITED_DELAYED`、DND 内 T-6h 仍按紧急处理、重复扫描不重复通知。恢复：重新 `up -d --force-recreate`
+`sc-java-backend` 回到默认 `.env`（特别是 `SC_IM_PUSH_ENABLED=false`），`docker rm -f sc-e2e-onebot`，
+删除 `/tmp/sc-ddl.env`。
+
+## 9. 安全约束
 
 * 脚本中的 API Key 固定为 `sk-*-not-a-real-key`，只进入被 SSRF 前置拦截的请求体，不会出站；
 * 不读取、不打印 `.env` 中的任何真实密钥；

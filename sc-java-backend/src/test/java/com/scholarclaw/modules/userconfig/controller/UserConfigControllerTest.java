@@ -103,7 +103,10 @@ class UserConfigControllerTest {
                 courseCountProvider,
                 new ModelConfigSaveService(userConfigService, migrationPort, courseCountProvider),
                 org.mockito.Mockito.mock(
-                        com.scholarclaw.modules.userconfig.service.UserDeactivationService.class));
+                        com.scholarclaw.modules.userconfig.service.UserDeactivationService.class),
+                // 未配置 SC_PLATFORM_EMBEDDING_*：平台向量模型关闭，platform_embedding=false
+                new com.scholarclaw.modules.userconfig.service.PlatformEmbeddingDefaults(
+                        CRYPTO, new ModelConfigRules(false, ""), "", "", "", 0, ""));
         return MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))

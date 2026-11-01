@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -165,6 +166,25 @@ class AuthServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(AuthServiceTest::errorCodeOf)
                 .isEqualTo(ErrorCode.ACCOUNT_DEACTIVATED);
+    }
+
+    @Test
+    @DisplayName("登录时补齐平台默认向量模型；补齐失败不阻止登录")
+    void loginBackfillsPlatformEmbeddingWithoutBlockingLogin() {
+        String hash = passwordEncoder.encode("Correct2026");
+        when(userConfigService.findByUsername("zhangsan_cs"))
+                .thenReturn(Optional.of(account(hash, "ACTIVE")));
+        when(revocation.isDeactivated(10001L)).thenReturn(false);
+
+        assertThat(authService.login(new LoginRequest("zhangsan_cs", "Correct2026")).accessToken())
+                .isNotBlank();
+        verify(userConfigService).applyPlatformEmbeddingIfMissing(10001L);
+
+        // 补齐是便利逻辑：数据库临时不可用时，登录本身仍必须成功
+        doThrow(new IllegalStateException("db down"))
+                .when(userConfigService).applyPlatformEmbeddingIfMissing(10001L);
+        assertThat(authService.login(new LoginRequest("zhangsan_cs", "Correct2026")).accessToken())
+                .isNotBlank();
     }
 
     @Test

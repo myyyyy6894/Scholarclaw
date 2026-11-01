@@ -19,6 +19,7 @@ import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
 import com.scholarclaw.modules.userconfig.service.ModelConfigSaveService;
 import com.scholarclaw.modules.userconfig.service.ModelKeyBindingRules;
+import com.scholarclaw.modules.userconfig.service.PlatformEmbeddingDefaults;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.modules.userconfig.service.UserCourseCountProvider;
 import com.scholarclaw.modules.userconfig.service.UserDeactivationService;
@@ -76,6 +77,7 @@ public class UserConfigController {
     private final UserCourseCountProvider userCourseCountProvider;
     private final ModelConfigSaveService modelConfigSaveService;
     private final UserDeactivationService userDeactivationService;
+    private final PlatformEmbeddingDefaults platformEmbeddingDefaults;
 
     public UserConfigController(UserConfigService userConfigService,
                                 AesGcmCryptoService cryptoService,
@@ -85,7 +87,8 @@ public class UserConfigController {
                                 ModelKeyBindingRules modelKeyBindingRules,
                                 UserCourseCountProvider userCourseCountProvider,
                                 ModelConfigSaveService modelConfigSaveService,
-                                UserDeactivationService userDeactivationService) {
+                                UserDeactivationService userDeactivationService,
+                                PlatformEmbeddingDefaults platformEmbeddingDefaults) {
         this.userConfigService = userConfigService;
         this.cryptoService = cryptoService;
         this.baseUrlSecurityValidator = baseUrlSecurityValidator;
@@ -95,14 +98,20 @@ public class UserConfigController {
         this.userCourseCountProvider = userCourseCountProvider;
         this.modelConfigSaveService = modelConfigSaveService;
         this.userDeactivationService = userDeactivationService;
+        this.platformEmbeddingDefaults = platformEmbeddingDefaults;
+    }
+
+    /** 统一出口：把「平台是否提供向量模型」带进响应，避免各端点各写一遍。 */
+    private UserConfigVO vo(UserConfigEntity entity, Integer existingCourseCount) {
+        return toVO(entity, cryptoService, modelConfigRules, existingCourseCount,
+                platformEmbeddingDefaults.isEnabled());
     }
 
     /** `API-USER-001`：查询当前用户配置与脱敏密钥视图。 */
     @GetMapping("/config")
     public Result<UserConfigVO> getCurrentUserConfig() {
         Long userId = SecurityContextUtils.requireCurrentUserId();
-        return Result.ok("操作成功", toVO(currentEntity(), cryptoService, modelConfigRules,
-                userCourseCountProvider.countActiveCourses(userId)));
+        return Result.ok("操作成功", vo(currentEntity(), userCourseCountProvider.countActiveCourses(userId)));
     }
 
     /** `API-USER-002`：模型连通性与真实维度探测（无副作用，不写库）。 */
@@ -272,8 +281,7 @@ public class UserConfigController {
         String message = targetChanged && request.migrateExistingCourses()
                 ? "模型配置已保存，已有课程已提交重建" : "模型配置已保存";
         return Result.ok(message,
-                toVO(updated, cryptoService, modelConfigRules,
-                        userCourseCountProvider.countActiveCourses(userId)));
+                vo(updated, userCourseCountProvider.countActiveCourses(userId)));
     }
 
     /** Embedding 目标（provider + 规范化到字符串级的 Base URL + 模型名）是否发生变化。 */
@@ -312,7 +320,7 @@ public class UserConfigController {
         UserConfigEntity updated = userConfigService.updatePreferences(
                 userId, request.timezone(), dndStart, dndEnd,
                 platform == null ? null : platform.toUpperCase(Locale.ROOT), imUid);
-        return Result.ok("偏好设置已更新", toVO(updated, cryptoService, modelConfigRules));
+        return Result.ok("偏好设置已更新", vo(updated, null));
     }
 
     /** `API-USER-006`：二次确认注销当前账号，立即封禁并异步物理擦除全部个人数据。 */
@@ -348,7 +356,7 @@ public class UserConfigController {
                     "target 取值必须为 ALL、CHAT 或 EMBEDDING。");
         }
         UserConfigEntity updated = userConfigService.clearApiKeys(userId, clearChat, clearEmbedding);
-        return Result.ok("已销毁保存的 API Key", toVO(updated, cryptoService, modelConfigRules));
+        return Result.ok("已销毁保存的 API Key", vo(updated, null));
     }
 
     private UserConfigEntity currentEntity() {
@@ -447,16 +455,18 @@ public class UserConfigController {
 
     static UserConfigVO toVO(UserConfigEntity entity, AesGcmCryptoService cryptoService,
                              ModelConfigRules modelConfigRules) {
-        return toVO(entity, cryptoService, modelConfigRules, null);
+        return toVO(entity, cryptoService, modelConfigRules, null, false);
     }
 
     /**
      * 实体 → VO：只挑选可对外字段，密文与密码哈希永远不出库（{@code 03} §11.2）。
      *
      * @param existingCourseCount 仅 `API-USER-003` 返回；`API-USER-001` 传 null，字段被整体省略
+     * @param platformEmbedding   部署方是否统一提供向量模型（前端据此标注「平台默认」）
      */
     static UserConfigVO toVO(UserConfigEntity entity, AesGcmCryptoService cryptoService,
-                             ModelConfigRules modelConfigRules, Integer existingCourseCount) {
+                             ModelConfigRules modelConfigRules, Integer existingCourseCount,
+                             boolean platformEmbedding) {
         String chatKeyMasked = masked(entity.getChatApiKeyCipher(), cryptoService);
         String embeddingKeyMasked = masked(entity.getEmbeddingApiKeyCipher(), cryptoService);
         return new UserConfigVO(
@@ -480,6 +490,7 @@ public class UserConfigController {
                 entity.getBoundImUid(),
                 formatTimestamp(entity.getUpdatedAt(), entity.getTimezone()),
                 modelConfigRules.isChatConfigValid(entity),
+                platformEmbedding,
                 existingCourseCount);
     }
 

@@ -77,6 +77,8 @@ async function copyQq(): Promise<void> {
 const loading = ref(true)
 const loadError = ref('')
 const config = ref<UserConfig | null>(null)
+/** 部署方是否统一提供向量模型；为 true 时界面标注「平台默认」，用户只填对话模型。 */
+const platformEmbedding = computed(() => config.value?.platform_embedding === true)
 
 const modelForm = ref<ModelConfigFormState>(createModelForm())
 const { chatProbe, embeddingProbe, savedHint } = useModelProbeResults(modelForm)
@@ -414,13 +416,26 @@ function goToLogin(): void {
         </template>
 
         <el-alert
+          v-if="platformEmbedding"
+          class="settings-card__alert"
+          type="info"
+          :closable="false"
+          show-icon
+          title="向量模型由部署方统一提供"
+          :description="`当前使用 ${config?.default_embedding_model ?? '平台默认模型'}（${config?.default_embedding_dim ?? '—'} 维）。你只需要填写对话模型；如需改用其他向量模型，可在下方「默认 Embedding 模型」覆盖。`"
+        />
+        <el-alert
           v-if="!hasAnyConfig"
           class="settings-card__alert"
           type="info"
           :closable="false"
           show-icon
           title="尚未配置模型"
-          description="填写对话模型与默认 Embedding 模型后点击“测试连接”，确认可用再保存。保存时会重新探测并回填真实向量维度。"
+          :description="
+            platformEmbedding
+              ? '填写对话模型后点击“测试连接”，确认可用再保存。向量模型已由部署方提供，无需你配置。'
+              : '填写对话模型与默认 Embedding 模型后点击“测试连接”，确认可用再保存。保存时会重新探测并回填真实向量维度。'
+          "
         />
         <el-alert
           v-else
@@ -494,7 +509,9 @@ function goToLogin(): void {
             </span>
           </div>
 
-          <el-divider content-position="left">默认 Embedding 模型</el-divider>
+          <el-divider content-position="left">
+            {{ platformEmbedding ? '默认 Embedding 模型（平台默认）' : '默认 Embedding 模型' }}
+          </el-divider>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="8">
               <el-form-item label="供应商">

@@ -32,11 +32,14 @@ public class UserConfigService {
 
     private final UserConfigMapper userConfigMapper;
     private final PlatformEmbeddingDefaults platformEmbeddingDefaults;
+    private final ModelConfigRules modelConfigRules;
 
     public UserConfigService(UserConfigMapper userConfigMapper,
-                             PlatformEmbeddingDefaults platformEmbeddingDefaults) {
+                             PlatformEmbeddingDefaults platformEmbeddingDefaults,
+                             ModelConfigRules modelConfigRules) {
         this.userConfigMapper = userConfigMapper;
         this.platformEmbeddingDefaults = platformEmbeddingDefaults;
+        this.modelConfigRules = modelConfigRules;
     }
 
     /**
@@ -71,6 +74,36 @@ public class UserConfigService {
         userConfigMapper.insert(entity);
         // 重新读一次：让调用方拿到数据库真实落库值（含自增 user_id），而不是"我以为插进去的值"
         return userConfigMapper.selectById(entity.getUserId());
+    }
+
+    /**
+     * 登录时补齐平台默认向量模型（存量账号）。
+     *
+     * <p>注册时写入只覆盖新账号；平台配置启用前注册的用户、以及自己销毁过 Key 的用户，
+     * 每次登录检查一次：**只有 Embedding 配置无效时**才写入平台默认值，
+     * 用户自己配好的配置一律不覆盖（{@link ModelConfigRules#isEmbeddingConfigValid}）。
+     *
+     * <p>没有平台默认值时直接返回，保持"用户自行配置"的原有行为。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void applyPlatformEmbeddingIfMissing(Long userId) {
+        Optional<PlatformEmbeddingDefaults.Seed> seed = platformEmbeddingDefaults.seed();
+        if (userId == null || seed.isEmpty()) {
+            return;
+        }
+        UserConfigEntity entity = findById(userId).orElse(null);
+        if (entity == null || modelConfigRules.isEmbeddingConfigValid(entity)) {
+            return;
+        }
+        PlatformEmbeddingDefaults.Seed value = seed.get();
+        userConfigMapper.update(null, Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .set(UserConfigEntity::getDefaultEmbeddingProvider, value.provider())
+                .set(UserConfigEntity::getEmbeddingBaseUrl, value.baseUrl())
+                .set(UserConfigEntity::getDefaultEmbeddingModel, value.model())
+                .set(UserConfigEntity::getDefaultEmbeddingDim, value.dim())
+                .set(UserConfigEntity::getEmbeddingApiKeyCipher, value.apiKeyCipher())
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
     }
 
     /** 按用户名查询（登录与注册查重都命中 `uk_user_username`）。 */

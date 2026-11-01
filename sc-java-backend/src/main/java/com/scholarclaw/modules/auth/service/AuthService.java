@@ -87,9 +87,24 @@ public class AuthService {
         if (UserConfigService.isDeactivating(account) || tokenRevocationService.isDeactivated(account.getUserId())) {
             throw new BusinessException(ErrorCode.ACCOUNT_DEACTIVATED, "该账号已注销。");
         }
+        applyPlatformEmbedding(account.getUserId());
         JwtService.IssuedToken token = jwtService.issue(account.getUserId(), account.getUsername(), ROLE_STUDENT);
         log.info("用户登录成功 user_id={}", account.getUserId());
         return toResponse(account, token);
+    }
+
+    /**
+     * 平台提供向量模型时，给还没配置过 Embedding 的老账号补上默认值。
+     *
+     * <p>注册时才会写入，所以平台配置启用前注册的账号、以及自己销毁过 Key 的账号需要这条兜底。
+     * **失败不影响登录**：用户仍可手动配置，不该因为一次补齐失败被挡在门外。
+     */
+    private void applyPlatformEmbedding(Long userId) {
+        try {
+            userConfigService.applyPlatformEmbeddingIfMissing(userId);
+        } catch (RuntimeException e) {
+            log.warn("登录时补齐平台向量模型失败 user_id={} error={}", userId, e.getClass().getSimpleName());
+        }
     }
 
     /**

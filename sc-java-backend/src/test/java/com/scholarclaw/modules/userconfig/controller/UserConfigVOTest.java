@@ -100,15 +100,26 @@ class UserConfigVOTest {
     @DisplayName("existing_course_count：GET 与保存响应都返回，内部 null 查询时省略")
     void existingCourseCountIsPresentOnGetAndSave() throws Exception {
         String getJson = mapper().writeValueAsString(
-                UserConfigController.toVO(entity(), CRYPTO, RULES, 2));
+                UserConfigController.toVO(entity(), CRYPTO, RULES, 2, false));
         String saveJson = mapper().writeValueAsString(
-                UserConfigController.toVO(entity(), CRYPTO, RULES, 0));
+                UserConfigController.toVO(entity(), CRYPTO, RULES, 0, false));
         String internalJson = mapper().writeValueAsString(
                 UserConfigController.toVO(entity(), CRYPTO, RULES));
 
         assertThat(getJson).contains("\"existing_course_count\":2");
         assertThat(saveJson).contains("\"existing_course_count\":0");
         assertThat(internalJson).doesNotContain("existing_course_count");
+    }
+
+    @Test
+    @DisplayName("platform_embedding 反映部署方是否统一提供向量模型")
+    void platformEmbeddingFlagIsExposed() throws Exception {
+        assertThat(mapper().writeValueAsString(
+                UserConfigController.toVO(entity(), CRYPTO, RULES, null, true)))
+                .contains("\"platform_embedding\":true");
+        assertThat(mapper().writeValueAsString(
+                UserConfigController.toVO(entity(), CRYPTO, RULES, null, false)))
+                .contains("\"platform_embedding\":false");
     }
 
     @Test

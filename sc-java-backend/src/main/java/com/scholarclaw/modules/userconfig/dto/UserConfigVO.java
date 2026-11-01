@@ -39,5 +39,7 @@ public record UserConfigVO(
         String boundImUid,
         String updatedAt,
         boolean hasByokConfig,
+        /** 部署方是否统一提供向量模型（`SC_PLATFORM_EMBEDDING_*`）；前端据此标注「平台默认」。 */
+        boolean platformEmbedding,
         @JsonInclude(JsonInclude.Include.NON_NULL) Integer existingCourseCount) {
 }

@@ -35,6 +35,11 @@ export interface UserConfig {
   default_embedding_dim: number | null
   /** 服务端判定的“对话模型配置完整有效”；不得用 `chat_provider != null` 代替。 */
   has_byok_config: boolean
+  /**
+   * 部署方是否统一提供向量模型（`SC_PLATFORM_EMBEDDING_*`）。
+   * 为 true 时前端标注「平台默认」，用户只需要填对话模型。
+   */
+  platform_embedding?: boolean
   timezone: string
   dnd_start_time: string
   dnd_end_time: string

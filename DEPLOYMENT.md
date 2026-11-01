@@ -118,6 +118,9 @@ QQ 会话过期或触发风控时，NapCat 会一直重试快速登录并失败�
 脚本只能缓解"会话失效但账号还能快速登录"的情况。**如果连续失败 3 次，说明 QQ 要求重新扫码**，
 日志会提示用 `bash scripts/napcat/webui.sh url` 取带令牌的 WebUI 地址人工扫码。
 
+另外两条保护：容器启动 3 分钟内不干预（避免打断扫码）；**系统负载超过核数 2 倍时只记日志、
+不动容器**——被流量打满时接口无响应是机器卡，不是账号掉线，此时重启反而拖长恢复时间。
+
 降低掉线概率的已知做法：绑定手机号、不要频繁改头像/昵称、不要频繁重登同一账号、
 不要在另一台设备同时登录同一个 QQ。
 
@@ -352,7 +355,8 @@ scholarclaw-<时间戳>-manifest.txt      # 时间/提交号/各文件大小
 
 ```bash
 sudo crontab -e
-0 3 * * * cd /opt/ScholarClaw && /usr/bin/bash scripts/backup/backup.sh >> /var/log/sc-backup.log 2>&1
+0 3 * * * cd /opt/ScholarClaw && BACKUP_DIR=/var/backups/scholarclaw /usr/bin/bash scripts/backup/backup.sh >> /var/log/sc-backup.log 2>&1
+# 备份目录建议放在仓库之外（/var/backups/...），避免和代码、数据卷混在一起
 ```
 
 ⚠️ **必须把备份复制到另一台机器或对象存储**。只放在同一块磁盘上，磁盘坏了备份也一起没。

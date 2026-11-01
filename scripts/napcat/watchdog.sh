@@ -12,7 +12,9 @@
 # 三条边界（都是踩过的坑）：
 #   1. **启动中不重启**：容器刚起来时接口本来就没响应，贸然重启会让扫码窗口永远开不出来；
 #   2. **连续失败要停手**：QQ 要求重新扫码时重启多少次都没用，第 3 次之后只报警不动手；
-#   3. 状态写在 /tmp，重启容器不受影响；人工扫码成功后计数会自动清零。
+#   3. 状态写在 /tmp，重启容器不受影响；人工扫码成功后计数会自动清零；
+#   4. **系统过载时不动手**：被 DoS 打到负载 29 时，OneBot 接口只是被拖慢而非掉线，
+#      此时重启容器会打断快速登录，反而让 QQ 多花几分钟才回来（实测踩过）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -34,6 +36,14 @@ stamp() { date '+%F %T'; }
 if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true; then
   echo "$(stamp) 容器未运行，尝试启动"
   docker compose --profile onebot up -d "$CONTAINER" >/dev/null 2>&1 || true
+  exit 0
+fi
+
+# 过载保护：负载超过核数 2 倍时，接口无响应大概率是机器卡，不是账号掉线
+cores=$(nproc 2>/dev/null || echo 2)
+load1=$(awk '{print int($1)}' /proc/loadavg 2>/dev/null || echo 0)
+if (( load1 >= cores * 2 )); then
+  echo "$(stamp) 系统负载过高（load=${load1}，核数=${cores}），跳过本次检查"
   exit 0
 fi
 

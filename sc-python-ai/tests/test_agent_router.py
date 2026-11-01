@@ -32,6 +32,8 @@ from app.services.agent.intents import (
 )
 from app.services.agent.router import (
     INTENT_CONFIDENCE_THRESHOLD,
+    _InvalidIntentOutput,
+    _parse_model_response,
     MAX_ROUTING_ATTEMPTS,
     RouteSource,
     SingleAgentRouter,
@@ -408,3 +410,28 @@ def test_router_has_no_persistence_or_mq_dependency() -> None:
         source = path.read_text(encoding="utf-8")
         assert "basic_publish" not in source
         assert "DdlTaskService" not in source
+
+
+class TestModelOutputDiagnostics:
+    """模型输出异常时要能定位原因（踩过 deepseek-flash 稳定吐空串的坑）。"""
+
+    async def test_classification_budget_leaves_room_for_reasoning_models(self) -> None:
+        router, gateway, _ = _router(_response(_classify_content("CHITCHAT_HELP", 0.2)))
+
+        await router.route(_request("你好"))
+
+        assert gateway.calls[0]["payload"]["max_tokens"] >= 1024
+
+    def test_empty_content_error_says_empty(self) -> None:
+        with pytest.raises(_InvalidIntentOutput) as exc:
+            _parse_model_response(_response("   "))
+
+        assert "内容为空" in str(exc.value)
+
+    def test_invalid_json_error_includes_raw_snippet(self) -> None:
+        with pytest.raises(_InvalidIntentOutput) as exc:
+            _parse_model_response(_response("抱歉，我无法完成这个请求"))
+
+        assert "不是合法 JSON" in str(exc.value)
+        # 原始输出要带进错误信息，否则排查只能靠猜
+        assert "抱歉" in str(exc.value)

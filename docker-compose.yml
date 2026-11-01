@@ -333,6 +333,10 @@ services:
         condition: service_healthy
       sc-java-backend:
         condition: service_healthy
+      # 解析消费者启动就要连 RabbitMQ；整机重启时若它还起不来，
+      # 消费者会连不上直接退出，队列里的任务就没人消费（实测踩过）
+      sc-rabbitmq:
+        condition: service_healthy
     networks: [scholarclaw-internal]
     # 本地 Ollama 白名单场景：让 Python 的 SSRF 校验与出站请求都能解析 host.docker.internal。
     extra_hosts:
@@ -420,6 +424,8 @@ services:
       SC_OPERATOR_QQ: ${SC_OPERATOR_QQ:-}
       # 项目主页地址（非密钥，可选）：显示在使用指南的「联系与反馈」里。
       SC_PROJECT_URL: ${SC_PROJECT_URL:-}
+      # 机器人 QQ（非密钥）：让用户在指南里知道该加哪个号才会收到提醒。
+      SC_BOT_QQ: ${SC_NAPCAT_ACCOUNT:-}
     mem_limit: 128m
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]

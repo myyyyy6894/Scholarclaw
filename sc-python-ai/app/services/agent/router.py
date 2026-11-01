@@ -50,7 +50,10 @@ ROUTING_RETRY_DELAYS: tuple[float, ...] = (0.2,)
 MAX_ROUTING_READ_TIMEOUT_SECONDS = 4.0
 
 _GATEWAY_PATH = "chat/completions"
-_MAX_OUTPUT_TOKENS = 120
+# 意图分类本身只要一小段 JSON，但**推理类模型**（deepseek 的 reasoner 系列、
+# 部分中转的 flash 命名）会先用 token 做思考；预算太小会被思考吃光，
+# 返回的 content 是空串（实测 120 会稳定吐空）。给足余量，非推理模型不会因此多花钱。
+_MAX_OUTPUT_TOKENS = 1024
 
 _SYSTEM_PROMPT = (
     "你是 ScholarClaw 的单一意图路由组件。"
@@ -282,18 +285,26 @@ def _parse_model_response(response: dict[str, Any]) -> _ModelIntentOutput:
     except (KeyError, IndexError, TypeError) as exc:
         raise _InvalidIntentOutput("模型响应缺少 choices[0].message.content") from exc
     if not isinstance(content, str) or not content.strip():
-        raise _InvalidIntentOutput("模型响应内容为空")
+        raise _InvalidIntentOutput(
+            f"模型响应内容为空（raw={_snippet(content) if isinstance(content, str) else type(content).__name__}）"
+        )
     text = _strip_code_fence(content)
     try:
         decoded = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise _InvalidIntentOutput("模型响应不是合法 JSON") from exc
+        raise _InvalidIntentOutput(f"模型响应不是合法 JSON（raw={_snippet(text)}）") from exc
     if not isinstance(decoded, dict):
         raise _InvalidIntentOutput("模型响应不是 JSON 对象")
     try:
         return _ModelIntentOutput.model_validate(decoded)
     except ValidationError as exc:
         raise _InvalidIntentOutput("模型响应不符合意图契约") from exc
+
+
+def _snippet(value: str, limit: int = 200) -> str:
+    """把模型原始输出压成一行短片段，便于日志定位（不含任何密钥）。"""
+    text = " ".join(str(value).split())
+    return text[:limit] + ("…" if len(text) > limit else "")
 
 
 def _strip_code_fence(content: str) -> str:

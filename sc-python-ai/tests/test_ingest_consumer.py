@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import aio_pika
 import httpx
 import pytest
 
@@ -171,3 +172,55 @@ async def test_consumer_retries_retryable_error(tmp_path: Path) -> None:
 
 async def _no_sleep(_seconds: float) -> None:
     return None
+
+
+@pytest.mark.asyncio
+async def test_start_retries_until_rabbitmq_ready(tmp_path: Path, monkeypatch) -> None:
+    """容器比 RabbitMQ 先就绪时，消费者要自己重试，不能直接退出把任务晾在队列里。"""
+    attempts = {"count": 0}
+    consumed = {"called": False}
+
+    class _Queue:
+        async def consume(self, handler):
+            consumed["called"] = True
+
+    class _Channel:
+        async def set_qos(self, **_kwargs) -> None:
+            return None
+
+        async def declare_queue(self, _name, passive: bool = False):
+            return _Queue()
+
+    class _Connection:
+        async def channel(self):
+            return _Channel()
+
+    async def fake_connect_robust(**_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise aio_pika.exceptions.AMQPConnectionError("refused")
+        return _Connection()
+
+    monkeypatch.setattr("app.services.ingest.consumer.aio_pika.connect_robust", fake_connect_robust)
+
+    consumer = IngestConsumer(_settings(tmp_path), context_client=_ContextClient(_context("raw/x.txt")),
+                              result_sink=_Sink(), indexer=_Indexer(), sleep=_no_sleep)
+    await consumer.start()
+
+    assert attempts["count"] == 3
+    assert consumed["called"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_gives_up_after_retries(tmp_path: Path, monkeypatch) -> None:
+    """重试用尽后仍然抛错，让容器退出交给 restart 策略，而不是假装启动成功。"""
+    async def always_fail(**_kwargs):
+        raise aio_pika.exceptions.AMQPConnectionError("refused")
+
+    monkeypatch.setattr("app.services.ingest.consumer.aio_pika.connect_robust", always_fail)
+
+    consumer = IngestConsumer(_settings(tmp_path), context_client=_ContextClient(_context("raw/x.txt")),
+                              result_sink=_Sink(), indexer=_Indexer(), sleep=_no_sleep)
+
+    with pytest.raises(aio_pika.exceptions.AMQPConnectionError):
+        await consumer.start()

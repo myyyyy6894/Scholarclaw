@@ -28,6 +28,9 @@ from app.services.ingest.pipeline import parse_task
 logger = get_logger(__name__)
 
 RETRY_DELAYS_SECONDS = (5.0, 15.0, 45.0)
+
+# 启动期连接重试间隔（秒）：0 表示立即首试，之后按此序列退避，总计约 30 秒
+STARTUP_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 15.0)
 _ALLOWED_JOB_TYPES = frozenset({"INITIAL_INGEST", "RETRY_FAILED", "REINDEX"})
 
 
@@ -116,12 +119,35 @@ class IngestConsumer:
         self._channel: aio_pika.abc.AbstractRobustChannel | None = None
 
     async def start(self) -> None:
-        self._connection = await aio_pika.connect_robust(
-            host=self._settings.rabbitmq_host,
-            port=self._settings.rabbitmq_port,
-            login=self._settings.rabbitmq_user,
-            password=self._settings.rabbitmq_password,
-        )
+        """建立连接并开始消费。
+
+        **启动期必须重试**：容器可能比 RabbitMQ 先就绪（整机重启、冷启动），
+        而 `connect_robust` 只在"连接建立之后"自动重连，首次连不上会直接抛错，
+        进程就此退出——队列里的解析任务会一直堆着没人消费（实测踩过：
+        重启后 8 个任务排队 10 分钟无消费者）。
+        """
+        last_error: Exception | None = None
+        for attempt, delay in enumerate((0, *STARTUP_RETRY_DELAYS_SECONDS), start=1):
+            if delay:
+                await self._sleep(delay)
+            try:
+                self._connection = await aio_pika.connect_robust(
+                    host=self._settings.rabbitmq_host,
+                    port=self._settings.rabbitmq_port,
+                    login=self._settings.rabbitmq_user,
+                    password=self._settings.rabbitmq_password,
+                )
+                break
+            except (aio_pika.exceptions.AMQPConnectionError, OSError) as error:
+                last_error = error
+                logger.warning("RabbitMQ 连接失败（第 %d 次），稍后重试", attempt)
+        else:
+            # 重试用尽：抛出去让容器退出，由 restart 策略再起一轮
+            logger.error("RabbitMQ 多次连接失败，放弃启动消费者")
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("RabbitMQ 连接失败")
+
         self._channel = await self._connection.channel()
         await self._channel.set_qos(prefetch_count=1)
         queue = await self._channel.declare_queue(self._settings.mq_ingest_queue, passive=True)

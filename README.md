@@ -1,302 +1,150 @@
 # ScholarClaw（智学爪）
 
-面向计算机/工科学生的双端（IM + PC Web）AI 学习助手。单机 Docker Compose 部署，Java + Python 异构架构。
+面向计算机/工科学生的 AI 学习助手：上传课件 → 自动解析入库 → 基于课程知识库的溯源问答 → 从聊天里提取 DDL 并做提醒。
 
-**当前进度：P0~P5、P7、P8 已完成并验收 `DONE`（P8 由负责人 2026-10-31 验收）；P6 的 TASK-601~605 已验收 `DONE`，但 TASK-606（真实 RAG Golden Dataset 质量准出）于 2026-10-31 复核改为 `IN_REVIEW` / `BLOCKED`——现有 Hit@4/拒答数字来自合成语料与哈希向量替身，只算链路冒烟，不能作为质量准出证据**；P9 / TASK-901（级联清理）、TASK-902（孤儿资源扫描与 GC）、TASK-903（安全回归）、TASK-904（两条核心业务闭环验收）、TASK-905（性能与 RAG 基线）与 TASK-906（部署与交付文档）已实现，**P9 全部任务 `IN_REVIEW`，待负责人逐项验收**；证据见 `SECURITY_REGRESSION.md`、`MVP_ACCEPTANCE.md`、`PERFORMANCE_BASELINE.md` 与 `DELIVERY.md`（性能数字为本地 mock 口径，不代表真实供应商）。P6 覆盖单路稠密检索、父块权威回查、RAG 生成与引用校验、SSE 问答、Web 问答工作台；TASK-606 已建立真实评测框架（`tests/eval_quality.py` + 真实数据集模板），但**真实课程 PDF、人工标注与真实供应商 Key 尚未提供，风险保留**。P7 覆盖 DDL 结构化提取与四级时间、持久化状态机、三层幂等与变更草案、Web DDL 工作台与 Single Agent Router。P8 覆盖 DDL 定时提醒、站内通知中心、OneBot 11 入站适配、IM 出站限流/重试/`FALLBACK_WEB_ONLY` 降级与 Web 通知中心。
-
-**证据边界（不要混写）**：P8 自动化 E2E 使用 `scripts/e2e/p8_mock_onebot.py` 协议替身（P8 API 48/48、浏览器 10/10），**不是真实 NapCat/QQ**；真实 QQ 已手工验证私聊入站、回复与真实 DeepSeek DDL 提取（task 827）；真实 QQ 主动提醒（T-6h）已验证（task 923 → 通知 1327 `SENT_IM`）；**群聊 `@` 真实回复、群文件下载/群权限、真实平台限流/风控仍未验证**，负责人已接受为上线前补测项（RISK-103/104）。IM 投递语义为「正常路径至少一次 + 本地去重」，**不是严格恰好一次**（RISK-110）。任务状态以 `TASK_TRACKER.md` §1 为准。
+单机 Docker Compose 部署，Java（业务与状态）+ Python（AI 计算）+ Vue 3 工作台三端一体。
 
 ---
 
-## 1. 架构与职责边界
+## 功能
 
-| 组成 | 技术基线 | 职责 | 硬约束 |
-|---|---|---|---|
-| `sc-java-backend` | Java 21 + Spring Boot 3.5.x + Spring Security 6 + MyBatis-Plus 3.5.x | 业务与状态权威中心（SoT）：认证鉴权、BYOK 加解密、课程/文档/任务状态机、定时调度、MQ 生产与 DLQ | 单进程**模块化单体**（包级 Strict DAG）；唯一连接 MySQL；唯一持有 `SC_MASTER_KEY` |
-| `sc-python-ai` | Python 3.11 + FastAPI 0.115.x + Pydantic v2 + httpx + pypdf | 无状态 AI 计算引擎：意图路由、DDL 结构化提取、PDF/MD/TXT 解析切分、Embedding、ChromaDB 读写、RAG 与引用校验 | **不得**连接 MySQL/Redis；**不得**持有主密钥或数据库凭据；共享卷只读 |
-| Web 工作台 | Vue 3 + TypeScript + Vite + Pinia + Element Plus | 登录与 BYOK 配置、课程与文档管理、SSE 溯源问答、DDL 看板、站内通知 | 不维护多套前端；`BIGINT` ID 全程按十进制字符串处理 |
-| 基础设施 | MySQL 8.0 / Redis 7.2 / RabbitMQ 3.13 / ChromaDB 0.5.x | MySQL 唯一权威源；Redis 只存带 TTL 的运行时状态（不做 MySQL 二级缓存）；RabbitMQ **仅**用于文档解析/重试/重建；ChromaDB 仅作可重建的派生向量索引 | 见 `docs/02` 第 8、13 章 |
+**Web 工作台**
 
-**两条不可违反的规则：**
+- **课程空间**：多课程隔离，每门课独立的向量模型绑定与索引版本
+- **知识库**：PDF / MD / TXT 上传（≤50 MB），异步解析、父块切分、向量入库，失败可重试、可重建
+- **AI 学习**：SSE 流式问答，回答带引用卡片，可追溯到原始课件片段；低相关度直接拒答而不是编造
+- **DDL 任务**：从自然语言里提取截止时间（支持"下周三"、"月底"这类相对时间），看板 / 月历 / 待确认收件箱 / 变更草案三向决策
+- **站内通知**：DDL 的 T-24h / T-6h / 逾期提醒，支持免打扰时段
+- **个人设置**：BYOK 模型配置（Key 服务端加密存储，前端只显示掩码）、主题切换（浅色/深色/跟随系统）
 
-1. **Single-Writer**：每张业务表只由一个 Java 模块拥有写入权；跨模块只允许注入对方公开的 `*Service`，严禁跨模块注入 `*Mapper`。
-2. **Strict DAG**：模块依赖是有向无环的，由 `sc-java-backend` 中的 ArchUnit 测试自动断言，违反即构建失败。
+**QQ 机器人（可选）**
 
----
+通过 OneBot 11 协议端（如 NapCat）接入，私聊发消息即可提取 DDL、接收主动提醒。不启用时 Web 功能完整可用。
 
-## 2. 仓库结构
+### 尚未实现
 
-```
-ScholarClaw/
-├── docs/                     # 强约束设计文档（01 需求 / 02 架构 / 03 数据库 / 04 API / 05 规范 / 06 任务计划）
-│                             # 注意：按项目决定未纳入版本管理（见 .gitignore），但文件实体在工作区
-├── TASK_TRACKER.md           # 需求—任务—接口—数据—测试追踪表；任务状态的唯一事实来源
-├── ENVIRONMENT.md            # 仓库现状核验、ENV-01~ENV-12 差异风险、可复现命令清单
-├── AGENT_HANDOFF.md          # 跨会话交接记忆入口
-├── .agent-handoff/           # 交接状态文件（snapshot / risks / backlog / validation / decisions / workspace …）
-├── sc-java-backend/          # Java 业务与状态权威中心（已建立骨架）
-├── sc-python-ai/             # Python 无状态 AI 计算引擎（已建立服务骨架）
-├── sc-web-frontend/          # Vue 3 PC Web 工作台（已建立骨架）
-├── docker-compose.yml        # 单机部署编排（7 个容器 + 双网络 + 5 个持久化卷）
-├── .env.example              # 部署环境变量示例（真实值放 .env，已 gitignore）
-├── DEPLOYMENT.md             # 部署手册：端口边界、卷权限、注入边界、健康检查链、问题定位
-├── DELIVERY.md               # MVP 交付包说明：清单、首次启动、验证、故障恢复（TASK-906）
-├── INTERNAL_API_VERIFICATION.md  # 内部通信与日志追踪的验证记录（TASK-105 交付物）
-├── SECURITY_REGRESSION.md       # 安全回归报告（TASK-903 交付物）
-├── MVP_ACCEPTANCE.md            # 两条核心业务闭环验收记录（TASK-904 交付物）
-└── PERFORMANCE_BASELINE.md      # 性能与 RAG 基线报告（TASK-905 交付物，本地/mock 口径）
-```
-
-**开发方式：文档驱动。** `docs/01`~`docs/06` 是唯一依据；如发现文档之间不一致，先说明原因与方案并等待确认，不得擅自修改文档。
+课程表、全局搜索、公开的系统状态接口。界面上对应位置会明确标注「暂未开发」，不会用假数据填充。
 
 ---
 
-## 3. 构建与验证命令
+## 架构
 
-### 3.1 Java（已实测）
+| 组件 | 技术 | 职责边界 |
+|---|---|---|
+| `sc-java-backend` | Java 21 + Spring Boot 3.5 + MyBatis-Plus | 唯一业务权威源：认证、BYOK 加解密、课程/文档/任务状态机、定时调度、MQ |
+| `sc-python-ai` | Python 3.11 + FastAPI | 无状态 AI 计算：意图路由、DDL 提取、PDF 解析切分、Embedding、RAG 与引用校验；**不连 MySQL/Redis，不持主密钥** |
+| `sc-web-frontend` | Vue 3 + TypeScript + Vite + Pinia + Element Plus | PC 工作台；产物由 Nginx 托管 |
+| 基础设施 | MySQL 8.0 / Redis 7.2 / RabbitMQ 3.13 / ChromaDB 0.5 | MySQL 是唯一事实源；Redis 只存带 TTL 的运行时状态；Chroma 是可重建的派生索引 |
 
-```bash
-# 编译
-mvn -f sc-java-backend/pom.xml -B -DskipTests clean compile
+对外只暴露一个端口（Nginx 的 80）；数据库、中间件、Python 全部只在内部网络，不映射宿主机端口。
 
-# 全量单元测试（含架构契约断言）
-mvn -f sc-java-backend/pom.xml -B test
-```
+---
 
-前置：JDK 21（本机 21.0.12.1）、Maven 3.8.7。依赖经 `~/.m2/settings.xml` 的阿里云镜像下载。
+## 快速开始
 
-**启动验证：** 已由容器承载实测（TASK-104/105）：`sc-java-backend` 容器 `healthy`，健康接口
-`GET /internal/api/v1/health` 实测返回自身依赖（MySQL/Redis/RabbitMQ）与跨服务观测 `data.peers`。
-本机直接 `mvn spring-boot:run` 仍不作为验证路径（缺少 DB/Redis 注入，探针会按未注入不注册处理）。
-接口与日志实测结论见 `INTERNAL_API_VERIFICATION.md`。
+### 前置要求
 
-### 3.2 Python（已实测）
+| 项 | 要求 |
+|---|---|
+| Docker Engine | ≥ 26（用到 `volume.subpath`） |
+| Docker Compose | ≥ 2.26（`docker compose` v2 插件） |
+| JDK / Maven | 21 / 3.9+（Java 镜像只 `COPY` 预构建 jar，需先在宿主机打包） |
+| 内存 | ≥ 4 GiB（空闲实测约 0.6 GiB，各容器上限合计约 6 GiB） |
+| 磁盘 | ≥ 10 GiB（镜像约 2.4 GB + 数据卷 + 课件） |
 
-```bash
-# 建虚拟环境（本机 Python 3.13；容器内 pin 3.11，见 ENVIRONMENT.md ENV-02）
-python3 -m venv sc-python-ai/.venv
-sc-python-ai/.venv/bin/python -m pip install -e 'sc-python-ai[dev]'
-
-# 推荐：可复现测试入口（测试依赖来自 requirements-dev.lock.txt，不污染运行时镜像）
-scripts/test_python.sh host        # 宿主 venv
-scripts/test_python.sh container   # Python 3.11 测试镜像（scholarclaw/sc-python-ai-test:1.0.0）
-scripts/test_python.sh all         # 两者都跑
-
-# 等价的手动命令
-cd sc-python-ai && .venv/bin/python -m pytest
-
-# 本地启动（仅绑定环回，不暴露到局域网；容器内由 Compose 决定绑定与端口）
-cd sc-python-ai
-.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18000
-```
-
-**测试依赖：** 生产镜像 `scholarclaw/sc-python-ai:1.0.0` **不安装 pytest**。容器内测试用独立的
-`sc-python-ai/Dockerfile.test` 构建测试镜像，依赖固定为 `sc-python-ai/requirements-dev.lock.txt`；
-不要再用临时目录挂载 pytest 的方式作为唯一验证手段。
-
-**尚未验证：** ChromaDB 客户端已在 TASK-504 落地并通过真实容器验证；RabbitMQ 生产端、解析消费者、Java 回调与向量索引已分别在 TASK-501~504 落地，DLQ 与课程状态收敛已在 TASK-505 落地；TASK-506 已用真实 PDF 验证完整闭环，消费者默认开启。模型探测接口已在 P3 落地。容器化与编排已由 TASK-104 完成（见 §3.4），容器内 Python 3.11 环境已用锁文件 `sc-python-ai/requirements.lock.txt` 复现并跑通全部测试。
-
-### 3.3 Web 前端（已实测）
+### 部署
 
 ```bash
-cd sc-web-frontend
-npm install                   # 本机经代理访问 npmjs 极慢，可用 --registry=https://registry.npmmirror.com
-npm run dev                   # 开发服务器，仅绑定 127.0.0.1:5173
-npm run check                 # 完整门禁：类型检查 + ESLint + 单元测试
-npm run type-check            # vue-tsc --noEmit
-npm run lint                  # eslint . --max-warnings 0（含类型感知规则）
-npm run test                  # vitest run
-npm run build                 # 先类型检查，再 vite build 产出 dist/
-npm run preview               # 预览构建产物
-```
+git clone <repo> && cd ScholarClaw
 
-ESLint 启用了**类型感知规则**，其中 `no-floating-promises` / `no-misused-promises` 专门拦截
-"忘了 await 的异步调用"——这类 bug `tsc` 查不出来，而本项目前端全是异步（接口请求、SSE 流式问答）。
-没有引入 Prettier（避免新增依赖与全量重排）。
+# 1. 环境变量（.env 已 gitignore，绝不要提交）
+cp .env.example .env && chmod 600 .env
+#    必须替换这 7 项，缺一个 compose 会直接拒绝启动：
+#      SC_MASTER_KEY        32 字节 Base64  →  openssl rand -base64 32
+#      SC_JWT_SECRET        至少 32 字节    →  openssl rand -base64 48
+#      SC_DB_PASSWORD / SC_DB_ROOT_PASSWORD
+#      SC_REDIS_PASSWORD / SC_RABBITMQ_PASSWORD / SC_INTERNAL_SERVICE_TOKEN
 
-**已验证：** 与真实后端联调（经 Nginx）：登录/注册、BYOK 探测与保存、密钥掩码、偏好更新、
-销毁 Key 均可正常走通；浏览器端到端交互用系统 Chrome 执行（Playwright 临时环境，未加入项目依赖）。
-页面路由：`/`（首页）、`/login`（登录/注册）、`/courses`（课程空间）、`/knowledge`（课程知识库）、`/settings`（个人设置），除登录/注册外均需登录。
-生产态已由 Nginx 托管（见 §3.4）。
+# 2. 校验编排
+docker compose config
 
-### 3.4 部署（Docker Compose，已实测）
+# 3. 构建 Java 可执行 jar（必须在宿主机执行）
+mvn -f sc-java-backend/pom.xml -B -DskipTests package
 
-```bash
-cp .env.example .env && chmod 600 .env   # 填入真实值；SC_MASTER_KEY 必须是 32 字节 Base64
-mvn -f sc-java-backend/pom.xml -B -DskipTests package   # Java 镜像依赖宿主机预构建的 jar
+# 4. 构建并启动
 docker compose build
 docker compose up -d
-docker compose ps                        # 等到 7 个容器都 healthy
+
+# 5. 等 7 个容器全部 healthy
+docker compose ps
 ```
 
-入口：`http://<宿主机>:80`。七个容器（MySQL / Redis / RabbitMQ / ChromaDB / Java / Python / Nginx）
-与端口边界、卷权限、环境变量注入边界、健康检查依赖链、已知限制**详见 `DEPLOYMENT.md`**。
+打开 `http://<服务器IP>:${SC_WEB_HTTP_PORT}` 即可访问，注册后先在**个人设置**里填一个对话模型 API Key 就能用。
 
-**可选 OneBot / NapCat（`onebot` profile）**：接入真实 QQ 时额外启动社区 NapCat 容器：
+> `SC_MASTER_KEY` 是用户 API Key 的加密主密钥。**丢失后所有已保存的用户密钥永久无法解密**，务必离线备份。
 
-```bash
-docker compose --profile onebot up -d sc-napcat-onebot
-# WebUI（仅回环）：http://127.0.0.1:6099   HTTP Action API（仅回环）：http://127.0.0.1:3000
+### 常用配置
+
+| 变量 | 作用 |
+|---|---|
+| `SC_WEB_HTTP_PORT` | 对外端口，默认 80 |
+| `SC_PLATFORM_EMBEDDING_*` | 平台自带的向量模型（见下），留空则要求用户自己配 |
+| `SC_OPERATOR_QQ` | 部署者联系 QQ，显示在「帮助与反馈」与设置页；留空则隐藏 |
+| `SC_JWT_TTL_SECONDS` | 登录有效期，默认 7 天 |
+| `SC_NAPCAT_*` | 可选 QQ 机器人配置，见 `DEPLOYMENT.md` |
+
+**平台自带向量模型**：如果你自己部署了 Embedding 服务，想让用户只填对话模型 Key，就配齐这五项：
+
+```dotenv
+SC_PLATFORM_EMBEDDING_PROVIDER=OPENAI_COMPATIBLE   # 或 ZHIPU / OLLAMA
+SC_PLATFORM_EMBEDDING_BASE_URL=https://your-embed.example.com/v1
+SC_PLATFORM_EMBEDDING_MODEL=bge-m3
+SC_PLATFORM_EMBEDDING_DIM=1024
+SC_PLATFORM_EMBEDDING_API_KEY=sk-xxx
 ```
 
-该容器只加入 `scholarclaw-internal` 网络，端口默认只绑定 `127.0.0.1`；Java 通过
-`SC_ONEBOT_BASE_URL=http://sc-napcat-onebot:3000` 调用它，入站上报地址为
-`http://sc-java-backend:8080/webhooks/onebot/v11`。默认 `docker compose up -d` **不会**创建该容器。
-`.env` 填 `SC_NAPCAT_ACCOUNT=<QQ号>` 可开启快速登录（重启不再扫码）；WebUI 令牌用
-`scripts/napcat/webui.sh` 直接打印登录地址或重设，不必翻 `webui.json`/容器日志。
-详细步骤（登录、HTTP 服务端、上报地址、Token、文件下载 Origin 白名单）见 `DEPLOYMENT.md` §3.1。
+启用后，**新注册账号**自动带上这套 Embedding（已有账号不受影响，用户仍可在设置页覆盖）。五项缺一项 Java 会拒绝启动，避免"以为开了其实没开"。
 
-**QQ 是可选通道**：由部署者用自己的账号运行 NapCat，终端用户不需要任何 QQ 侧操作。
-Web 工作台功能完整；用户不绑定 QQ 也能正常使用，站内通知始终保留，绑定只是让提醒额外推送到 QQ。
-多用户各自使用自己的 QQ 作为机器人不属于当前架构（一个部署 = 一个机器人 QQ）。
+地址是内网/本地时（如 `http://127.0.0.1:11434`），还需放行白名单，否则建课时的安全校验会拒绝：
 
-要点提醒：**只有 Nginx 暴露宿主机端口**；`/internal/**` 被 Nginx 阻断为 404；
-Java 与 Python 共享同一 uid（10001）但 Python 对共享卷是只读挂载。
-
-内部通信自检（两个方向都由容器 healthcheck 每 15s 自动验证，也可手动复现）：
-
-```bash
-# Java：自身依赖（判定 data.status）+ 跨服务观测 data.peers（不参与判定）
-docker exec sc-java-backend wget -q -O- http://127.0.0.1:8080/internal/api/v1/health
-# → {"code":"OK","data":{"service":"sc-java-backend","status":"UP",
-#      "dependencies":{"mysql":"UP","redis":"UP","rabbitmq":"UP"},
-#      "peers":{"python_ai":"UP"}},…}
-
-# Python：自身依赖（共享卷只读挂载 + ChromaDB）
-docker exec sc-python-ai python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/internal/ai/v1/health').read().decode())"
-
-# Python 容器 healthcheck 本体：解析 data.status，并携带令牌+追踪号真实调用 Java 健康接口
-docker exec sc-python-ai python3 /app/healthcheck.py
-# → HEALTHY: 自身依赖 UP，且与 sc-java-backend 内部健康接口双向调通
+```dotenv
+SC_ALLOW_LOCAL_MODEL_BASE_URL=true
+SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://127.0.0.1:11434
 ```
-
-两条容易踩的边界（都已在 `DEPLOYMENT.md` 写明）：
-
-- 健康接口**恒返回 HTTP 200**，依赖状态只在 `data.status` 里；Compose 的 healthcheck 必须解析响应体，
-  只看 HTTP 状态等于只看进程存活。
-- `data.status` **只由服务自身依赖决定**，`data.peers` 只上报跨服务连通性。Java 的健康状态不得依赖
-  Python 是否在跑：`02` §13.3 要求 Python 等 Java 健康后才启动，若互相判定就会冷启动死锁（已实测复现）。
-
-验证细节与证据见 `INTERNAL_API_VERIFICATION.md`；排查手册见 `DEPLOYMENT.md` §9。
-
-### 3.5 数据库初始化与结构核对（已实测）
-
-```bash
-# 迁移脚本随 Java 启动自动执行（有序 SQL + 版本表 sc_schema_migration，不引入 Flyway）
-docker compose logs sc-java-backend | grep 数据库迁移
-docker compose exec -T sc-mysql sh -c 'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -D scholarclaw \
-  -e "SELECT version, script, success, execution_ms, applied_at FROM sc_schema_migration"'
-
-# 手工迁移（可选；会按版本表跳过已成功版本，并在成功后同步写入 sc_schema_migration 与 checksum）
-bash scripts/db/manual_migrate.sh
-
-# 结构核对：把真实库与 docs/03 的数据字典/索引表/约束名逐项比对（只读，退出码 0=一致）
-python3 scripts/db/verify_mvp_schema.py
-```
-
-当前版本 **1.0.5**：`V1.0.0` 建 7 张业务核心表，`V1.0.4` 调整第二次跟进后的 `follow_up_at` 约束，
-`V1.0.5` 新增 `t_vector_cleanup_outbox` 与 `t_course_deletion_receipt` 两张删除恢复辅助表；
-回滚脚本为 `db/rollback/U1.0.4__rollback_p8_review_fixes.sql` 与
-`db/rollback/U1.0.5__rollback_p9_review_recovery.sql`。`v1.1` 的 `t_ddl_subtask` /
-`t_exam_wrong_book` 按 `03` §1.4 留待 `V1.1.0` 增量脚本（`MigrationScriptTest` 有断言守着，防止提前建表）。
-结构核对项数以 `verify_mvp_schema.py` 实际输出为准。
-
-### 3.6 认证闭环冒烟（已实测）
-
-```bash
-B=http://127.0.0.1:80/api/v1        # 经 Nginx → Java
-curl -s -X POST $B/auth/register -H 'Content-Type: application/json' \
-     -d '{"username":"zhangsan_cs","password":"Passw0rd2026"}'          # 201 + access_token
-curl -s -X POST $B/auth/login    -H 'Content-Type: application/json' \
-     -d '{"username":"zhangsan_cs","password":"Passw0rd2026"}'          # 200 + access_token
-curl -s $B/user/config -H "Authorization: Bearer <token>"               # 200，只返回本人数据
-curl -s -X POST $B/auth/logout -H "Authorization: Bearer <token>"       # 200；之后同一 token → 401 AUTH_TOKEN_REVOKED
-```
-
-身份只来自 JWT（`04` §2.7.2）：伪造 `X-User-Id` 或请求体塞 `user_id` 都不会改变当前用户。
-密码为 BCrypt(10) 哈希；注册**不预建**默认课程（`03` §9.3）。完整 E2E 结果见 `TASK_TRACKER.md` §6 的 TASK-202 记录。
-
-### 3.7 BYOK 模型配置冒烟（已实测）
-
-```bash
-B=http://127.0.0.1:80/api/v1
-T="Authorization: Bearer <token>"
-
-# 探测（不写库）：公网地址必须是 https；本地 Ollama 需先加入白名单
-curl -s -X POST $B/user/model-config/probe -H "$T" -H 'Content-Type: application/json' \
-  -d '{"probe_type":"EMBEDDING","provider":"OPENAI_COMPATIBLE","base_url":"https://api.siliconflow.cn/v1","api_key":"<KEY>","model_name":"BAAI/bge-m3"}'
-
-# 保存：先探测成功再落库；Key 只以 AES-256-GCM 密文入库，响应只回掩码
-curl -s -X PUT $B/user/model-config -H "$T" -H 'Content-Type: application/json' \
-  -d '{"chat_provider":"DEEPSEEK","chat_base_url":"https://api.deepseek.com/v1","chat_api_key":"<KEY>","chat_model":"deepseek-chat","default_embedding_provider":"OPENAI_COMPATIBLE","embedding_base_url":"https://api.siliconflow.cn/v1","reuse_chat_api_key":true,"default_embedding_model":"BAAI/bge-m3"}'
-
-# 销毁已保存的 Key（幂等）：target = ALL / CHAT / EMBEDDING
-curl -s -X DELETE "$B/user/model-config/keys?target=ALL" -H "$T"
-```
-
-SSRF 拦截返回 `400 E-SYS-02`；探测失败不会覆盖已有配置。完整 E2E 结果见 `TASK_TRACKER.md` §6 的 TASK-203 记录。
 
 ---
 
-## 4. 配置与环境变量
+## 上线前请自行补齐
 
-真实密钥只通过环境变量注入，**绝不写入仓库**。当前已使用的配置项：
+这些不在仓库默认配置里，公网部署前需要自己处理：
 
-| 配置项 | 环境变量 | 默认值 | 说明 |
-|---|---|---|---|
-| `sc.timezone` | `SC_TIMEZONE` | `Asia/Shanghai` | 用户时区与时间序列化基准。**必须显式固定**，严禁依赖宿主机/JVM 默认时区（见 `ENVIRONMENT.md` ENV-01） |
-| `sc.internal.token` | `SC_INTERNAL_SERVICE_TOKEN` | 空 | Java ↔ Python 内部调用鉴权令牌（请求头 `X-Internal-Token`）。**留空时 `InternalTokenAuthFilter` 对所有 `/internal/**` 一律拒绝（失败关闭）**，不会"跳过校验" |
-| `sc.storage`（Python） | `SC_STORAGE_RAW_PATH` | `/data/scholarclaw/storage/raw` | 共享卷只读挂载点；`sc-python-ai` 只读访问，绝不写入或删除源文件。Java 侧根目录固定为 `/data/scholarclaw/storage`，**不提供环境变量覆盖** |
-| `sc.log-level`（Python） | `SC_LOG_LEVEL` | `INFO` | 本服务日志级别 |
-| 模型出站超时（Python） | `SC_MODEL_CONNECT_TIMEOUT_SECONDS` / `SC_MODEL_READ_TIMEOUT_SECONDS` | `5` / `30` | 受控模型网关的出站超时 |
-| 模型探测超时（Java） | `SC_MODEL_CONNECT_TIMEOUT_MILLIS` / `SC_MODEL_READ_TIMEOUT_MILLIS` | `5000` / `10000` | Java → Python 模型探测客户端的连接/读取超时 |
-| 本地模型白名单（Java + Python） | `SC_ALLOW_LOCAL_MODEL_BASE_URL` / `SC_LOCAL_MODEL_ALLOWED_ORIGINS` | `false` / 空 | 默认关闭；显式开启后才允许校验本地 Ollama 白名单。Java `BaseUrlSecurityValidator` 做第一道，Python `ssrf_guard` 在出站前做 DNS 级第二道 |
-| BYOK 主密钥（Java） | `SC_MASTER_KEY` | 无（必须注入） | 32 字节 Base64；仅 `sc-java-backend` 持有。缺失或长度不对时**拒绝启动**；一旦用于加密不可更换 |
-| 对端基址（Java） | `SC_PYTHON_AI_BASE_URL` | 空（compose 注入 `http://sc-python-ai:8000`） | Java 的健康探针真实调用 Python 健康接口；结果进 `data.peers`，不参与 `data.status` |
-| 对端基址（Python） | `SC_JAVA_BACKEND_BASE_URL` | 空（compose 注入 `http://sc-java-backend:8080`） | 仅供容器 healthcheck（`sc-python-ai/healthcheck.py`）验证反向调通；TASK-503 的 `JavaInternalApiClient` 复用同一变量 |
-| 派生索引基址（Python） | `SC_CHROMADB_BASE_URL` | 空（compose 注入 `http://sc-chromadb:8000`） | ChromaDB 心跳探针基址；留空则不注册该探针，避免单机只跑本服务时误报 DOWN |
-| 文档解析 MQ（Java） | `SC_MQ_INGEST_ENABLED` | `true` | TASK-501 生产端总开关；关闭时不连接 RabbitMQ |
-| 文档解析队列（Java） | `SC_MQ_INGEST_EXCHANGE` / `SC_MQ_INGEST_QUEUE` / `SC_MQ_INGEST_DLQ` | `rag.ingest.exchange` / `rag.ingest.queue` / `rag.ingest.dlq` | `MQ-INGEST-001` 队列与死信声明 |
-| 僵尸任务巡检（Java） | `SC_ZOMBIE_SCAN_ENABLED` | `true` | 补投 `UPLOADED` 且未入队的解析任务 |
-| 解析消费者（Python） | `SC_INGEST_CONSUMER_ENABLED` | `true` | TASK-502 消费者开关；TASK-506 联调通过后默认开启，可显式关闭 |
-| 页数上限（Python） | `SC_INGEST_MAX_PAGES` | `300` | 解析阶段拒绝超限 PDF（`E-RAG-02`） |
-| 依赖探针超时（Java） | `SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS` | `1500` | TCP 可达性探针超时（Redis/RabbitMQ 两项；MySQL 已改为连接池级探针） |
-| JWT 有效期（Java） | `SC_JWT_TTL_SECONDS` | `604800` | 访问令牌有效期（秒），默认 7 天，与 `04` §2.7.2 一致 |
-| 数据库迁移开关（Java） | `SC_DB_MIGRATION_ENABLED` | `true` | 启动期自动执行 `db/migration/V*.sql`；生产改由运维先手工迁移时设为 `false` |
-| MySQL 探针方式（Java） | `SC_DB_POOL_PROBE` | `true` | `true`＝连接池级（能证明凭据正确）；`false`＝退回 TCP 可达性 |
-| Redis 探针方式（Java） | `SC_REDIS_POOL_PROBE` | `true` | `true`＝连接池级 `PING`（能证明凭据正确）；`false`＝退回 TCP 可达性 |
-| IM 主动推送总开关（Java） | `SC_IM_PUSH_ENABLED` | `false` | `false`＝所有通知只落站内信并置 `FALLBACK_WEB_ONLY`；`true` 才由出站调度器调用 OneBot。**验收/演示真实 QQ 主动提醒时必须显式打开，结束后恢复 `false`** |
-| Agent 路由读取超时（Java） | `SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS` | `60` | `AUTO_ROUTE` 调用 Python 的读取超时（秒）。该调用可能含意图分类 + DDL 提取两次模型请求，真实供应商在 1600 `max_tokens` 下可超过 15s |
-| DDL 提取读取超时（Java） | `SC_DDL_EXTRACT_READ_TIMEOUT_SECONDS` | `60` | 单次 DDL 提取调用 Python 的读取超时（秒），需覆盖模型最多 2 次重试 ||
-| 删除 GC 开关/周期（Java） | `SC_DELETION_GC_ENABLED` / `SC_DELETION_GC_INTERVAL_MS` | `true` / `3600000` | 每 60 分钟扫描 `DEACTIVATING` 用户、`DELETING` 文档、`is_deleting` 课程与 raw 孤儿文件并幂等重放 |
-| 删除 GC 阈值（Java） | `SC_DELETION_GC_STALE_MINUTES` / `SC_DELETION_GC_ORPHAN_FILE_MINUTES` | `10` / `60` | 只处理滞留超过阈值的记录/文件，避免与在途请求竞争 |
-| OneBot 访问令牌（Java） | `SC_ONEBOT_ACCESS_TOKEN` | 空 | 入站 Bearer / `X-Signature` HMAC-SHA1 校验密钥。**留空时入站一律拒绝**。NapCat 侧的 token 需在 WebUI 中单独配置为相同值；该变量**不会**注入 `sc-napcat-onebot` 容器 |
-| OneBot Action API 基址（Java） | `SC_ONEBOT_BASE_URL` | compose 注入 `http://sc-napcat-onebot:3000` | 出站回复/`get_file` 目标；未注入时入站仍可验签，但无法回复或取文件 |
-| OneBot 发送者白名单（Java） | `SC_ONEBOT_ALLOWED_SENDERS` | 空 | 叠加在 `t_user_config` 绑定之上的可选 `user_id` 白名单；留空表示只按绑定校验 |
-| OneBot 文件 Origin 白名单（Java） | `SC_ONEBOT_FILE_ALLOWED_ORIGINS` | 空 | 逗号分隔的允许下载 Origin（如 `http://sc-napcat-onebot:3000`）。默认空＝拒绝回环/私网文件 URL；链路本地与云元数据地址即使加入白名单也硬拒绝 |
+- **HTTPS**：仓库只提供 80 端口。请在前面加一层 TLS 终止（云负载均衡或宿主机 Nginx）。
+- **备份**：定时备份 MySQL 数据卷、`vol_shared_storage`（课件原文件）与 `.env` 中的 `SC_MASTER_KEY`。
+- **注册限流**：登录/注册接口没有内置限流，公网开放注册建议在网关层加频率限制。
+- **日志轮转**：Compose 未配置 `logging` 上限，长期运行请自行限制。
 
-其余环境变量（`SC_MASTER_KEY`、`SC_JWT_SECRET`、`SC_DB_PASSWORD` 等）随对应任务引入，注入边界见 `docs/02` §13.2。
-**`sc-python-ai` 只从上述白名单变量读取配置**，其 `app/core/config.py` 对白名单外的名字直接报错，
-并有源码级测试断言它不引用主密钥或数据库凭据。
-
-前端构建期变量（示例见 `sc-web-frontend/.env.example`）：
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `VITE_API_BASE_URL` | `/api` | 浏览器请求业务接口的前缀；开发态由 Vite 代理，生产态由 Nginx 反向代理 |
-| `VITE_DEV_PROXY_TARGET` | `http://127.0.0.1:8080` | 开发态代理目标（Java 后端） |
-| `VITE_APP_TITLE` | `ScholarClaw 智学爪` | 页面标题 |
-| `VITE_NAPCAT_WEBUI_URL` | `http://127.0.0.1:6099` | 设置页「打开 NapCat 登录页」链接目标（仅本机浏览器访问，不参与后端鉴权） |
-
-⚠️ **Vite 只会把 `VITE_` 前缀的变量注入客户端包**，因此**任何密钥都不得以 `VITE_` 命名**——
-模型密钥由 Java 加密保存、只在内部请求内透传，前端只展示掩码。
+更多部署与排障细节见 [`DEPLOYMENT.md`](DEPLOYMENT.md)。
 
 ---
 
-## 5. 任务状态与进度
+## 安全设计要点
 
-- 任务清单、依赖关系与验收条件：`docs/06`。
-- 当前状态、需求追踪、未决事项台账：`TASK_TRACKER.md`。
-- 环境差异与风险：`ENVIRONMENT.md`。
+- 用户的模型 API Key 用 AES-GCM 加密后落库，只有 Java 服务持有主密钥；接口只返回掩码
+- Python 服务不接触数据库、主密钥与用户凭据，共享卷只读挂载
+- 自定义模型 Base URL 走 SSRF 白名单校验（默认拒绝内网/回环地址）
+- `/internal/**` 内部接口由 Nginx 显式阻断，外部不可达
+- BIGINT 主键全程按字符串处理，避免 JS 精度丢失
 
-阶段路线：P0 仓库核验 → P1 工程骨架与容器底座 → P2 认证/BYOK → P3 Python 网关与模型探测 → P4 课程与知识库（`DONE`）→ P5 异步解析与向量索引（`DONE`）→ P6 RAG 与 SSE（TASK-601~605 `DONE`；TASK-606 质量准出 `BLOCKED`）→ P7 DDL 闭环（`DONE`）→ P8 提醒/通知/OneBot（`DONE`）→ P9 清理补偿与 MVP 验收。
+---
+
+## 已知边界
+
+- RAG 质量数字来自合成语料与本地 mock，**未用真实供应商做过质量标定**，不代表上线后的实际效果
+- IM 投递语义为「正常路径至少一次 + 本地去重」，不是严格恰好一次
+- 依赖库存在若干无修复版本的已知漏洞（ChromaDB / 部分 Java 依赖），已做网络隔离与收敛，公网部署请自行评估
+
+---
+
+## 许可证
+
+[Apache License 2.0](LICENSE)

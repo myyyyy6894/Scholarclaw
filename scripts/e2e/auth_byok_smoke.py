@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 
-PASSWORD = "E2eSmoke2026Pass1"
+# 临时测试账号口令（非真实凭据）；可用 E2E_PASSWORD 覆盖，便于在共享环境里避免固定值。
+PASSWORD = os.environ.get("E2E_PASSWORD", "E2eSmoke2026Pass1")
 FAKE_KEY = "sk-e2e-smoke-not-a-real-key"
 USER_AGENT = "scholarclaw-e2e-smoke/1.0"
 

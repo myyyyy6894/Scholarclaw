@@ -3,6 +3,22 @@
 # 如需重新纳入版本管理，删除下面这行即可。
 docs/
 
+# ===== 内部开发过程文件（不上公开仓库，本地保留用于跨会话交接）=====
+# 公开仓库只包含：代码 + README + DEPLOYMENT.md + .env.example + docker-compose.yml。
+.agent-handoff/
+.claude/
+AGENT_HANDOFF.md
+AGENTS.md
+AGENT_SESSION_PROMPTS.md
+TASK_TRACKER.md
+ENVIRONMENT.md
+DELIVERY.md
+MVP_ACCEPTANCE.md
+PERFORMANCE_BASELINE.md
+SECURITY_REGRESSION.md
+SECURITY_SCAN.md
+INTERNAL_API_VERIFICATION.md
+
 # ===== 敏感配置（严禁入库）=====
 .env
 .env.*
@@ -57,6 +73,8 @@ yarn-error.log*
 pnpm-debug.log*
 .eslintcache
 *.tsbuildinfo
+# 由 sc-web-nginx 启动脚本在容器内生成（SC_NAPCAT_WEBUI_URL / SC_OPERATOR_QQ），不入库
+sc-web-frontend/public/runtime-config.js
 
 # ===== 运行时数据（共享卷 / 中间件数据，绝不入库）=====
 /data/

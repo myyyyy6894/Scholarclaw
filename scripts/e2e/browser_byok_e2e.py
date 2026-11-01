@@ -16,13 +16,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
 from playwright.sync_api import sync_playwright
 
 FAKE_KEY = "sk-browser-e2e-not-a-real-key"
-PASSWORD = "E2eBrowser2026Pass1"
+# 临时测试账号口令（非真实凭据）；可用 E2E_PASSWORD 覆盖。
+PASSWORD = os.environ.get("E2E_PASSWORD", "E2eBrowser2026Pass1")
 
 
 def main() -> int:

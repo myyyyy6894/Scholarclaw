@@ -17,6 +17,7 @@
   --sc-primary-strong: #3d6fd8;
   --sc-primary-soft: #eef4ff;
   --sc-accent: #8b5cf6;
+  --sc-accent-soft: #f3efff;
   --sc-success: #10b981;
   --sc-success-soft: #ecfdf5;
   --sc-warning: #f59e0b;
@@ -78,6 +79,7 @@
   color-scheme: dark;
 
   --sc-primary-soft: rgba(79, 140, 255, 0.16);
+  --sc-accent-soft: rgba(139, 92, 246, 0.16);
   --sc-success-soft: rgba(16, 185, 129, 0.14);
   --sc-warning-soft: rgba(245, 158, 11, 0.14);
   --sc-danger-soft: rgba(239, 68, 68, 0.14);

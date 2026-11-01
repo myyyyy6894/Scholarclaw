@@ -18,8 +18,10 @@ import type {
   EmbeddingProvider,
   UserConfig,
 } from '@/api/user-config'
+import { resolveApiBaseUrl } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
+import { IMPLEMENTED_CAPABILITIES } from '@/views/home/home-tasks'
 import {
   createModelForm,
   embeddingTargetChanged,
@@ -51,6 +53,11 @@ import type { PreferencesFormState } from '@/views/settings/preferences-form'
 
 const router = useRouter()
 const auth = useAuthStore()
+
+/** 首页原先的开发信息移到这里（Prompt §8），首页不再展示工程骨架内容。 */
+const apiBaseUrl = resolveApiBaseUrl()
+const buildMode = import.meta.env.MODE
+const aboutPanels = ref<string[]>([])
 
 const loading = ref(true)
 const loadError = ref('')
@@ -672,6 +679,27 @@ function goToLogin(): void {
           </el-button>
         </div>
       </el-card>
+      <el-card class="sc-card-gap" shadow="never">
+        <template #header>关于</template>
+        <el-collapse v-model="aboutPanels">
+          <el-collapse-item title="构建与环境信息" name="build">
+            <el-descriptions :column="1" border>
+              <el-descriptions-item label="业务接口前缀">
+                {{ apiBaseUrl }}
+              </el-descriptions-item>
+              <el-descriptions-item label="构建模式">{{ buildMode }}</el-descriptions-item>
+              <el-descriptions-item label="开发态代理">
+                由 <code>VITE_DEV_PROXY_TARGET</code> 指定，仅绑定环回地址
+              </el-descriptions-item>
+            </el-descriptions>
+          </el-collapse-item>
+          <el-collapse-item title="已实现能力" name="capabilities">
+            <ul class="sc-about-list">
+              <li v-for="item in IMPLEMENTED_CAPABILITIES" :key="item">{{ item }}</li>
+            </ul>
+          </el-collapse-item>
+        </el-collapse>
+      </el-card>
     </template>
   </div>
 </template>
@@ -725,5 +753,13 @@ function goToLogin(): void {
 
 .sc-settings__checkbox {
   margin-bottom: 16px;
+}
+
+.sc-about-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.9;
 }
 </style>

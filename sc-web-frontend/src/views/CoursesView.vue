@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import { Library, MessagesSquare, MoreHorizontal, Plus, Search, Upload } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 
 import {
@@ -10,31 +11,40 @@ import {
   listCourses,
 } from '@/api/course'
 import type { CourseNamespace } from '@/api/course'
+import { listDdlTasks } from '@/api/ddl'
 import type { EmbeddingProvider } from '@/api/user-config'
+import CourseCard from '@/components/course/CourseCard.vue'
+import BaseCard from '@/components/ui/BaseCard.vue'
+import ComingSoonBadge from '@/components/ui/ComingSoonBadge.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
+import { filterCourses } from '@/views/course/course-list'
 import {
   CourseFormValidationError,
-  indexStatusLabel,
   toChangeEmbeddingRequest,
   toCreateCourseRequest,
 } from '@/views/course/course-form'
+import { groupDdlCountByCourse } from '@/views/home/dashboard-data'
 
 /**
- * 课程空间管理（`06` TASK-401、`04` §4.3）。
+ * 我的课程（P3，参考图 `docs/ui_picture/我的课程.png`）。
  *
- * 只展示后端真实返回的课程、Embedding 绑定与索引状态；不伪造文档计数或维度。
- * 文档上传/解析状态属于 TASK-404，本页只显示聚合计数。
+ * 只展示后端真实返回的课程、Embedding 绑定、索引状态与文档计数；
+ * 「本学期 / 已归档」与学期下拉后端没有字段，只做禁用占位并标注「暂未开发」；
+ * 课程搜索只过滤已加载的课程名称/备注，不伪造后端搜索能力。
  */
-
 const EMBEDDING_PROVIDERS: Array<{ value: EmbeddingProvider; label: string }> = [
   { value: 'OPENAI_COMPATIBLE', label: 'OpenAI 兼容' },
   { value: 'ZHIPU', label: '智谱 GLM' },
   { value: 'OLLAMA', label: 'Ollama（本地/自建）' },
 ]
+const TONES = ['blue', 'green', 'purple', 'orange'] as const
 
 const loading = ref(true)
 const loadError = ref('')
 const courses = ref<CourseNamespace[]>([])
+const ddlCounts = ref<Record<string, number> | null>(null)
+const searchQuery = ref('')
 const creating = ref(false)
 const switching = ref(false)
 const deletingId = ref<string | null>(null)
@@ -55,6 +65,7 @@ const switchForm = ref<SwitchFormState>({
 })
 
 const hasCourses = computed(() => courses.value.length > 0)
+const filteredCourses = computed(() => filterCourses(courses.value, searchQuery.value))
 const summary = computed(() => ({
   courses: courses.value.length,
   ready: courses.value.reduce((total, item) => total + item.ready_doc_count, 0),
@@ -64,6 +75,7 @@ const summary = computed(() => ({
 
 onMounted(() => {
   void loadCourses()
+  void loadDdlCounts()
 })
 
 async function loadCourses(): Promise<void> {
@@ -77,6 +89,20 @@ async function loadCourses(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+async function loadDdlCounts(): Promise<void> {
+  try {
+    const board = await listDdlTasks({ statusGroup: 'ALL' })
+    ddlCounts.value = groupDdlCountByCourse(board)
+  } catch {
+    // DDL 计数是辅助信息；失败时卡片显示「—」，不打断课程管理
+    ddlCounts.value = null
+  }
+}
+
+function ddlCountFor(courseId: string): number | null {
+  return ddlCounts.value === null ? null : (ddlCounts.value[courseId] ?? 0)
 }
 
 function openCreate(): void {
@@ -114,10 +140,7 @@ function openSwitch(course: CourseNamespace): void {
 
 async function submitSwitch(): Promise<void> {
   const course = switchForm.value.course
-  if (course === null) {
-    return
-  }
-  if (switching.value) {
+  if (course === null || switching.value) {
     return
   }
   try {
@@ -158,148 +181,194 @@ async function onDelete(course: CourseNamespace): Promise<void> {
   try {
     await deleteCourse(course.course_id)
     notifySuccess('课程知识库已删除，关联的 DDL 待办任务已解绑保留')
-    await loadCourses()
+    await Promise.all([loadCourses(), loadDdlCounts()])
   } catch (error) {
     notifyError(error)
   } finally {
     deletingId.value = null
   }
 }
+
+function deleteCourseFromMenu(course: CourseNamespace): void {
+  void onDelete(course)
+}
+
+function toneFor(index: number): (typeof TONES)[number] {
+  return TONES[index % TONES.length] ?? 'blue'
+}
 </script>
 
 <template>
-  <div>
-    <section class="sc-hero">
-      <div class="sc-hero__copy">
-        <span class="sc-hero__eyebrow">COURSE WORKSPACE</span>
-        <h2>把每门课的知识，整理成可检索的脉络</h2>
-        <p>每门课程锁定一套 Embedding 模型与维度；索引版本、文档状态都来自后端真实数据。</p>
-      </div>
-      <div class="sc-hero__art" aria-hidden="true">
-        <svg viewBox="0 0 240 120" role="presentation">
-          <defs>
-            <linearGradient id="sc-hero-sky" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5" />
-              <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
-            </linearGradient>
-          </defs>
-          <rect width="240" height="120" fill="url(#sc-hero-sky)" />
-          <circle cx="190" cy="30" r="14" fill="#ffd98a" />
-          <path d="M0 96 52 52l34 30 26-22 44 36 30-20 54 30v14H0z" fill="#ffffff" opacity="0.6" />
-          <path d="M0 108 46 78l32 18 30-12 40 24 34-14 58 22v4H0z" fill="#ffffff" opacity="0.85" />
-          <rect x="84" y="76" width="54" height="8" rx="4" fill="#4f8cff" opacity="0.7" />
-          <rect x="90" y="88" width="42" height="6" rx="3" fill="#7b5cff" opacity="0.5" />
-        </svg>
-      </div>
-    </section>
-
-    <section class="sc-stats">
-      <article class="sc-stat">
-        <span class="sc-stat__label">课程空间</span>
-        <strong>{{ summary.courses }}</strong>
-        <span class="sc-stat__hint">当前账号活动课程</span>
-      </article>
-      <article class="sc-stat">
-        <span class="sc-stat__label">就绪文档</span>
-        <strong>{{ summary.ready }}</strong>
-        <span class="sc-stat__hint">版本匹配的可用课件</span>
-      </article>
-      <article class="sc-stat">
-        <span class="sc-stat__label">解析中</span>
-        <strong>{{ summary.parsing }}</strong>
-        <span class="sc-stat__hint">待解析 + 解析中</span>
-      </article>
-      <article class="sc-stat sc-stat--danger">
-        <span class="sc-stat__label">失败文档</span>
-        <strong>{{ summary.failed }}</strong>
-        <span class="sc-stat__hint">需在后续任务中重试</span>
-      </article>
-    </section>
-
-    <el-card class="sc-card-gap" shadow="never">
-      <template #header>
-        <div class="sc-course__header">
-          <span>课程空间</span>
-          <el-button type="primary" @click="openCreate">新建课程</el-button>
+  <div class="courses-page">
+    <div class="courses-main">
+      <section class="courses-hero">
+        <div class="courses-hero__copy">
+          <span class="courses-hero__eyebrow">COURSE WORKSPACE</span>
+          <h2>我的课程</h2>
+          <p>管理你的课程空间，关联知识库，让 AI 更好地为你的学习服务。</p>
+          <div class="courses-hero__summary">
+            <span>课程 {{ summary.courses }}</span>
+            <span>就绪 {{ summary.ready }}</span>
+            <span>解析中 {{ summary.parsing }}</span>
+            <span v-if="summary.failed > 0" class="is-danger">失败 {{ summary.failed }}</span>
+          </div>
         </div>
-      </template>
+        <div class="courses-hero__side">
+          <div class="courses-hero__art">
+            <img src="/illustrations/course-header-books.png" alt="" />
+          </div>
+          <el-button type="primary" :icon="Plus" @click="openCreate">新建课程</el-button>
+        </div>
+      </section>
 
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        title="每门课程锁定一套 Embedding 模型与维度"
-        description="创建时会复制【个人设置】中已验证的默认 Embedding 配置；切换模型会重新探测并升级课程索引版本，并异步重建该课程全部文档的向量索引。"
-      />
+      <div class="courses-toolbar">
+        <div class="courses-tabs">
+          <button type="button" class="course-tab course-tab--active">
+            全部课程 <span class="course-tab__count">{{ courses.length }}</span>
+          </button>
+          <button type="button" class="course-tab" disabled title="后端暂无学期字段">
+            本学期 <ComingSoonBadge compact />
+          </button>
+          <button type="button" class="course-tab" disabled title="后端暂无归档字段">
+            已归档 <ComingSoonBadge compact />
+          </button>
+        </div>
 
-      <el-skeleton v-if="loading" class="sc-course__skeleton" :rows="4" animated />
-      <el-result
-        v-else-if="loadError !== ''"
-        icon="error"
-        title="课程列表读取失败"
-        :sub-title="loadError"
-      >
-        <template #extra>
-          <el-button type="primary" @click="loadCourses">重新加载</el-button>
+        <div class="courses-tools">
+          <label class="courses-search">
+            <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
+            <input v-model="searchQuery" type="search" placeholder="搜索课程…" aria-label="搜索课程" />
+          </label>
+          <el-select class="courses-term" disabled placeholder="学期（暂未开发）" />
+        </div>
+      </div>
+
+      <div v-if="loading" class="courses-grid" aria-hidden="true">
+        <div v-for="index in 6" :key="index" class="course-skeleton" />
+      </div>
+
+      <BaseCard v-else-if="loadError !== ''" title="课程读取失败">
+        <div class="module-error">
+          <p>{{ loadError }}</p>
+          <el-button size="small" @click="loadCourses">重新加载</el-button>
+        </div>
+      </BaseCard>
+
+      <BaseCard v-else-if="!hasCourses">
+        <EmptyState
+          image="/illustrations/scene-study-desk.png"
+          title="还没有课程空间"
+          description="创建第一门课程，上传课件后即可使用知识库问答与 DDL 提醒。"
+        >
+          <template #action>
+            <el-button type="primary" @click="openCreate">新建课程</el-button>
+          </template>
+        </EmptyState>
+      </BaseCard>
+
+      <BaseCard v-else-if="filteredCourses.length === 0">
+        <EmptyState
+          title="没有匹配的课程"
+          :description="`没有找到与「${searchQuery}」匹配的课程名称或备注。`"
+        >
+          <template #action>
+            <el-button @click="searchQuery = ''">清除搜索</el-button>
+          </template>
+        </EmptyState>
+      </BaseCard>
+
+      <div v-else class="courses-grid">
+        <div
+          v-for="(course, index) in filteredCourses"
+          :key="course.course_id"
+          class="courses-grid__item"
+          :class="{ 'is-deleting': deletingId === course.course_id }"
+        >
+          <CourseCard
+            :course="course"
+            :ddl-count="ddlCountFor(course.course_id)"
+            :tone="toneFor(index)"
+          >
+            <template #actions>
+              <el-dropdown trigger="click" placement="bottom-end">
+                <button type="button" class="course-menu" aria-label="课程操作" title="课程操作">
+                  <MoreHorizontal :size="16" :stroke-width="1.8" />
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item @click="openSwitch(course)">切换 Embedding</el-dropdown-item>
+                    <el-dropdown-item divided @click="deleteCourseFromMenu(course)">删除课程</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
+          </CourseCard>
+        </div>
+      </div>
+    </div>
+
+    <aside class="courses-rail">
+      <BaseCard title="课程日历" subtitle="学期视图">
+        <template #actions>
+          <ComingSoonBadge compact />
         </template>
-      </el-result>
-      <el-empty v-else-if="!hasCourses" description="还没有课程空间，先新建一门课程。">
-        <template #image>
-          <svg class="sc-empty-art" viewBox="0 0 160 120" aria-hidden="true">
-            <circle cx="122" cy="28" r="16" fill="#ffe3a3" />
-            <path d="M8 96 50 58l28 24 22-18 52 32v12H8z" fill="#dbe8ff" />
-            <path d="M8 106 44 82l26 14 24-10 58 20v6H8z" fill="#b9d2ff" />
-            <rect x="58" y="70" width="44" height="10" rx="5" fill="#4f8cff" />
-          </svg>
+        <div class="rail-placeholder">
+          <span class="rail-placeholder__art">
+            <img src="/illustrations/status-schedule.png" alt="" loading="lazy" />
+          </span>
+          <p>课程日历功能暂未开发；后端暂无学期与课表数据。</p>
+        </div>
+      </BaseCard>
+
+      <BaseCard title="本周课程">
+        <template #actions>
+          <ComingSoonBadge compact />
         </template>
-        <el-button type="primary" @click="openCreate">新建课程</el-button>
-      </el-empty>
-      <el-table v-else :data="courses" row-key="course_id">
-        <el-table-column prop="course_name" label="课程" min-width="160">
-          <template #default="{ row }">
-            <span>{{ row.course_name }}</span>
-            <el-tag v-if="row.is_default" class="sc-course__tag" size="small" type="info">
-              默认
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="description" label="备注" min-width="160" show-overflow-tooltip />
-        <el-table-column label="Embedding" min-width="220">
-          <template #default="{ row }">
-            <div>{{ row.embedding_model }}</div>
-            <div class="sc-course__muted">
-              {{ row.embedding_provider }} · {{ row.embedding_dim }} 维 · 版本 {{ row.index_version }}
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="索引状态" width="110">
-          <template #default="{ row }">
-            <el-tag :type="row.index_status === 'ACTIVE' ? 'success' : 'warning'" size="small">
-              {{ indexStatusLabel(row.index_status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="课件" width="180">
-          <template #default="{ row }">
-            就绪 {{ row.ready_doc_count }} · 解析中 {{ row.parsing_doc_count }} · 失败
-            {{ row.failed_doc_count }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
-          <template #default="{ row }">
-            <el-button text type="primary" @click="openSwitch(row)">切换模型</el-button>
-            <el-button
-              text
-              type="danger"
-              :loading="deletingId === row.course_id"
-              @click="onDelete(row)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+        <EmptyState
+          image="/illustrations/status-schedule.png"
+          title="课表功能暂未开发"
+          description="接入后这里会显示本周课程与上课时间。"
+          compact
+        />
+      </BaseCard>
+
+      <BaseCard title="课程快捷操作">
+        <ul class="rail-actions">
+          <li>
+            <router-link class="rail-action" :to="{ name: 'knowledge' }">
+              <span class="rail-action__icon"><Upload :size="16" :stroke-width="1.8" /></span>
+              <span class="rail-action__text">
+                <strong>添加学习资料</strong>
+                <small>上传文档，关联到课程</small>
+              </span>
+            </router-link>
+          </li>
+          <li>
+            <router-link class="rail-action" :to="{ name: 'knowledge' }">
+              <span class="rail-action__icon"><Library :size="16" :stroke-width="1.8" /></span>
+              <span class="rail-action__text">
+                <strong>查看课程知识库</strong>
+                <small>管理课程相关的所有文档</small>
+              </span>
+            </router-link>
+          </li>
+          <li>
+            <router-link class="rail-action" :to="{ name: 'rag' }">
+              <span class="rail-action__icon"><MessagesSquare :size="16" :stroke-width="1.8" /></span>
+              <span class="rail-action__text">
+                <strong>课程问答</strong>
+                <small>基于本课程的知识进行提问</small>
+              </span>
+            </router-link>
+          </li>
+        </ul>
+      </BaseCard>
+
+      <div class="rail-quote">
+        <img src="/illustrations/scene-study-desk.png" alt="" loading="lazy" />
+        <p>在知识的海洋里<br />找到属于你的方向</p>
+      </div>
+    </aside>
 
     <el-dialog v-model="creating" title="新建课程空间" width="520px">
       <el-form label-width="90px">
@@ -335,7 +404,7 @@ async function onDelete(course: CourseNamespace): Promise<void> {
         title="切换会递增课程索引版本"
         description="切换会更新课程 Embedding 与索引版本并发布 REINDEX；重建期间文档暂停检索，探测失败时原课程配置保持不变。"
       />
-      <el-form label-width="130px" class="sc-course__form">
+      <el-form label-width="130px" class="course-switch-form">
         <el-form-item label="模型来源">
           <el-radio-group v-model="switchForm.useUserDefault">
             <el-radio :value="true">使用个人设置默认</el-radio>
@@ -367,141 +436,437 @@ async function onDelete(course: CourseNamespace): Promise<void> {
 </template>
 
 <style scoped>
-.sc-hero {
+.courses-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--sc-card-gap);
+  align-items: start;
+}
+
+.courses-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-card-gap);
+  min-width: 0;
+}
+
+.courses-hero {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: var(--sc-page-gap);
-  padding: 30px 32px;
+  padding: 26px 30px;
   overflow: hidden;
-  border-radius: var(--sc-radius);
-  background: linear-gradient(120deg, #eaf2ff 0%, #f7faff 48%, #eef3ff 100%);
-  box-shadow: var(--sc-shadow-soft);
+  border: 1px solid var(--sc-border);
+  border-radius: 16px;
+  background: linear-gradient(
+    120deg,
+    var(--sc-primary-soft) 0%,
+    var(--sc-surface) 55%,
+    var(--sc-accent-soft) 100%
+  );
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-hero__copy {
-  max-width: 620px;
+.courses-hero__copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
 }
 
-.sc-hero__eyebrow {
-  color: var(--sc-brand-strong);
-  font-size: 11px;
+.courses-hero__eyebrow {
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-hint);
   font-weight: 700;
-  letter-spacing: 1.4px;
+  letter-spacing: 1.2px;
 }
 
-.sc-hero h2 {
-  margin: 10px 0 8px;
-  color: #16233d;
-  font-size: 26px;
-  font-weight: 650;
+.courses-hero h2 {
+  color: var(--sc-text);
+  font-size: var(--sc-font-title);
+  font-weight: var(--sc-font-title-weight);
   letter-spacing: -0.3px;
 }
 
-.sc-hero p {
-  color: var(--sc-muted);
-  font-size: 14px;
+.courses-hero p {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
   line-height: 1.7;
 }
 
-.sc-hero__art {
-  flex: 0 0 240px;
-  opacity: 0.9;
+.courses-hero__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
 }
 
-.sc-hero__art svg {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
-.sc-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--sc-page-gap);
-  margin-bottom: var(--sc-page-gap);
-}
-
-.sc-stat {
-  padding: 18px 20px;
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius);
+.courses-hero__summary span {
+  padding: 2px 9px;
+  border-radius: var(--sc-radius-pill);
+  color: var(--sc-text-secondary);
   background: var(--sc-surface);
-  box-shadow: var(--sc-shadow-soft);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-stat__label {
-  color: var(--sc-muted);
-  font-size: 13px;
-}
-
-.sc-stat strong {
-  display: block;
-  margin: 8px 0 4px;
-  color: var(--sc-text);
-  font-size: 28px;
-  font-weight: 650;
-}
-
-.sc-stat__hint {
-  color: #94a3b8;
-  font-size: 12px;
-}
-
-.sc-stat--danger strong {
+.courses-hero__summary span.is-danger {
   color: var(--sc-danger);
+  background: var(--sc-danger-soft);
 }
 
-.sc-empty-art {
-  width: 150px;
-  height: auto;
+.courses-hero__side {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 16px;
 }
 
-.sc-course__header {
+.courses-hero__art {
+  display: grid;
+  place-items: center;
+  width: 116px;
+  height: 100px;
+  padding: 6px;
+  border-radius: 14px;
+  background: #f1f6ff;
+}
+
+.courses-hero__art img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.courses-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--sc-border);
 }
 
-.sc-course__skeleton {
+.courses-tabs {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.course-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 2px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--sc-text-secondary);
+  background: transparent;
+  font-family: var(--sc-font-sans);
+  font-size: var(--sc-font-body);
+  cursor: pointer;
+}
+
+.course-tab--active {
+  border-bottom-color: var(--sc-primary);
+  color: var(--sc-primary-strong);
+  font-weight: 600;
+}
+
+.course-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.course-tab__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--sc-radius-pill);
+  color: var(--sc-primary-strong);
+  background: var(--sc-primary-soft);
+  font-size: var(--sc-font-hint);
+  line-height: 18px;
+  text-align: center;
+}
+
+.courses-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.courses-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius-pill);
+  color: var(--sc-text-placeholder);
+  background: var(--sc-surface);
+}
+
+.courses-search:focus-within {
+  border-color: var(--sc-primary);
+  box-shadow: 0 0 0 3px var(--sc-primary-soft);
+}
+
+.courses-search input {
+  width: 150px;
+  border: 0;
+  outline: 0;
+  color: var(--sc-text);
+  background: transparent;
+  font-family: var(--sc-font-sans);
+  font-size: var(--sc-font-caption);
+}
+
+.courses-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.courses-term {
+  width: 168px;
+}
+
+.courses-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.courses-grid__item {
+  min-width: 0;
+}
+
+.courses-grid__item.is-deleting {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.course-skeleton {
+  height: 188px;
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius-card);
+  background: var(--sc-surface-muted);
+}
+
+.course-menu {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--sc-border);
+  border-radius: 7px;
+  color: var(--sc-text-placeholder);
+  background: var(--sc-surface);
+  cursor: pointer;
+}
+
+.course-menu:hover {
+  border-color: var(--sc-primary);
+  color: var(--sc-primary);
+}
+
+.courses-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-card-gap);
+  min-width: 0;
+}
+
+.rail-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rail-placeholder__art {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #f1f6ff;
+}
+
+.rail-placeholder__art img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.rail-placeholder p {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+  line-height: 1.6;
+}
+
+.rail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rail-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 0.18s ease;
+}
+
+.rail-action:hover {
+  background: var(--sc-surface-hover);
+}
+
+.rail-action__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--sc-primary);
+  background: var(--sc-primary-soft);
+}
+
+.rail-action__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rail-action__text strong {
+  color: var(--sc-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rail-action__text small {
+  overflow: hidden;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-quote {
+  position: relative;
+  min-height: 112px;
+  overflow: hidden;
+  border-radius: var(--sc-radius-card);
+  background: #eaf2ff;
+}
+
+.rail-quote img {
+  display: block;
+  width: 100%;
+  height: 132px;
+  object-fit: cover;
+  opacity: 0.9;
+}
+
+.rail-quote p {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  color: #1f2937;
+  font-size: var(--sc-font-caption);
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.module-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+}
+
+.course-switch-form {
   margin-top: 16px;
 }
 
-.sc-course__tag {
-  margin-left: 8px;
-}
-
-.sc-course__muted {
-  color: #909399;
-  font-size: 12px;
-}
-
-.sc-course__form {
-  margin-top: 16px;
-}
-
-@media (max-width: 1100px) {
-  .sc-stats {
+@media (max-width: 1360px) {
+  .courses-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 900px) {
-  .sc-hero {
-    padding: 22px;
+@media (max-width: 1199px) {
+  .courses-page {
+    grid-template-columns: 1fr;
   }
 
-  .sc-hero h2 {
-    font-size: 21px;
+  .courses-rail {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
+@media (max-width: 860px) {
+  .courses-grid {
+    grid-template-columns: 1fr;
   }
 
-  .sc-hero__art {
+  .courses-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .courses-hero {
+    padding: 20px;
+  }
+
+  .courses-hero__art {
     display: none;
   }
+}
 
-  .sc-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 639px) {
+  .courses-toolbar {
+    align-items: stretch;
+  }
+
+  .courses-tabs {
+    gap: 10px;
+    overflow-x: auto;
+  }
+
+  .courses-tools {
+    width: 100%;
+  }
+
+  .courses-search {
+    flex: 1;
+  }
+
+  .courses-search input {
+    width: 100%;
+  }
+
+  .courses-term {
+    flex: none;
+    width: 120px;
   }
 }
 </style>

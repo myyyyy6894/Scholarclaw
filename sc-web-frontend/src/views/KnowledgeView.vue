@@ -4,12 +4,17 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
 
 import { listCourses } from '@/api/course'
-import type { CourseNamespace } from '@/api/course'
+import type { CourseNamespace, IndexStatus } from '@/api/course'
 import { deleteDoc, listDocs, reindexDoc, retryDoc, uploadDoc } from '@/api/knowledge'
 import type { KnowledgeDoc, ListableDocumentStatus } from '@/api/knowledge'
+import BaseCard from '@/components/ui/BaseCard.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import ProgressBar from '@/components/ui/ProgressBar.vue'
+import TagBadge from '@/components/ui/TagBadge.vue'
 import { useCourseStore } from '@/stores/course'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import { indexStatusLabel } from '@/views/course/course-form'
+import { courseReadiness } from '@/views/home/dashboard-data'
 import {
   canDelete,
   canReindex,
@@ -21,17 +26,17 @@ import {
   hasPendingDocs,
   snapshotChunkCount,
   snapshotPageCount,
-  snapshotReadyAt,
   uploadFileError,
   UPLOAD_ACCEPT,
 } from '@/views/knowledge/knowledge-form'
 
 /**
- * 课程知识库管理视图（`06` TASK-404、`04` §4.3/§4.4）。
+ * 课程知识库（P3，参考图 `docs/ui_picture/我的课程.png` 与基调图中的知识库页）。
  *
- * 左侧课程切换、右侧文档列表/上传/状态与操作入口。只展示后端真实状态：
- * 上传成功后是 `UPLOADED`，不会在页面上伪造 `READY`；异步解析由 TASK-501 接入。
+ * 所有文档状态、计数、诊断与操作都来自真实接口；上传成功后是 `UPLOADED`/`PARSING`，
+ * 不在前端伪造 `READY`。新增拖拽上传区，仍复用同一套 `uploadDoc` 与文件校验。
  */
+type Tone = 'primary' | 'success' | 'warning' | 'danger' | 'neutral'
 
 const courseStore = useCourseStore()
 
@@ -42,6 +47,7 @@ const filterStatus = ref<ListableDocumentStatus | ''>('')
 const loadingCourses = ref(true)
 const loadingDocs = ref(false)
 const uploading = ref(false)
+const dragActive = ref(false)
 const actionDocId = ref<string | null>(null)
 const loadError = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -57,6 +63,9 @@ function syncCompact(): void {
 
 const currentCourse = computed(
   () => courses.value.find((item) => item.course_id === selectedCourseId.value) ?? null,
+)
+const readiness = computed(() =>
+  currentCourse.value === null ? null : courseReadiness(currentCourse.value),
 )
 const courseSummary = computed(() => {
   const course = currentCourse.value
@@ -92,7 +101,6 @@ onUnmounted(() => {
   stopPolling()
 })
 
-/** 有待解析/解析中文档时定时刷新，异步结果无需用户手动点“刷新”。 */
 function syncPolling(): void {
   if (hasPendingDocs(docs.value)) {
     if (pollTimer === null) {
@@ -154,7 +162,6 @@ async function loadDocs(): Promise<void> {
       courseId,
       filterStatus.value === '' ? undefined : filterStatus.value,
     )
-    // 快速切换课程时，过期响应不得覆盖当前课程列表
     if (!docsRequests.isCurrent(requestSeq) || courseId !== selectedCourseId.value) {
       return
     }
@@ -198,8 +205,15 @@ async function onFileSelected(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
+  if (file === undefined) {
+    return
+  }
+  await uploadFile(file)
+}
+
+async function uploadFile(file: File): Promise<void> {
   const course = currentCourse.value
-  if (file === undefined || course === null) {
+  if (course === null || uploading.value) {
     return
   }
   const error = uploadFileError(file)
@@ -215,7 +229,6 @@ async function onFileSelected(event: Event): Promise<void> {
         ? `《${uploaded.doc_name}》已上传并进入解析队列`
         : `《${uploaded.doc_name}》已上传，暂未入队，系统将自动补投`,
     )
-    // 上传期间用户可能切到别的课程：只刷新上传目标课程，避免污染当前列表
     if (selectedCourseId.value === course.course_id) {
       await loadDocs()
     }
@@ -224,6 +237,24 @@ async function onFileSelected(event: Event): Promise<void> {
     notifyError(uploadError)
   } finally {
     uploading.value = false
+  }
+}
+
+function onDragOver(): void {
+  if (currentCourse.value !== null && !uploading.value) {
+    dragActive.value = true
+  }
+}
+
+function onDragLeave(): void {
+  dragActive.value = false
+}
+
+function onDrop(event: DragEvent): void {
+  dragActive.value = false
+  const file = event.dataTransfer?.files?.[0]
+  if (file !== undefined) {
+    void uploadFile(file)
   }
 }
 
@@ -280,129 +311,133 @@ async function onReindex(doc: KnowledgeDoc): Promise<void> {
 
 function formatTime(value: string | null): string {
   return value === null ? '—' : new Date(value).toLocaleString()
-}</script>
+}
+
+function indexTone(status: IndexStatus): 'success' | 'warning' | 'danger' {
+  if (status === 'ACTIVE') {
+    return 'success'
+  }
+  if (status === 'REBUILD_FAILED') {
+    return 'danger'
+  }
+  return 'warning'
+}
+
+function documentTone(doc: KnowledgeDoc): Tone {
+  const tone = documentStatusTagType(doc.status)
+  return tone === 'info' ? 'neutral' : tone
+}
+</script>
 
 <template>
-  <div>
-    <section class="sc-kb-hero">
-      <div class="sc-kb-hero__copy">
-        <span class="sc-kb-hero__eyebrow">COURSE KNOWLEDGE</span>
+  <div class="knowledge-page">
+    <section class="knowledge-hero">
+      <div class="knowledge-hero__copy">
+        <span class="knowledge-hero__eyebrow">COURSE KNOWLEDGE</span>
         <h2>{{ currentCourse?.course_name ?? '课程知识库' }}</h2>
         <p>
-          左侧选中的课程会作为后续 RAG 问答的默认课程。上传成功后文件进入解析队列，
-          解析、父块入库与向量索引完成后状态变为“就绪”；失败文档可手动重试，就绪文档可重建索引。
+          左侧选中的课程会作为问答的默认课程。上传成功后文件进入解析队列，解析与向量索引完成后状态变为“就绪”；
+          失败文档可重试，就绪文档可重建索引。
         </p>
       </div>
-      <div v-if="courseSummary !== null" class="sc-kb-metrics">
-        <div class="sc-kb-metric">
+
+      <div v-if="courseSummary !== null" class="knowledge-hero__metrics">
+        <div class="knowledge-metric">
           <span>就绪</span>
           <strong>{{ courseSummary.ready }}</strong>
         </div>
-        <div class="sc-kb-metric">
+        <div class="knowledge-metric">
           <span>解析中</span>
           <strong>{{ courseSummary.parsing }}</strong>
         </div>
-        <div class="sc-kb-metric sc-kb-metric--danger">
+        <div class="knowledge-metric" :class="{ 'knowledge-metric--danger': courseSummary.failed > 0 }">
           <span>失败</span>
           <strong>{{ courseSummary.failed }}</strong>
         </div>
-        <div class="sc-kb-metric">
+        <div class="knowledge-metric">
           <span>索引版本</span>
           <strong>v{{ courseSummary.version }}</strong>
         </div>
       </div>
+      <div v-else class="knowledge-hero__art">
+        <img src="/illustrations/feature-knowledge.png" alt="" />
+      </div>
     </section>
 
-    <el-row :gutter="16">
-      <el-col :xs="24" :md="7">
-        <el-card class="sc-card-gap" shadow="never">
-          <template #header>
-            <div class="sc-knowledge__header">
-              <span>课程空间</span>
-              <router-link :to="{ name: 'courses' }">
-                <el-button text type="primary">管理课程</el-button>
-              </router-link>
-            </div>
+    <div class="knowledge-layout">
+      <aside class="knowledge-rail">
+        <BaseCard title="课程空间">
+          <template #actions>
+            <router-link class="card-link" :to="{ name: 'courses' }">管理课程</router-link>
           </template>
 
-          <el-skeleton v-if="loadingCourses" :rows="3" animated />
-          <el-result
-            v-else-if="loadError !== ''"
-            icon="error"
-            title="课程读取失败"
-            :sub-title="loadError"
+          <div v-if="loadingCourses" class="rail-skeleton" aria-hidden="true">
+            <div v-for="index in 3" :key="index" class="rail-skeleton__row" />
+          </div>
+
+          <div v-else-if="loadError !== ''" class="module-error">
+            <p>{{ loadError }}</p>
+            <el-button size="small" @click="loadCourses">重新加载</el-button>
+          </div>
+
+          <EmptyState
+            v-else-if="courses.length === 0"
+            image="/illustrations/scene-study-desk.png"
+            title="还没有课程空间"
+            description="先创建课程，再上传课件。"
+            compact
           >
-            <template #extra>
-              <el-button type="primary" @click="loadCourses">重新加载</el-button>
+            <template #action>
+              <router-link class="card-link" :to="{ name: 'courses' }">去创建课程</router-link>
             </template>
-          </el-result>
-          <el-empty v-else-if="courses.length === 0" description="还没有课程空间">
-            <template #image>
-              <svg class="sc-empty-art" viewBox="0 0 160 120" aria-hidden="true">
-                <circle cx="122" cy="28" r="16" fill="#ffe3a3" />
-                <path d="M8 96 50 58l28 24 22-18 52 32v12H8z" fill="#dbe8ff" />
-                <path d="M8 106 44 82l26 14 24-10 58 20v6H8z" fill="#b9d2ff" />
-                <rect x="58" y="70" width="44" height="10" rx="5" fill="#4f8cff" />
-              </svg>
-            </template>
-            <router-link :to="{ name: 'courses' }">
-              <el-button type="primary">去创建课程</el-button>
-            </router-link>
-          </el-empty>
-          <div v-else class="sc-knowledge__courses">
+          </EmptyState>
+
+          <div v-else class="rail-courses">
             <button
               v-for="item in courses"
               :key="item.course_id"
               type="button"
-              class="sc-knowledge__course"
-              :class="{ 'sc-knowledge__course--active': item.course_id === selectedCourseId }"
+              class="rail-course"
+              :class="{ 'rail-course--active': item.course_id === selectedCourseId }"
               @click="selectCourse(item.course_id)"
             >
-              <div class="sc-knowledge__course-name">
-                {{ item.course_name }}
-                <el-tag v-if="item.is_default" size="small" type="info">默认</el-tag>
-              </div>
-              <div class="sc-knowledge__muted">
+              <span class="rail-course__top">
+                <strong>{{ item.course_name }}</strong>
+                <TagBadge
+                  :label="indexStatusLabel(item.index_status)"
+                  :tone="indexTone(item.index_status)"
+                />
+              </span>
+              <span class="rail-course__meta">
                 {{ item.embedding_model }} · {{ item.embedding_dim }} 维
-                <span class="sc-knowledge__course-status">
-                  {{ indexStatusLabel(item.index_status) }}
-                </span>
-              </div>
-              <div class="sc-knowledge__muted">
+              </span>
+              <span class="rail-course__counts">
                 就绪 {{ item.ready_doc_count }} · 解析中 {{ item.parsing_doc_count }} · 失败
                 {{ item.failed_doc_count }}
-              </div>
+              </span>
             </button>
           </div>
-        </el-card>
-      </el-col>
+        </BaseCard>
+      </aside>
 
-      <el-col :xs="24" :md="17">
-        <el-card class="sc-card-gap" shadow="never">
+      <section class="knowledge-main">
+        <BaseCard padding="none">
           <template #header>
-            <div class="sc-knowledge__header">
-              <div>
+            <div class="knowledge-header">
+              <div class="knowledge-header__title">
                 <span>{{ currentCourse?.course_name ?? '未选择课程' }}</span>
-                <el-tag
+                <TagBadge
                   v-if="currentCourse !== null"
-                  class="sc-knowledge__tag"
-                  size="small"
-                  :type="
-                    currentCourse.index_status === 'ACTIVE'
-                      ? 'success'
-                      : currentCourse.index_status === 'REBUILD_FAILED'
-                        ? 'danger'
-                        : 'warning'
-                  "
-                >
-                  {{ indexStatusLabel(currentCourse.index_status) }}
-                </el-tag>
+                  :label="indexStatusLabel(currentCourse.index_status)"
+                  :tone="indexTone(currentCourse.index_status)"
+                />
               </div>
-              <div class="sc-knowledge__actions">
+              <div class="knowledge-header__actions">
                 <el-select
                   v-model="filterStatus"
                   size="small"
-                  class="sc-knowledge__filter"
+                  class="knowledge-filter"
+                  placeholder="全部（含删除中）"
                   @change="onFilterChange"
                 >
                   <el-option
@@ -422,216 +457,300 @@ function formatTime(value: string | null): string {
                 >
                   上传课件
                 </el-button>
-                <input
-                  ref="fileInput"
-                  type="file"
-                  :accept="UPLOAD_ACCEPT"
-                  hidden
-                  @change="onFileSelected"
-                />
               </div>
             </div>
           </template>
 
-          <el-empty v-if="currentCourse === null" description="请先在左侧选择或创建课程。" />
-          <template v-else>
-            <el-descriptions :column="compact ? 1 : 3" border size="small" class="sc-knowledge__meta">
-              <el-descriptions-item label="Embedding 模型">
-                {{ currentCourse.embedding_model }}
-              </el-descriptions-item>
-              <el-descriptions-item label="维度">
-                {{ currentCourse.embedding_dim }}
-              </el-descriptions-item>
-              <el-descriptions-item label="索引版本">
-                v{{ currentCourse.index_version }}
-              </el-descriptions-item>
-            </el-descriptions>
-
-            <el-skeleton v-if="loadingDocs" :rows="4" animated />
-            <el-empty v-else-if="docs.length === 0" description="当前课程还没有课件，上传 PDF/MD/TXT 开始。">
-              <template #image>
-                <svg class="sc-empty-art" viewBox="0 0 160 120" aria-hidden="true">
-                  <circle cx="124" cy="26" r="15" fill="#ffe3a3" />
-                  <path d="M18 100V36l34-14 34 14v64H18z" fill="#e4edff" />
-                  <path d="M86 100V46l30-12 26 12v54z" fill="#cfdfff" />
-                  <rect x="30" y="52" width="42" height="7" rx="3.5" fill="#4f8cff" />
-                  <rect x="30" y="66" width="34" height="6" rx="3" fill="#9fbbf5" />
-                </svg>
+          <div class="knowledge-body">
+            <EmptyState
+              v-if="currentCourse === null"
+              image="/illustrations/scene-study-desk.png"
+              title="请先选择课程"
+              description="在左侧选择或创建课程后，即可上传与管理课件。"
+            >
+              <template #action>
+                <router-link class="card-link" :to="{ name: 'courses' }">去课程空间</router-link>
               </template>
-            </el-empty>
-            <el-table v-else :data="docs" row-key="doc_id" size="small">
-              <el-table-column label="课件" :min-width="compact ? 120 : 200">
-                <template #default="{ row }">
-                  <div>{{ row.doc_name }}</div>
-                  <div class="sc-knowledge__muted">
-                    {{ row.file_ext }} · {{ formatFileSize(row.file_size_bytes) }}
-                  </div>
+            </EmptyState>
+
+            <template v-else>
+              <div class="knowledge-summary">
+                <ProgressBar
+                  :value="readiness?.percent ?? null"
+                  label="资料就绪度"
+                  :tone="readiness?.percent === 100 ? 'success' : 'primary'"
+                />
+                <div class="knowledge-summary__counts">
+                  <span>就绪 {{ readiness?.ready ?? 0 }}</span>
+                  <span>文档总数 {{ readiness?.total ?? 0 }}</span>
+                </div>
+              </div>
+
+              <div
+                class="upload-zone"
+                :class="{
+                  'upload-zone--active': dragActive,
+                  'upload-zone--disabled': currentCourse === null || uploading,
+                }"
+                role="button"
+                tabindex="0"
+                aria-label="上传课件"
+                @click="chooseFile"
+                @keydown.enter.prevent="chooseFile"
+                @keydown.space.prevent="chooseFile"
+                @dragover.prevent="onDragOver"
+                @dragleave.prevent="onDragLeave"
+                @drop.prevent="onDrop"
+              >
+                <span class="upload-zone__art">
+                  <img src="/illustrations/status-loading.png" alt="" loading="lazy" />
+                </span>
+                <span class="upload-zone__text">
+                  <strong>{{ uploading ? '正在上传…' : '拖拽课件到此处，或点击上传' }}</strong>
+                  <small>支持 PDF / MD / TXT；扩展名、大小与编码由服务端再次校验</small>
+                </span>
+                <el-button
+                  type="primary"
+                  plain
+                  size="small"
+                  :loading="uploading"
+                  :disabled="currentCourse === null"
+                  @click.stop="chooseFile"
+                >
+                  选择文件
+                </el-button>
+              </div>
+
+              <input
+                ref="fileInput"
+                type="file"
+                :accept="UPLOAD_ACCEPT"
+                hidden
+                @change="onFileSelected"
+              />
+
+              <div class="docs-header">
+                <span>课件列表</span>
+                <span class="docs-header__count">{{ docs.length }}</span>
+              </div>
+
+              <el-skeleton v-if="loadingDocs" :rows="4" animated />
+              <EmptyState
+                v-else-if="docs.length === 0"
+                image="/illustrations/scene-study-desk.png"
+                title="当前课程还没有课件"
+                description="上传 PDF / MD / TXT 后，系统会解析、分块并建立向量索引。"
+                compact
+              >
+                <template #action>
+                  <el-button type="primary" size="small" @click="chooseFile">上传课件</el-button>
                 </template>
-              </el-table-column>
-              <el-table-column label="状态" :width="compact ? 80 : 100">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="documentStatusTagType(row.status)">
-                    {{ documentStatusLabel(row.status) }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column v-if="!compact" label="版本" width="140">
-                <template #default="{ row }">
-                  <div>解析 v{{ row.parse_version }}</div>
-                  <div class="sc-knowledge__muted">课程 v{{ row.course_index_version }}</div>
-                </template>
-              </el-table-column>
-              <el-table-column v-if="!compact" label="页/块" width="90">
-                <template #default="{ row }">
-                  {{ snapshotPageCount(row) }} / {{ snapshotChunkCount(row) }}
-                </template>
-              </el-table-column>
-              <el-table-column v-if="!compact" label="就绪时间" width="170">
-                <template #default="{ row }">{{ formatTime(snapshotReadyAt(row)) }}</template>
-              </el-table-column>
-              <el-table-column v-if="!compact" label="更新时间" width="170">
-                <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
-              </el-table-column>
-              <el-table-column label="诊断" min-width="160">
-                <template #default="{ row }">
-                  <el-tooltip
-                    v-if="row.error_msg !== null"
-                    :content="row.error_msg"
-                    placement="top"
-                  >
-                    <span class="sc-knowledge__error">{{ row.error_code ?? 'FAILED' }}</span>
-                  </el-tooltip>
-                  <span v-else class="sc-knowledge__muted">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="200" fixed="right">
-                <template #default="{ row }">
-                  <el-button
-                    v-if="canRetry(row)"
-                    text
-                    type="primary"
-                    :loading="actionDocId === row.doc_id"
-                    @click="onRetry(row)"
-                  >
-                    重试
-                  </el-button>
-                  <el-button
-                    v-if="canReindex(row)"
-                    text
-                    type="primary"
-                    :loading="actionDocId === row.doc_id"
-                    @click="onReindex(row)"
-                  >
-                    重建
-                  </el-button>
-                  <el-button
-                    v-if="canDelete(row)"
-                    text
-                    type="danger"
-                    :loading="actionDocId === row.doc_id"
-                    @click="onDelete(row)"
-                  >
-                    删除
-                  </el-button>
-                  <span v-else class="sc-knowledge__muted">
-                    {{ row.status === 'DELETING' ? '清理中' : '已删除' }}
-                  </span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </template>
-        </el-card>
-      </el-col>
-    </el-row>
+              </EmptyState>
+              <el-table v-else :data="docs" row-key="doc_id" size="small">
+                <el-table-column label="课件" :min-width="compact ? 120 : 220">
+                  <template #default="{ row }">
+                    <div>{{ row.doc_name }}</div>
+                    <div class="knowledge-muted">
+                      {{ row.file_ext }} · {{ formatFileSize(row.file_size_bytes) }}
+                      <template v-if="!compact">
+                        · 解析 v{{ row.parse_version }} · 课程 v{{ row.course_index_version }}
+                      </template>
+                    </div>
+                    <div v-if="compact && row.error_code !== null" class="knowledge-error">
+                      {{ row.error_code }}
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" :width="compact ? 80 : 90">
+                  <template #default="{ row }">
+                    <TagBadge
+                      :label="documentStatusLabel(row.status)"
+                      :tone="documentTone(row)"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column v-if="!compact" label="页/块" width="80">
+                  <template #default="{ row }">
+                    {{ snapshotPageCount(row) }} / {{ snapshotChunkCount(row) }}
+                  </template>
+                </el-table-column>
+                <el-table-column v-if="!compact" label="更新时间" width="160">
+                  <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
+                </el-table-column>
+                <el-table-column v-if="!compact" label="诊断" min-width="140">
+                  <template #default="{ row }">
+                    <el-tooltip
+                      v-if="row.error_msg !== null"
+                      :content="row.error_msg"
+                      placement="top"
+                    >
+                      <span class="knowledge-error">{{ row.error_code ?? 'FAILED' }}</span>
+                    </el-tooltip>
+                    <span v-else class="knowledge-muted">—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" :width="compact ? 150 : 190" fixed="right">
+                  <template #default="{ row }">
+                    <el-button
+                      v-if="canRetry(row)"
+                      text
+                      type="primary"
+                      :loading="actionDocId === row.doc_id"
+                      @click="onRetry(row)"
+                    >
+                      重试
+                    </el-button>
+                    <el-button
+                      v-if="canReindex(row)"
+                      text
+                      type="primary"
+                      :loading="actionDocId === row.doc_id"
+                      @click="onReindex(row)"
+                    >
+                      重建
+                    </el-button>
+                    <el-button
+                      v-if="canDelete(row)"
+                      text
+                      type="danger"
+                      :loading="actionDocId === row.doc_id"
+                      @click="onDelete(row)"
+                    >
+                      删除
+                    </el-button>
+                    <span v-else class="knowledge-muted">
+                      {{ row.status === 'DELETING' ? '清理中' : '已删除' }}
+                    </span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </template>
+          </div>
+        </BaseCard>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.sc-kb-hero {
+.knowledge-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-card-gap);
+}
+
+.knowledge-hero {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: var(--sc-page-gap);
-  padding: 26px 30px;
-  border-radius: var(--sc-radius);
-  background: linear-gradient(120deg, #eaf2ff 0%, #f7faff 50%, #eef3ff 100%);
-  box-shadow: var(--sc-shadow-soft);
+  padding: 24px 28px;
+  border: 1px solid var(--sc-border);
+  border-radius: 16px;
+  background: linear-gradient(
+    120deg,
+    var(--sc-primary-soft) 0%,
+    var(--sc-surface) 58%,
+    var(--sc-accent-soft) 100%
+  );
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-kb-hero__copy {
+.knowledge-hero__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   max-width: 720px;
+  min-width: 0;
 }
 
-.sc-kb-hero__eyebrow {
-  color: var(--sc-brand-strong);
-  font-size: 11px;
+.knowledge-hero__eyebrow {
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-hint);
   font-weight: 700;
-  letter-spacing: 1.4px;
+  letter-spacing: 1.2px;
 }
 
-.sc-kb-hero h2 {
-  margin: 8px 0 6px;
-  color: #16233d;
-  font-size: 24px;
-  font-weight: 650;
+.knowledge-hero h2 {
+  color: var(--sc-text);
+  font-size: var(--sc-font-title);
+  font-weight: var(--sc-font-title-weight);
+  letter-spacing: -0.3px;
 }
 
-.sc-kb-hero p {
-  color: var(--sc-muted);
-  font-size: 13px;
+.knowledge-hero p {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
   line-height: 1.7;
 }
 
-.sc-kb-metrics {
+.knowledge-hero__metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(64px, 1fr));
-  gap: 10px;
   flex: none;
+  grid-template-columns: repeat(4, minmax(64px, 1fr));
+  gap: 8px;
 }
 
-.sc-kb-metric {
-  min-width: 72px;
-  padding: 10px 12px;
-  border: 1px solid rgba(79, 140, 255, 0.18);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.78);
+.knowledge-metric {
+  min-width: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--sc-border);
+  border-radius: 10px;
+  background: var(--sc-surface);
   text-align: center;
 }
 
-.sc-kb-metric span {
+.knowledge-metric span {
   display: block;
-  color: var(--sc-muted);
-  font-size: 11px;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-kb-metric strong {
+.knowledge-metric strong {
   display: block;
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--sc-text);
-  font-size: 20px;
-  font-weight: 650;
+  font-size: 18px;
+  font-weight: 600;
 }
 
-.sc-kb-metric--danger strong {
+.knowledge-metric--danger strong {
   color: var(--sc-danger);
 }
 
-.sc-knowledge__course-status {
-  margin-left: 6px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  color: var(--sc-brand-strong);
-  background: var(--sc-brand-soft);
-  font-size: 11px;
+.knowledge-hero__art {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 100px;
+  height: 88px;
+  padding: 6px;
+  border-radius: 14px;
+  background: #f1f6ff;
 }
 
-.sc-empty-art {
-  width: 150px;
-  height: auto;
+.knowledge-hero__art img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 
-.sc-knowledge__header {
+.knowledge-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: var(--sc-card-gap);
+  align-items: start;
+}
+
+.knowledge-rail {
+  min-width: 0;
+}
+
+.knowledge-main {
+  min-width: 0;
+}
+
+.knowledge-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -639,83 +758,305 @@ function formatTime(value: string | null): string {
   flex-wrap: wrap;
 }
 
-.sc-knowledge__actions {
+.knowledge-header__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--sc-text);
+  font-size: var(--sc-font-body);
+  font-weight: 600;
+}
+
+.knowledge-header__actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.sc-knowledge__filter {
-  width: 120px;
+.knowledge-filter {
+  width: 152px;
 }
 
-.sc-knowledge__tag {
-  margin-left: 8px;
+.knowledge-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px var(--sc-card-pad) var(--sc-card-pad);
 }
 
-.sc-knowledge__courses {
+.knowledge-summary {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius-card);
+  background: var(--sc-surface-muted);
+}
+
+.knowledge-summary > :first-child {
+  flex: 1;
+}
+
+.knowledge-summary__counts {
+  display: flex;
+  flex: none;
+  gap: 12px;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+  white-space: nowrap;
+}
+
+.upload-zone {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px dashed var(--sc-border-strong);
+  border-radius: var(--sc-radius-card);
+  background: var(--sc-surface-muted);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.upload-zone:hover,
+.upload-zone:focus-visible,
+.upload-zone--active {
+  border-color: var(--sc-primary);
+  background: var(--sc-primary-soft);
+  outline: none;
+}
+
+.upload-zone--disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.upload-zone__art {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  padding: 5px;
+  border-radius: 11px;
+  background: #f1f6ff;
+}
+
+.upload-zone__art img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.upload-zone__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.upload-zone__text strong {
+  color: var(--sc-text);
+  font-size: var(--sc-font-caption);
+  font-weight: 600;
+}
+
+.upload-zone__text small {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+  line-height: 1.5;
+}
+
+.docs-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sc-text);
+  font-size: var(--sc-font-caption);
+  font-weight: 600;
+}
+
+.docs-header__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--sc-radius-pill);
+  color: var(--sc-primary-strong);
+  background: var(--sc-primary-soft);
+  font-size: var(--sc-font-hint);
+  line-height: 18px;
+  text-align: center;
+}
+
+.rail-courses {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rail-course {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: inherit;
+  background: transparent;
+  font-family: var(--sc-font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.rail-course:hover {
+  background: var(--sc-surface-hover);
+}
+
+.rail-course--active {
+  border-color: var(--sc-primary);
+  background: var(--sc-active);
+}
+
+.rail-course__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rail-course__top strong {
+  overflow: hidden;
+  color: var(--sc-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-course__meta {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+}
+
+.rail-course__counts {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-hint);
+}
+
+.rail-skeleton {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.sc-knowledge__course {
-  width: 100%;
-  padding: 12px 14px;
-  text-align: left;
-  background: #ffffff;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  cursor: pointer;
+.rail-skeleton__row {
+  height: 54px;
+  border-radius: 10px;
+  background: var(--sc-surface-muted);
 }
 
-.sc-knowledge__course:hover {
-  border-color: #a0cfff;
+.knowledge-muted {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-knowledge__course--active {
-  background: linear-gradient(120deg, #eaf2ff, #f7faff);
-  border-color: var(--sc-brand);
-  box-shadow: 0 6px 16px rgba(79, 140, 255, 0.16);
+.knowledge-error {
+  color: var(--sc-danger);
+  cursor: help;
+  font-size: var(--sc-font-hint);
 }
 
-.sc-knowledge__course-name {
+.card-link {
+  color: var(--sc-primary);
+  font-size: var(--sc-font-caption);
+  text-decoration: none;
+}
+
+.card-link:hover {
+  color: var(--sc-primary-strong);
+}
+
+.module-error {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 600;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
 }
 
-.sc-knowledge__muted {
-  color: #909399;
-  font-size: 12px;
+@media (max-width: 1100px) {
+  .knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .rail-courses {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.sc-knowledge__meta {
-  margin-bottom: 16px;
-}
-
-.sc-knowledge__error {
-  color: #f56c6c;
-  cursor: help;
-}
-
-@media (max-width: 900px) {
-  .sc-kb-hero {
+@media (max-width: 860px) {
+  .knowledge-hero {
     flex-direction: column;
     align-items: flex-start;
     padding: 20px;
   }
 
-  .sc-kb-metrics {
+  .knowledge-hero__metrics {
     width: 100%;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .knowledge-hero__art {
+    display: none;
+  }
+
+  .rail-courses {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 4px;
+  }
+
+  .rail-course {
+    flex: 0 0 220px;
   }
 }
 
-@media (max-width: 520px) {
-  .sc-kb-metrics {
+@media (max-width: 639px) {
+  .knowledge-summary {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .knowledge-summary__counts {
+    justify-content: space-between;
+  }
+
+  .upload-zone {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .upload-zone__text {
+    flex-basis: calc(100% - 68px);
+  }
+
+  .upload-zone > :last-child {
+    margin-left: 68px;
+  }
+
+  .knowledge-hero__metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

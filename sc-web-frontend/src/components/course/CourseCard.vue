@@ -65,33 +65,34 @@ function selectCourse(): void {
 </script>
 
 <template>
-  <router-link
-    class="course-card"
-    :class="[`course-card--${tone}`, { 'course-card--compact': compact }]"
-    :to="{ name: 'knowledge' }"
-    @click="selectCourse"
-  >
-    <div class="course-card__top">
-      <span class="course-card__icon">
-        <component :is="icon" :size="19" :stroke-width="1.8" />
-      </span>
-      <span class="course-card__title">
-        <strong>{{ course.course_name }}</strong>
-        <small v-if="!compact && course.description">{{ course.description }}</small>
-      </span>
-      <TagBadge :label="indexStatusLabel(course.index_status)" :tone="indexTone" />
-    </div>
+  <article class="course-card" :class="[`course-card--${tone}`, { 'course-card--compact': compact }]">
+    <router-link
+      class="course-card__body"
+      :to="{ name: 'knowledge' }"
+      @click="selectCourse"
+    >
+      <div class="course-card__top">
+        <span class="course-card__icon">
+          <component :is="icon" :size="19" :stroke-width="1.8" />
+        </span>
+        <span class="course-card__title">
+          <strong>{{ course.course_name }}</strong>
+          <small v-if="!compact && course.description">{{ course.description }}</small>
+        </span>
+        <TagBadge :label="indexStatusLabel(course.index_status)" :tone="indexTone" />
+      </div>
 
-    <ProgressBar
-      :value="readiness.percent"
-      label="资料就绪度"
-      :tone="readiness.percent === 100 ? 'success' : 'primary'"
-    />
+      <ProgressBar
+        :value="readiness.percent"
+        label="资料就绪度"
+        :tone="readiness.percent === 100 ? 'success' : 'primary'"
+      />
 
-    <div v-if="!compact" class="course-card__meta">
-      <span>{{ course.embedding_model }} · {{ course.embedding_dim }} 维</span>
-      <span>索引 v{{ course.index_version }}</span>
-    </div>
+      <div v-if="!compact" class="course-card__meta">
+        <span>{{ course.embedding_model }} · {{ course.embedding_dim }} 维</span>
+        <span>索引 v{{ course.index_version }}</span>
+      </div>
+    </router-link>
 
     <div class="course-card__foot">
       <span><FileText class="course-card__foot-icon" :size="13" />文档 {{ readiness.total }}</span>
@@ -99,9 +100,16 @@ function selectCourse(): void {
         <CalendarClock class="course-card__foot-icon" :size="13" />DDL
         {{ ddlCount === null ? '—' : ddlCount }}
       </span>
-      <span class="course-card__more">查看<ChevronRight :size="13" :stroke-width="2" /></span>
+      <router-link
+        class="course-card__more"
+        :to="{ name: 'knowledge' }"
+        @click="selectCourse"
+      >
+        查看<ChevronRight :size="13" :stroke-width="2" />
+      </router-link>
+      <slot name="actions" />
     </div>
-  </router-link>
+  </article>
 </template>
 
 <style scoped>
@@ -115,16 +123,29 @@ function selectCourse(): void {
   border-radius: var(--sc-radius-card);
   background: var(--sc-surface);
   color: inherit;
-  text-decoration: none;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .course-card:hover,
-.course-card:focus-visible {
+.course-card:focus-within {
   border-color: var(--sc-primary);
   box-shadow: var(--sc-shadow);
-  outline: none;
   transform: translateY(-1px);
+}
+
+.course-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.course-card__body:focus-visible {
+  outline: 2px solid var(--sc-primary);
+  outline-offset: 4px;
+  border-radius: 10px;
 }
 
 .course-card__top {
@@ -177,12 +198,14 @@ function selectCourse(): void {
 }
 
 .course-card__title strong {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--sc-text);
   font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .course-card__title small {
@@ -226,8 +249,16 @@ function selectCourse(): void {
 }
 
 .course-card__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
   margin-left: auto;
   color: var(--sc-primary);
+  text-decoration: none;
+}
+
+.course-card__more:hover {
+  color: var(--sc-primary-strong);
 }
 
 .course-card--compact {
@@ -246,6 +277,13 @@ function selectCourse(): void {
   width: 34px;
   height: 34px;
   border-radius: 10px;
+}
+
+.course-card--compact .course-card__title strong {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .course-card--compact .course-card__foot {

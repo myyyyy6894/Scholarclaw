@@ -97,6 +97,55 @@ docker compose --profile onebot up -d sc-napcat-onebot
 - 自定义 Base URL 默认拒绝内网/回环地址（SSRF 防护）；确需连接本地 Ollama 时用
   `SC_ALLOW_LOCAL_MODEL_BASE_URL=true` + `SC_LOCAL_MODEL_ALLOWED_ORIGINS=<origin>` 精确放行
 
+### 5.1 平台自带向量模型（可选，推荐）
+
+自建部署最常见的形式：部署方跑一个向量模型，**使用者只需要填对话模型 Key**，建课、上传、
+问答全都能用。仓库内置了一个可选的 Ollama 容器，一条命令即可。
+
+**选模型**（2 核 4G 机型优先看前两行）：
+
+| 模型 | 维度 | 磁盘/内存 | 说明 |
+|---|---|---|---|
+| `qwen3-embedding:0.6b` | 1024 | 约 640 MB | **推荐**：中文与多语言效果好，占用适中 |
+| `nomic-embed-text` | 768 | 约 274 MB | 最小，中文能力弱于上一行 |
+| `bge-m3` | 1024 | 约 1.2 GB | 中文最好，但 4G 机器上偏重，建议 ≥8G |
+
+**启动**：
+
+```bash
+docker compose --profile embedding up -d sc-ollama
+docker compose exec sc-ollama ollama pull qwen3-embedding:0.6b   # 首次需拉模型
+docker compose exec sc-ollama ollama list                       # 确认已存在
+```
+
+**配置 `.env` 并重启 Java**：
+
+```dotenv
+SC_PLATFORM_EMBEDDING_PROVIDER=OLLAMA
+SC_PLATFORM_EMBEDDING_BASE_URL=http://sc-ollama:11434/v1
+SC_PLATFORM_EMBEDDING_MODEL=qwen3-embedding:0.6b
+SC_PLATFORM_EMBEDDING_DIM=1024
+SC_PLATFORM_EMBEDDING_API_KEY=
+SC_ALLOW_LOCAL_MODEL_BASE_URL=true
+SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://sc-ollama:11434
+SC_OLLAMA_KEEP_ALIVE=30m
+```
+
+```bash
+docker compose up -d sc-java-backend sc-python-ai
+docker compose logs sc-java-backend | grep 平台默认向量模型   # 应显示「已启用」
+```
+
+之后新注册用户自动带上该向量模型；老用户下次登录时补齐。设置页会标注「平台默认」，
+**有能力的用户仍可自己填一套替换**（改默认模型会影响已有课程，前端会提示需要迁移并重建索引）。
+
+**不想在本机跑模型**时，把上面五项换成云厂商的 Embedding API 即可（`OPENAI_COMPATIBLE` +
+`ZHIPU`），例如 `SC_PLATFORM_EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1` 和对应
+`SC_PLATFORM_EMBEDDING_API_KEY`，2C4G 机器能省下约 1 GB 内存。
+
+> 维度必须与实际模型一致：填错时建课会按探测到的真实维度覆盖，但设置页显示会不符。
+> 换模型后已有课程的向量需要重建（每门课在知识库里点「重建索引」）。
+
 ## 6. 排障
 
 | 现象 | 先看什么 | 常见原因 |

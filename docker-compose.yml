@@ -46,6 +46,9 @@ volumes:
     name: vol_napcat_qq
   vol_napcat_config:
     name: vol_napcat_config
+  # 可选内置向量模型（profile=embedding）：Ollama 模型缓存
+  vol_ollama_models:
+    name: vol_ollama_models
 
 services:
 
@@ -451,6 +454,44 @@ services:
       - vol_napcat_qq:/app/.config/QQ
       - vol_napcat_config:/app/napcat/config
     mem_limit: 1024m
+
+  # ---------------------------------------------------------------------------
+  # Ollama（可选，profile=embedding）：平台自带向量模型，Web 用户免配置直接用
+  #
+  # 启动：
+  #   docker compose --profile embedding up -d sc-ollama
+  #   docker compose exec sc-ollama ollama pull qwen3-embedding:0.6b   # 首次拉模型
+  # 然后在 .env 配置（详见 DEPLOYMENT.md §5.1）：
+  #   SC_PLATFORM_EMBEDDING_PROVIDER=OLLAMA
+  #   SC_PLATFORM_EMBEDDING_BASE_URL=http://sc-ollama:11434/v1
+  #   SC_PLATFORM_EMBEDDING_MODEL=qwen3-embedding:0.6b
+  #   SC_PLATFORM_EMBEDDING_DIM=1024
+  #   SC_ALLOW_LOCAL_MODEL_BASE_URL=true
+  #   SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://sc-ollama:11434
+  #
+  # 只加入内部网络、不映射宿主机端口；2C4G 机型建议用小模型（见 DEPLOYMENT.md §5.1）。
+  # ---------------------------------------------------------------------------
+  sc-ollama:
+    image: ollama/ollama:latest
+    container_name: sc-ollama
+    restart: unless-stopped
+    profiles: ["embedding"]
+    networks: [scholarclaw-internal]
+    environment:
+      TZ: ${SC_TIMEZONE:-Asia/Shanghai}
+      # 模型常驻内存，避免每条请求重新加载；内存紧张时调小或改成 5m
+      OLLAMA_KEEP_ALIVE: ${SC_OLLAMA_KEEP_ALIVE:-30m}
+      # 只加载一个模型：2C4G 机器同时驻留多个模型会直接 OOM
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes:
+      - vol_ollama_models:/root/.ollama
+    mem_limit: ${SC_OLLAMA_MEM_LIMIT:-2048m}
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
 # 说明（OneBot/NapCat）：
 #   sc-napcat-onebot 已作为可选 profile 纳入编排。默认 `docker compose up -d` 不会启动它；

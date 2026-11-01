@@ -103,7 +103,17 @@ SC_PLATFORM_EMBEDDING_DIM=1024
 SC_PLATFORM_EMBEDDING_API_KEY=sk-xxx
 ```
 
-启用后，**新注册账号**自动带上这套 Embedding（已有账号不受影响，用户仍可在设置页覆盖）。五项缺一项 Java 会拒绝启动，避免"以为开了其实没开"。
+启用后，新注册账号自动带上这套 Embedding；已有账号在**下次登录时补齐**（只补没有有效配置的账号，
+用户自己配好的不会被覆盖）。设置页会标出「平台默认」，用户也可以自行覆盖。
+
+不想自己准备向量服务的话，仓库内置了一个可选的 Ollama 容器（2C4G 机器建议小模型）：
+
+```bash
+docker compose --profile embedding up -d sc-ollama
+docker compose exec sc-ollama ollama pull qwen3-embedding:0.6b
+```
+
+完整配置见 [`DEPLOYMENT.md` §5.1](DEPLOYMENT.md#51-平台自带向量模型可选推荐)。
 
 地址是内网/本地时（如 `http://127.0.0.1:11434`），还需放行白名单，否则建课时的安全校验会拒绝：
 

@@ -32,6 +32,7 @@ from app.services.agent.intents import (
 )
 from app.services.agent.router import (
     INTENT_CONFIDENCE_THRESHOLD,
+    MAX_ROUTING_READ_TIMEOUT_SECONDS,
     _InvalidIntentOutput,
     _parse_model_response,
     MAX_ROUTING_ATTEMPTS,
@@ -435,3 +436,10 @@ class TestModelOutputDiagnostics:
         assert "不是合法 JSON" in str(exc.value)
         # 原始输出要带进错误信息，否则排查只能靠猜
         assert "抱歉" in str(exc.value)
+
+
+class TestProviderTimeoutBudget:
+    """超时上限曾经对着本地 mock 定成 4 秒，真实供应商会稳定超时（线上踩过）。"""
+
+    def test_routing_timeout_has_room_for_real_providers(self) -> None:
+        assert MAX_ROUTING_READ_TIMEOUT_SECONDS >= 10

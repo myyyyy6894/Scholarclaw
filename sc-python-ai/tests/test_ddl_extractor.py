@@ -23,6 +23,7 @@ from app.core.exceptions import (
 )
 from app.schemas.ddl_extract import TimePrecision
 from app.services.ddl.extractor import (
+    MAX_EXTRACTION_READ_TIMEOUT_SECONDS,
     MAX_EXTRACTION_ATTEMPTS,
     DdlExtractionRequest,
     DdlExtractor,
@@ -826,3 +827,10 @@ async def test_extractor_resolves_relative_week_and_marks_relative() -> None:
     assert result.time_resolution.due_at is not None
     assert result.time_resolution.due_at.isoformat() == "2026-10-21T23:59:59+08:00"
     assert result.time_resolution.time_inferred is True
+
+
+class TestProviderTimeoutBudget:
+    """10 秒上限是按本地 mock 定的；真实供应商输出完整 JSON 常需 20~40 秒。"""
+
+    def test_extraction_timeout_has_room_for_real_providers(self) -> None:
+        assert MAX_EXTRACTION_READ_TIMEOUT_SECONDS >= 30

@@ -47,7 +47,9 @@ MAX_ROUTING_ATTEMPTS = 2
 #: 重试间隔；只用于避免瞬时连续重打上游。
 ROUTING_RETRY_DELAYS: tuple[float, ...] = (0.2,)
 #: 分类是极短请求；为 DDL 提取留出 Java 15s 预算内的余量。
-MAX_ROUTING_READ_TIMEOUT_SECONDS = 4.0
+# 意图分类只是短输出，但**真实供应商**（尤其推理型/限流时段）响应普遍 5~15 秒；
+# 4 秒是按本地 mock 定的，线上会稳定超时。给到 15 秒仍远小于交互可接受上限。
+MAX_ROUTING_READ_TIMEOUT_SECONDS = 15.0
 
 _GATEWAY_PATH = "chat/completions"
 # 意图分类本身只要一小段 JSON，但**推理类模型**（deepseek 的 reasoner 系列、

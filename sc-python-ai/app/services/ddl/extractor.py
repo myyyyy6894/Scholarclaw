@@ -62,7 +62,9 @@ MAX_EXTRACTION_ATTEMPTS = 2
 #: 重试间隔；仅用于避免瞬时连续重打上游，不改变“有限重试”的语义。
 SHAPE_RETRY_DELAYS: tuple[float, ...] = (0.2,)
 #: DDL 提取是短请求，读取超时不得超过 Java 侧 15s 总预算的余量。
-MAX_EXTRACTION_READ_TIMEOUT_SECONDS = 10.0
+# DDL 提取要输出完整 JSON（最多 1600 token），真实供应商常需 20~40 秒；
+# 10 秒同样是按本地 mock 定的，线上必然超时。60 秒留足余量。
+MAX_EXTRACTION_READ_TIMEOUT_SECONDS = 60.0
 
 _GATEWAY_PATH = "chat/completions"
 #: 提取输出上限。800 对 JSON 本身足够，但部分推理型/短输出模型会先消耗

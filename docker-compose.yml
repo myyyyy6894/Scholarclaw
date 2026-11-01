@@ -418,6 +418,8 @@ services:
       SC_NAPCAT_WEBUI_URL: ${SC_NAPCAT_WEBUI_URL:-}
       # 部署方联系 QQ（非密钥，可选）：留空则前端不显示「帮助与反馈」里的联系方式。
       SC_OPERATOR_QQ: ${SC_OPERATOR_QQ:-}
+      # 项目主页地址（非密钥，可选）：显示在使用指南的「联系与反馈」里。
+      SC_PROJECT_URL: ${SC_PROJECT_URL:-}
     mem_limit: 128m
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]

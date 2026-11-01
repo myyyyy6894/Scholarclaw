@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { Info, KeyRound, ShieldAlert, SlidersHorizontal, UserX } from '@lucide/vue'
+import { KeyRound, ShieldAlert, SlidersHorizontal, UserX } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
-import { resolveApiBaseUrl } from '@/api/client'
 import {
   clearApiKeys,
   deactivateAccount,
@@ -25,8 +24,6 @@ import TagBadge from '@/components/ui/TagBadge.vue'
 import UserAvatar from '@/components/ui/UserAvatar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
-import { copyOperatorQq, readRuntimeOperatorQq, resolveOperatorQq } from '@/utils/operator-contact'
-import { IMPLEMENTED_CAPABILITIES } from '@/views/home/home-tasks'
 import {
   createModelForm,
   embeddingTargetChanged,
@@ -58,21 +55,6 @@ import type { PreferencesFormState } from '@/views/settings/preferences-form'
 
 const router = useRouter()
 const auth = useAuthStore()
-
-/** 首页原先的开发信息移到这里（Prompt §8），首页不再展示工程骨架内容。 */
-const apiBaseUrl = resolveApiBaseUrl()
-const buildMode = import.meta.env.MODE
-const aboutPanels = ref<string[]>([])
-/** 部署方联系 QQ（`SC_OPERATOR_QQ`）；空串表示不展示联系区块。 */
-const operatorQq = resolveOperatorQq(readRuntimeOperatorQq())
-
-async function copyQq(): Promise<void> {
-  if (await copyOperatorQq(operatorQq)) {
-    notifySuccess('QQ 号已复制。')
-    return
-  }
-  notifyWarning('复制失败，请手动选择号码复制。')
-}
 
 const loading = ref(true)
 const loadError = ref('')
@@ -416,29 +398,7 @@ function goToLogin(): void {
         </template>
 
         <el-alert
-          v-if="platformEmbedding"
-          class="settings-card__alert"
-          type="info"
-          :closable="false"
-          show-icon
-          title="向量模型由部署方统一提供"
-          :description="`当前使用 ${config?.default_embedding_model ?? '平台默认模型'}（${config?.default_embedding_dim ?? '—'} 维）。你只需要填写对话模型；如需改用其他向量模型，可在下方「默认 Embedding 模型」覆盖。`"
-        />
-        <el-alert
-          v-if="!hasAnyConfig"
-          class="settings-card__alert"
-          type="info"
-          :closable="false"
-          show-icon
-          title="尚未配置模型"
-          :description="
-            platformEmbedding
-              ? '填写对话模型后点击“测试连接”，确认可用再保存。向量模型已由部署方提供，无需你配置。'
-              : '填写对话模型与默认 Embedding 模型后点击“测试连接”，确认可用再保存。保存时会重新探测并回填真实向量维度。'
-          "
-        />
-        <el-alert
-          v-else
+          v-if="hasAnyConfig"
           class="settings-card__alert"
           type="success"
           :closable="false"
@@ -674,14 +634,7 @@ function goToLogin(): void {
           </el-row>
           <div class="sc-settings__row">
             <span class="sc-settings__hint">
-              IM 绑定是可选的：不绑定也能使用全部 Web 功能，站内通知照常送达。
-              绑定后由部署者运行的机器人 QQ 把提醒推送到你的 QQ。
-              QQ 扫码登录由独立的 NapCat 协议端完成（入口仅供部署者运维使用）；登录后请让
-              QQ 号与上方绑定保持一致。 远程部署时由部署者用
-              <code>SC_NAPCAT_WEBUI_URL</code>
-              （运行期，重启 Web 生效）或
-              <code>VITE_NAPCAT_WEBUI_URL</code>
-              （构建期）指向浏览器可达的地址，默认仅本机。
+              IM 绑定可选：不绑定也能使用全部 Web 功能，站内通知照常送达；绑定后由部署者运行的机器人 QQ 推送提醒。
             </span>
             <el-link
               type="primary"
@@ -799,52 +752,32 @@ function goToLogin(): void {
       </BaseCard>
 
       <BaseCard class="settings-card">
-        <template #header>
-          <div class="settings-card__heading">
-            <span class="settings-card__icon">
-              <Info :size="17" :stroke-width="1.8" />
-            </span>
-            <div>
-              <h3>关于</h3>
-              <p>构建环境与已实现能力；开发信息集中在这里，不再占用首页。</p>
-            </div>
-          </div>
-        </template>
-
-        <el-collapse v-model="aboutPanels">
-          <el-collapse-item title="构建与环境信息" name="build">
-            <el-descriptions :column="1" border>
-              <el-descriptions-item label="业务接口前缀">
-                {{ apiBaseUrl }}
-              </el-descriptions-item>
-              <el-descriptions-item label="构建模式">{{ buildMode }}</el-descriptions-item>
-              <el-descriptions-item label="开发态代理">
-                由 <code>VITE_DEV_PROXY_TARGET</code> 指定，仅绑定环回地址
-              </el-descriptions-item>
-            </el-descriptions>
-          </el-collapse-item>
-          <el-collapse-item v-if="operatorQq" title="联系与反馈" name="contact">
-            <p class="sc-about-contact">
-              使用中遇到问题，可以加维护者 QQ 反馈（加好友请备注 ScholarClaw）：
-            </p>
-            <div class="sc-about-qq">
-              <strong>{{ operatorQq }}</strong>
-              <el-button size="small" @click="copyQq">复制</el-button>
-            </div>
-            <p class="sc-about-note">QQ 仅用于问题反馈与答疑；DDL 提醒以站内通知为准。</p>
-          </el-collapse-item>
-          <el-collapse-item title="已实现能力" name="capabilities">
-            <ul class="sc-about-list">
-              <li v-for="item in IMPLEMENTED_CAPABILITIES" :key="item">{{ item }}</li>
-            </ul>
-          </el-collapse-item>
-        </el-collapse>
+        <div class="settings-guide">
+          <p>功能怎么用、模型 Key 怎么申请、常见问题与联系方式，都写在《使用指南》里。</p>
+          <router-link :to="{ name: 'guide' }">
+            <el-button>打开使用指南</el-button>
+          </router-link>
+        </div>
       </BaseCard>
     </template>
   </div>
 </template>
 
 <style scoped>
+.settings-guide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-guide p {
+  margin: 0;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+}
+
 .settings-page {
   display: flex;
   flex-direction: column;
@@ -1034,39 +967,6 @@ function goToLogin(): void {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.sc-about-list {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--sc-text-secondary);
-  font-size: var(--sc-font-caption);
-  line-height: 1.9;
-}
-
-.sc-about-contact {
-  color: var(--sc-text-secondary);
-  font-size: var(--sc-font-caption);
-  line-height: 1.7;
-}
-
-.sc-about-qq {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 10px 0;
-}
-
-.sc-about-qq strong {
-  color: var(--sc-text);
-  font-size: 18px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-}
-
-.sc-about-note {
-  color: var(--sc-text-placeholder);
-  font-size: var(--sc-font-hint);
 }
 
 .settings-page :deep(code) {

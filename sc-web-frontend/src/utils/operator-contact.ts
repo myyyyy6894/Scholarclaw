@@ -12,6 +12,7 @@
 declare global {
   interface Window {
     __SC_OPERATOR_QQ__?: string
+    __SC_PROJECT_URL__?: string
   }
 }
 
@@ -52,4 +53,24 @@ export async function copyOperatorQq(qq: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * 项目主页地址（`SC_PROJECT_URL`，非密钥，可选）。
+ *
+ * 只接受 http/https 绝对地址；其它值一律当作未配置，避免把配置错误渲染成可点击链接。
+ */
+export function readRuntimeProjectUrl(): string | undefined {
+  if (typeof window === 'undefined') {
+    return undefined
+  }
+  return window.__SC_PROJECT_URL__
+}
+
+export function normalizeProjectUrl(value?: string): string {
+  const candidate = (value ?? '').trim()
+  if (!/^https?:\/\/[^\s]+$/i.test(candidate)) {
+    return ''
+  }
+  return candidate
 }

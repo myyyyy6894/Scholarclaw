@@ -92,4 +92,15 @@ withDefaults(
 .empty-state--compact .empty-state__title {
   font-size: var(--sc-font-caption);
 }
+/* 手机端：插画占的高度比文案还多，未登录时四张卡叠起来太占地，直接去掉插画只留文案与操作。 */
+@media (max-width: 900px) {
+  .empty-state__frame {
+    display: none;
+  }
+
+  .empty-state {
+    gap: 6px;
+    padding: 14px 8px;
+  }
+}
 </style>

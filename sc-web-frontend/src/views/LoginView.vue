@@ -9,6 +9,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { login, register, toAuthSession } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess } from '@/utils/notify'
+import { hasSeenGuide, markGuideSeen } from '@/utils/guide-flag'
+import { firstVisitGuideTarget } from '@/views/guide/first-visit'
 
 /**
  * 登录 / 注册页（`06` TASK-205、`04` §4.1 `API-AUTH-001/002`）。
@@ -102,7 +104,7 @@ async function submit(): Promise<void> {
         : await register({ username: form.username.trim(), password: form.password })
     auth.setSession(toAuthSession(response))
     notifySuccess(mode.value === 'login' ? '登录成功' : '注册成功，已自动登录')
-    await router.replace(resolveRedirect())
+    await router.replace(resolveNextTarget())
   } catch (error) {
     notifyError(error)
   } finally {
@@ -117,6 +119,23 @@ function resolveRedirect(): string {
     return redirect
   }
   return '/settings'
+}
+
+/**
+ * 登录后的落地页。
+ *
+ * 第一次登录/注册：先带用户看一遍使用指南（只跳一次，标记写在本地）；
+ * 之后、或者用户本来就带着明确 redirect（比如被守卫踢回登录）时，按原逻辑走。
+ */
+function resolveNextTarget(): string {
+  const redirect = route.query.redirect
+  const hasRedirect = typeof redirect === 'string' && redirect.startsWith('/')
+  const guideTarget = firstVisitGuideTarget(hasSeenGuide(), hasRedirect, route.path)
+  if (guideTarget === null) {
+    return resolveRedirect()
+  }
+  markGuideSeen()
+  return guideTarget
 }
 
 function handleEnter(): void {

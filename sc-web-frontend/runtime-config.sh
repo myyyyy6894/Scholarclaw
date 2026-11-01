@@ -17,10 +17,20 @@ escaped=$(printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
 qq="${SC_OPERATOR_QQ:-}"
 qq=$(printf '%s' "$qq" | tr -cd '0-9')
 
+# --- 项目主页地址（可选）：只接受 http(s)，其它值一律视为未配置 ---
+project_url="${SC_PROJECT_URL:-}"
+project_url=$(printf '%s' "$project_url" | tr -d '\r\n')
+case "$project_url" in
+  http://*|https://*) ;;
+  *) project_url="" ;;
+esac
+url_escaped=$(printf '%s' "$project_url" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+
 cat > "$target" <<EOF
-// 由 sc-web-nginx 启动脚本生成（SC_NAPCAT_WEBUI_URL / SC_OPERATOR_QQ）；请勿手工编辑。
+// 由 sc-web-nginx 启动脚本生成（SC_NAPCAT_WEBUI_URL / SC_OPERATOR_QQ / SC_PROJECT_URL）；请勿手工编辑。
 window.__SC_NAPCAT_WEBUI_URL__ = "${escaped}";
 window.__SC_OPERATOR_QQ__ = "${qq}";
+window.__SC_PROJECT_URL__ = "${url_escaped}";
 EOF
 
-echo "[runtime-config] SC_NAPCAT_WEBUI_URL=${value:-<empty: 使用构建期默认值>} SC_OPERATOR_QQ=${qq:-<empty: 不显示联系方式>}"
+echo "[runtime-config] SC_NAPCAT_WEBUI_URL=${value:-<empty: 使用构建期默认值>} SC_OPERATOR_QQ=${qq:-<empty>} SC_PROJECT_URL=${project_url:-<empty>}"

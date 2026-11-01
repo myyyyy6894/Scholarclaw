@@ -4,6 +4,7 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import { installAuthGuard } from '@/router/guard'
 import CoursesView from '@/views/CoursesView.vue'
 import DdlView from '@/views/DdlView.vue'
+import GuideView from '@/views/GuideView.vue'
 import HomeView from '@/views/HomeView.vue'
 import KnowledgeView from '@/views/KnowledgeView.vue'
 import LoginView from '@/views/LoginView.vue'
@@ -71,6 +72,13 @@ const routes: RouteRecordRaw[] = [
         name: 'settings',
         component: SettingsView,
         meta: { title: '个人设置', requiresAuth: true },
+      },
+      {
+        // 使用指南：不要求登录，未注册的人也能先看功能说明
+        path: 'guide',
+        name: 'guide',
+        component: GuideView,
+        meta: { title: '使用指南' },
       },
     ],
   },

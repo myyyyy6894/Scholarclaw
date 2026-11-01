@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import type { Component } from 'vue'
 
 import {
@@ -18,16 +18,13 @@ import { useRoute } from 'vue-router'
 import UserAvatar from '@/components/ui/UserAvatar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
-import { notifySuccess, notifyWarning } from '@/utils/notify'
-import { copyOperatorQq, readRuntimeOperatorQq, resolveOperatorQq } from '@/utils/operator-contact'
 import { unreadBadge } from '@/views/notifications/notification-center'
 
 /**
  * 工作台左侧导航（P1，参考图 `首页.png` / `首页图片.png`）。
  *
  * 白底、灰字、浅蓝选中态 + 左侧 3px 主色条；导航只暴露真实存在的页面。
- * 「消息通知」不是独立路由，点击打开通知抽屉；「帮助与反馈」显示部署方联系 QQ
- * （`SC_OPERATOR_QQ`，未配置时只提示暂无在线联系方式）。
+ * 「消息通知」不是独立路由，点击打开通知抽屉；「帮助与反馈」跳转到使用指南页 `/guide`。
  *
  * 同一份组件在桌面侧栏与移动端抽屉中复用（`expanded` 控制是否强制展开文字）。
  */
@@ -54,8 +51,6 @@ const route = useRoute()
 const auth = useAuthStore()
 const ui = useUiStore()
 
-const helpOpen = ref(false)
-
 const primaryNav = computed<NavEntry[]>(() => {
   if (!auth.isAuthenticated) {
     return [
@@ -74,27 +69,12 @@ const primaryNav = computed<NavEntry[]>(() => {
 
 const ddlBadge = computed(() => unreadBadge(props.ddlPendingCount))
 const notificationBadge = computed(() => unreadBadge(props.unreadCount))
-const operatorQq = computed(() => resolveOperatorQq(readRuntimeOperatorQq()))
-
-async function copyQq(): Promise<void> {
-  if (await copyOperatorQq(operatorQq.value)) {
-    notifySuccess('QQ 号已复制。')
-    return
-  }
-  notifyWarning('复制失败，请手动选择号码复制。')
-}
-
 function isActive(entry: NavEntry): boolean {
   return route.name === entry.routeName
 }
 
 function openNotifications(): void {
   ui.openNotificationDrawer()
-  emit('navigate')
-}
-
-function openHelp(): void {
-  helpOpen.value = true
   emit('navigate')
 }
 </script>
@@ -160,9 +140,10 @@ function openHelp(): void {
       </button>
     </nav>
 
-    <div v-if="auth.isAuthenticated" class="app-sidebar__nav app-sidebar__nav--secondary">
+    <div class="app-sidebar__nav app-sidebar__nav--secondary">
       <p class="app-sidebar__section">更多</p>
       <router-link
+        v-if="auth.isAuthenticated"
         class="app-nav-item"
         :class="{ 'app-nav-item--active': route.name === 'settings' }"
         :to="{ name: 'settings' }"
@@ -173,11 +154,18 @@ function openHelp(): void {
         <Settings class="app-nav-item__icon" :size="19" :stroke-width="1.8" />
         <span class="app-nav-item__label">设置</span>
       </router-link>
-      <button type="button" class="app-nav-item" title="帮助与反馈" @click="openHelp">
+      <!-- 帮助与反馈直接打开使用指南页（内容见 /guide）：未登录也能看 -->
+      <router-link
+        class="app-nav-item"
+        :class="{ 'app-nav-item--active': route.name === 'guide' }"
+        :to="{ name: 'guide' }"
+        title="帮助与反馈"
+        @click="emit('navigate')"
+      >
         <span class="app-nav-item__bar" aria-hidden="true" />
         <CircleHelp class="app-nav-item__icon" :size="19" :stroke-width="1.8" />
         <span class="app-nav-item__label">帮助与反馈</span>
-      </button>
+      </router-link>
     </div>
 
     <div class="app-sidebar__spacer" />
@@ -211,25 +199,6 @@ function openHelp(): void {
       <LogIn :size="18" :stroke-width="1.8" />
       <span class="app-sidebar__user-text"><strong>登录 / 注册</strong></span>
     </router-link>
-
-    <el-dialog v-model="helpOpen" title="帮助与反馈" width="440px" append-to-body>
-      <div class="app-sidebar__help">
-        <template v-if="operatorQq">
-          <p>使用中遇到问题，可以加维护者 QQ 反馈（加好友请备注 ScholarClaw）：</p>
-          <div class="app-sidebar__qq">
-            <span class="app-sidebar__qq-number">{{ operatorQq }}</span>
-            <el-button size="small" @click="copyQq">复制</el-button>
-          </div>
-          <p class="app-sidebar__help-note">
-            QQ 仅用于问题反馈与答疑；DDL 提醒以站内通知为准，加好友不会额外推送。
-          </p>
-        </template>
-        <p v-else>帮助文档与在线反馈入口尚未接入；如需支持，请联系部署者。</p>
-      </div>
-      <template #footer>
-        <el-button type="primary" @click="helpOpen = false">知道了</el-button>
-      </template>
-    </el-dialog>
   </aside>
 </template>
 
@@ -456,38 +425,6 @@ function openHelp(): void {
   color: var(--sc-text-placeholder);
 }
 
-.app-sidebar__help {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  color: var(--sc-text-secondary);
-  font-size: var(--sc-font-caption);
-  line-height: 1.7;
-}
-
-.app-sidebar__qq {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-button);
-  background: var(--sc-primary-soft);
-}
-
-.app-sidebar__qq-number {
-  color: var(--sc-text);
-  font-size: 18px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.app-sidebar__help-note {
-  color: var(--sc-text-placeholder);
-  font-size: var(--sc-font-hint);
-}
 
 /* ---------- <1024px：图标栏 ---------- */
 @media (max-width: 1023px) {

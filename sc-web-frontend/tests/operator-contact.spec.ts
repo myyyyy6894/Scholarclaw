@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   normalizeOperatorQq,
+  normalizeProjectUrl,
   readRuntimeOperatorQq,
   resolveOperatorQq,
 } from '@/utils/operator-contact'
@@ -31,6 +32,14 @@ describe('部署方联系 QQ 解析', () => {
     expect(resolveOperatorQq('123456', '987654321')).toBe('123456')
     expect(resolveOperatorQq('', '987654321')).toBe('987654321')
     expect(resolveOperatorQq(undefined, undefined)).toBe('')
+  })
+
+  it('项目地址只接受 http(s) 绝对地址', () => {
+    expect(normalizeProjectUrl('https://gitee.com/myy/scholarclaw')).toBe('https://gitee.com/myy/scholarclaw')
+    expect(normalizeProjectUrl('  http://example.com/repo  ')).toBe('http://example.com/repo')
+    expect(normalizeProjectUrl('javascript:alert(1)')).toBe('')
+    expect(normalizeProjectUrl('gitee.com/myy/scholarclaw')).toBe('')
+    expect(normalizeProjectUrl(undefined)).toBe('')
   })
 
   it('读取 window.__SC_OPERATOR_QQ__', () => {

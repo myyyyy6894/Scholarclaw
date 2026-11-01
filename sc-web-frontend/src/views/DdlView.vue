@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
+import { CalendarDays, ClipboardPaste, List, Plus, RefreshCw } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 
 import { listCourses } from '@/api/course'
@@ -16,7 +17,17 @@ import {
 } from '@/api/ddl'
 import type { DdlTask, DraftDecision, TaskChangeDraft } from '@/api/ddl'
 import { ApiError } from '@/api/error'
+import DdlCalendar from '@/components/home/DdlCalendar.vue'
+import BaseCard from '@/components/ui/BaseCard.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import StatCard from '@/components/ui/StatCard.vue'
+import TagBadge from '@/components/ui/TagBadge.vue'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
+import {
+  DEFAULT_TIMEZONE,
+  toDateString,
+  zonedDateParts,
+} from '@/views/home/dashboard-data'
 import DdlTaskForm from '@/views/ddl/DdlTaskForm.vue'
 import {
   boardCounts,
@@ -92,6 +103,59 @@ const pendingInfos = computed<Record<string, PendingCardInfo>>(() => {
   }
   return result
 })
+
+type DdlViewMode = 'list' | 'calendar'
+type Tone = 'primary' | 'success' | 'warning' | 'danger' | 'neutral'
+
+const viewMode = ref<DdlViewMode>('list')
+const calendarDate = ref<string | null>(null)
+
+const timezone = computed(() => {
+  const task =
+    board.value.active_tasks[0] ??
+    board.value.pending_inbox_tasks[0] ??
+    board.value.completed_tasks[0]
+  return task?.user_timezone ?? DEFAULT_TIMEZONE
+})
+const todayIso = computed(() => {
+  const parts = zonedDateParts(new Date(nowMs.value), timezone.value)
+  return toDateString(parts.year, parts.month, parts.day)
+})
+const calendarTasks = computed<DdlTask[]>(() => [
+  ...board.value.pending_inbox_tasks,
+  ...board.value.active_tasks,
+  ...board.value.completed_tasks,
+])
+const dateTasks = computed<DdlTask[]>(() => {
+  if (calendarDate.value === null) {
+    return []
+  }
+  return calendarTasks.value
+    .filter((task) => task.due_date === calendarDate.value)
+    .sort((left, right) =>
+      (left.due_time ?? '99:99:99').localeCompare(right.due_time ?? '99:99:99'),
+    )
+})
+
+function switchView(mode: DdlViewMode): void {
+  viewMode.value = mode
+  if (mode === 'calendar' && calendarDate.value === null) {
+    calendarDate.value = todayIso.value
+  }
+}
+
+function onCalendarSelect(date: string): void {
+  calendarDate.value = date
+}
+
+function taskTime(task: DdlTask): string {
+  return task.due_time === null ? '全天' : task.due_time.slice(0, 5)
+}
+
+function statusTone(status: DdlTask['status']): Tone {
+  const tone = statusTagType(status)
+  return tone === 'info' ? 'neutral' : tone
+}
 
 onMounted(() => {
   void loadCourses()
@@ -444,78 +508,83 @@ async function cancelTask(task: DdlTask): Promise<void> {
 </script>
 
 <template>
-  <div>
-    <section class="sc-ddl-hero">
-      <div class="sc-ddl-hero__copy">
-        <span class="sc-ddl-hero__eyebrow">DDL RADAR</span>
-        <h2>DDL 待办工作台</h2>
+  <div class="ddl-page">
+    <section class="ddl-hero">
+      <div class="ddl-hero__copy">
+        <span class="ddl-hero__eyebrow">DDL RADAR</span>
+        <h2>DDL 任务</h2>
         <p>
           粘贴群通知即可提取结构化待办；模糊时间会进入待确认收件箱，重复通知的截止时间变更必须先确认，
           系统不会静默覆盖已有任务。
         </p>
+        <div class="ddl-hero__meta">
+          <TagBadge label="提醒调度已启用" tone="success" dot />
+          <span>站内通知始终可用；QQ 推送失败或离线时降级为仅 Web 展示。</span>
+        </div>
       </div>
-      <div class="sc-ddl-hero__actions">
-        <el-button @click="openCreateDialog">手动新建</el-button>
-        <el-button type="primary" @click="openExtractDialog">粘贴通知提取</el-button>
+      <div class="ddl-hero__side">
+        <div class="ddl-hero__art">
+          <img src="/illustrations/feature-ddl.png" alt="" />
+        </div>
+        <div class="ddl-hero__actions">
+          <el-button :icon="Plus" @click="openCreateDialog">手动新建</el-button>
+          <el-button type="primary" :icon="ClipboardPaste" @click="openExtractDialog">
+            粘贴通知提取
+          </el-button>
+        </div>
       </div>
     </section>
 
-    <div class="sc-ddl-metrics">
-      <div class="sc-ddl-metric">
-        <span>待确认</span>
-        <strong>{{ counts.pending }}</strong>
-      </div>
-      <div class="sc-ddl-metric">
-        <span>变更草案</span>
-        <strong>{{ counts.drafts }}</strong>
-      </div>
-      <div class="sc-ddl-metric">
-        <span>进行中</span>
-        <strong>{{ counts.active }}</strong>
-      </div>
-      <div class="sc-ddl-metric sc-ddl-metric--danger">
-        <span>已逾期</span>
-        <strong>{{ counts.overdue }}</strong>
-      </div>
-      <div class="sc-ddl-metric">
-        <span>已完成</span>
-        <strong>{{ counts.completed }}</strong>
-      </div>
+    <div class="ddl-metrics">
+      <StatCard label="待确认" :value="counts.pending" tone="warning" hint="待补充时间" />
+      <StatCard label="变更草案" :value="counts.drafts" tone="primary" hint="需确认后生效" />
+      <StatCard label="进行中" :value="counts.active" tone="default" hint="按截止时间排序" />
+      <StatCard label="已逾期" :value="counts.overdue" tone="danger" hint="需要尽快处理" />
+      <StatCard label="已完成" :value="counts.completed" tone="success" hint="最近完成" />
     </div>
 
-    <el-alert
-      class="sc-card-gap"
-      type="info"
-      :closable="false"
-      show-icon
-      title="提醒调度已启用"
-      description="T-24h、T-6h、逾期与待确认跟进提醒由后台调度自动执行；站内通知始终可用，QQ 推送失败或离线时会降级为仅 Web 展示。"
-    />
+    <BaseCard padding="sm">
+      <div class="ddl-toolbar">
+        <div class="ddl-toolbar__filters">
+          <el-select
+            v-model="courseFilter"
+            clearable
+            filterable
+            placeholder="全部课程"
+            class="ddl-toolbar__select"
+            @change="loadBoard"
+          >
+            <el-option
+              v-for="course in courses"
+              :key="course.course_id"
+              :label="course.course_name"
+              :value="course.course_id"
+            />
+          </el-select>
+          <el-button :icon="RefreshCw" :loading="loading" @click="loadBoard">刷新</el-button>
+        </div>
 
-    <el-card class="sc-card-gap" shadow="never">
-      <div class="sc-ddl-toolbar">
-        <el-select
-          v-model="courseFilter"
-          clearable
-          filterable
-          placeholder="全部课程"
-          class="sc-ddl-toolbar__select"
-          @change="loadBoard"
-        >
-          <el-option
-            v-for="course in courses"
-            :key="course.course_id"
-            :label="course.course_name"
-            :value="course.course_id"
-          />
-        </el-select>
-        <el-button :disabled="loading" @click="loadBoard">刷新</el-button>
+        <div class="ddl-view-toggle" role="group" aria-label="视图切换">
+          <button
+            type="button"
+            :class="{ 'is-active': viewMode === 'list' }"
+            @click="switchView('list')"
+          >
+            <List :size="15" :stroke-width="1.8" /> 列表
+          </button>
+          <button
+            type="button"
+            :class="{ 'is-active': viewMode === 'calendar' }"
+            @click="switchView('calendar')"
+          >
+            <CalendarDays :size="15" :stroke-width="1.8" /> 日历
+          </button>
+        </div>
       </div>
-    </el-card>
+    </BaseCard>
 
     <el-alert
       v-if="loadError !== ''"
-      class="sc-card-gap"
       type="error"
       :closable="false"
       show-icon
@@ -523,34 +592,32 @@ async function cancelTask(task: DdlTask): Promise<void> {
       :description="loadError"
     />
 
-    <el-skeleton v-if="loading" class="sc-card-gap" :rows="6" animated />
+    <el-skeleton v-if="loading" :rows="6" animated />
 
-    <template v-else>
-      <el-card
+    <template v-else-if="viewMode === 'list'">
+      <BaseCard
         v-if="board.pending_change_drafts.length > 0"
-        class="sc-card-gap"
-        shadow="never"
+        :title="`重复通知变更草案（${board.pending_change_drafts.length}）`"
+        subtitle="变更必须确认后才生效"
       >
-        <template #header>
-          <div class="sc-ddl-section__header">
-            <span>重复通知变更草案（{{ board.pending_change_drafts.length }}）</span>
-            <el-tag size="small" type="warning">需确认后才生效</el-tag>
-          </div>
+        <template #actions>
+          <TagBadge label="需确认后才生效" tone="warning" />
         </template>
+
         <article
           v-for="draft in board.pending_change_drafts"
           :key="draft.target_task_id"
-          class="sc-ddl-draft"
+          class="ddl-draft"
         >
           <div>
-            <div class="sc-ddl-draft__title">
+            <div class="ddl-draft__title">
               任务 #T{{ draft.target_task_id }} 收到新的截止时间或交付要求
             </div>
-            <div class="sc-ddl-muted">
+            <div class="ddl-muted">
               新截止：{{ draftDeadline(draft) }}
               <span v-if="draftExpiryText(draft) !== null"> · {{ draftExpiryText(draft) }}</span>
             </div>
-            <div v-if="draft.raw_time_text !== null" class="sc-ddl-muted">
+            <div v-if="draft.raw_time_text !== null" class="ddl-muted">
               原文时间：{{ draft.raw_time_text }}
             </div>
           </div>
@@ -558,39 +625,36 @@ async function cancelTask(task: DdlTask): Promise<void> {
             查看对比并决策
           </el-button>
         </article>
-      </el-card>
+      </BaseCard>
 
-      <el-card class="sc-card-gap" shadow="never">
-        <template #header>
-          <div class="sc-ddl-section__header">
-            <span>待确认收件箱（{{ board.pending_inbox_tasks.length }}）</span>
-            <span class="sc-ddl-muted">补充时间后进入 T-24h / T-6h / 逾期提醒范围</span>
-          </div>
-        </template>
-        <el-empty
+      <BaseCard
+        :title="`待确认收件箱（${board.pending_inbox_tasks.length}）`"
+        subtitle="补充时间后进入 T-24h / T-6h / 逾期提醒范围"
+      >
+        <EmptyState
           v-if="board.pending_inbox_tasks.length === 0"
-          description="没有待确认的任务。"
-          :image-size="72"
+          image="/illustrations/status-schedule.png"
+          title="没有待确认的任务"
+          description="模糊时间或缺失时间的通知会先进入这里。"
+          compact
         />
-        <div v-else class="sc-ddl-inbox">
+        <div v-else class="ddl-inbox">
           <article
             v-for="task in board.pending_inbox_tasks"
             :key="task.task_id"
-            class="sc-ddl-inbox__card"
+            class="ddl-inbox__card"
           >
-            <header class="sc-ddl-inbox__head">
+            <header class="ddl-inbox__head">
               <div>
-                <span class="sc-ddl-code">{{ task.display_code }}</span>
+                <span class="ddl-code">{{ task.display_code }}</span>
                 <strong>{{ task.task_title }}</strong>
               </div>
-              <el-tag size="small" :type="statusTagType(task.status)">
-                {{ statusLabel(task.status) }}
-              </el-tag>
+              <TagBadge :label="statusLabel(task.status)" :tone="statusTone(task.status)" dot />
             </header>
-            <div class="sc-ddl-muted">
+            <div class="ddl-muted">
               {{ task.course_name }} · 时间精度：{{ precisionLabel(task.time_precision) }}
             </div>
-            <div class="sc-ddl-inbox__time">
+            <div class="ddl-inbox__time">
               <div>解析截止：{{ pendingInfos[task.task_id]?.deadline ?? '未生成截止时间' }}</div>
               <div v-if="pendingInfos[task.task_id]?.rawTime !== null">
                 原文时间：{{ pendingInfos[task.task_id]?.rawTime }}
@@ -599,8 +663,8 @@ async function cancelTask(task: DdlTask): Promise<void> {
                 原通知未注明具体时刻，暂按当日 23:59 统计
               </div>
             </div>
-            <p class="sc-ddl-inbox__reason">{{ pendingInfos[task.task_id]?.reason }}</p>
-            <div class="sc-ddl-inbox__actions">
+            <p class="ddl-inbox__reason">{{ pendingInfos[task.task_id]?.reason }}</p>
+            <div class="ddl-inbox__actions">
               <el-button type="primary" size="small" @click="openEditDialog(task)">
                 补充时间 / 编辑
               </el-button>
@@ -614,19 +678,18 @@ async function cancelTask(task: DdlTask): Promise<void> {
             </div>
           </article>
         </div>
-      </el-card>
+      </BaseCard>
 
-      <el-card class="sc-card-gap" shadow="never">
-        <template #header>
-          <div class="sc-ddl-section__header">
-            <span>进行中与已逾期（{{ board.active_tasks.length }}）</span>
-            <span class="sc-ddl-muted">按截止时间升序</span>
-          </div>
-        </template>
-        <el-empty
+      <BaseCard
+        :title="`进行中与已逾期（${board.active_tasks.length}）`"
+        subtitle="按截止时间升序"
+      >
+        <EmptyState
           v-if="board.active_tasks.length === 0"
-          description="没有进行中的任务。"
-          :image-size="72"
+          image="/illustrations/achievement-trophy.png"
+          title="没有进行中的任务"
+          description="所有 DDL 都已完成，或还没有已确认截止时间的任务。"
+          compact
         />
         <el-table v-else :data="board.active_tasks" row-key="task_id" size="small">
           <el-table-column label="完成" width="60">
@@ -641,26 +704,28 @@ async function cancelTask(task: DdlTask): Promise<void> {
           <el-table-column label="任务" min-width="220">
             <template #default="{ row }">
               <div>
-                <span class="sc-ddl-code">{{ row.display_code }}</span>
+                <span class="ddl-code">{{ row.display_code }}</span>
                 <strong>{{ row.task_title }}</strong>
               </div>
-              <div class="sc-ddl-muted">{{ row.course_name }}</div>
+              <div class="ddl-muted">{{ row.course_name }}</div>
             </template>
           </el-table-column>
           <el-table-column label="截止时间" min-width="240">
             <template #default="{ row }">
               <div>{{ deadlineText(row) }}</div>
-              <div class="sc-ddl-muted">
+              <div class="ddl-muted">
                 {{ precisionLabel(row.time_precision) }}
                 <span v-if="row.raw_time_text !== null"> · 原文“{{ row.raw_time_text }}”</span>
               </div>
-              <el-tag v-if="inferredNotice(row) !== null" size="small" type="info">
-                未注明具体时刻，按当日 23:59 统计
-              </el-tag>
+              <TagBadge
+                v-if="inferredNotice(row) !== null"
+                label="未注明具体时刻，按当日 23:59 统计"
+                tone="neutral"
+              />
               <div
                 v-if="countdowns[row.task_id] !== undefined && countdowns[row.task_id] !== null"
-                class="sc-ddl-countdown"
-                :class="{ 'sc-ddl-countdown--overdue': countdowns[row.task_id]?.overdue }"
+                class="ddl-countdown"
+                :class="{ 'ddl-countdown--overdue': countdowns[row.task_id]?.overdue }"
               >
                 {{ countdowns[row.task_id]?.text }}
               </div>
@@ -668,9 +733,7 @@ async function cancelTask(task: DdlTask): Promise<void> {
           </el-table-column>
           <el-table-column label="状态" width="96">
             <template #default="{ row }">
-              <el-tag size="small" :type="statusTagType(row.status)">
-                {{ statusLabel(row.status) }}
-              </el-tag>
+              <TagBadge :label="statusLabel(row.status)" :tone="statusTone(row.status)" dot />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="170" align="right" fixed="right">
@@ -690,14 +753,9 @@ async function cancelTask(task: DdlTask): Promise<void> {
             </template>
           </el-table-column>
         </el-table>
-      </el-card>
+      </BaseCard>
 
-      <el-card class="sc-card-gap" shadow="never">
-        <template #header>
-          <div class="sc-ddl-section__header">
-            <span>已完成（最近 {{ board.completed_tasks.length }} 条）</span>
-          </div>
-        </template>
+      <BaseCard :title="`已完成（最近 ${board.completed_tasks.length} 条）`">
         <el-empty
           v-if="board.completed_tasks.length === 0"
           description="还没有已完成的任务。"
@@ -716,10 +774,10 @@ async function cancelTask(task: DdlTask): Promise<void> {
           <el-table-column label="任务" min-width="220">
             <template #default="{ row }">
               <div>
-                <span class="sc-ddl-code">{{ row.display_code }}</span>
+                <span class="ddl-code">{{ row.display_code }}</span>
                 <strong>{{ row.task_title }}</strong>
               </div>
-              <div class="sc-ddl-muted">{{ row.course_name }}</div>
+              <div class="ddl-muted">{{ row.course_name }}</div>
             </template>
           </el-table-column>
           <el-table-column label="截止时间" min-width="200">
@@ -747,7 +805,44 @@ async function cancelTask(task: DdlTask): Promise<void> {
             </template>
           </el-table-column>
         </el-table>
-      </el-card>
+      </BaseCard>
+    </template>
+
+    <template v-else>
+      <DdlCalendar
+        :tasks="calendarTasks"
+        :today-iso="todayIso"
+        :show-day-list="false"
+        @select="onCalendarSelect"
+      />
+
+      <BaseCard
+        :title="calendarDate === null ? '当天任务' : `${calendarDate} 的任务`"
+        subtitle="点击日历中的日期查看当天全部任务"
+      >
+        <EmptyState
+          v-if="dateTasks.length === 0"
+          image="/illustrations/achievement-trophy.png"
+          title="当天没有 DDL 任务"
+          description="换一天看看，或回到列表视图管理全部任务。"
+          compact
+        />
+        <ul v-else class="ddl-day-list">
+          <li v-for="task in dateTasks" :key="task.task_id" class="ddl-day-task">
+            <span class="ddl-day-task__time">{{ taskTime(task) }}</span>
+            <span class="ddl-day-task__main">
+              <strong>
+                <span class="ddl-code">{{ task.display_code }}</span>{{ task.task_title }}
+              </strong>
+              <small>{{ task.course_name }} · {{ precisionLabel(task.time_precision) }}</small>
+            </span>
+            <TagBadge :label="statusLabel(task.status)" :tone="statusTone(task.status)" dot />
+            <el-button text type="primary" size="small" @click="openEditDialog(task)">
+              编辑
+            </el-button>
+          </li>
+        </ul>
+      </BaseCard>
     </template>
 
     <el-dialog
@@ -926,84 +1021,104 @@ async function cancelTask(task: DdlTask): Promise<void> {
 </template>
 
 <style scoped>
-.sc-ddl-hero {
+.ddl-page {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  gap: var(--sc-card-gap);
+}
+
+.ddl-hero {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  flex-wrap: wrap;
-  padding: 22px 24px;
+  gap: 24px;
+  padding: 24px 28px;
+  overflow: hidden;
+  border: 1px solid var(--sc-border);
   border-radius: 16px;
-  background: linear-gradient(120deg, #f5f9ff 0%, #eef4ff 55%, #f7f3ff 100%);
-  border: 1px solid #e3ecfb;
+  background: linear-gradient(
+    120deg,
+    var(--sc-primary-soft) 0%,
+    var(--sc-surface) 58%,
+    var(--sc-accent-soft) 100%
+  );
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-ddl-hero__eyebrow {
-  color: #7590c4;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1.6px;
+.ddl-hero__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
 
-.sc-ddl-hero h2 {
-  margin: 6px 0 8px;
-  color: #1d2b45;
-  font-size: 22px;
+.ddl-hero__eyebrow {
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-hint);
+  font-weight: 700;
+  letter-spacing: 1.2px;
 }
 
-.sc-ddl-hero p {
-  max-width: 640px;
-  margin: 0;
-  color: #5d6b84;
-  font-size: 13px;
+.ddl-hero h2 {
+  color: var(--sc-text);
+  font-size: var(--sc-font-title);
+  font-weight: var(--sc-font-title-weight);
+  letter-spacing: -0.3px;
+}
+
+.ddl-hero p {
+  max-width: 700px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
   line-height: 1.7;
 }
 
-.sc-ddl-hero__actions {
-  display: flex;
-  gap: 10px;
-}
-
-.sc-ddl-metrics {
+.ddl-hero__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin: 16px 0 0;
-}
-
-.sc-ddl-metric {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid #edf1f7;
-  font-size: 12px;
-  color: #7b8794;
-}
-
-.sc-ddl-metric strong {
-  color: #1d2b45;
-  font-size: 18px;
-}
-
-.sc-ddl-metric--danger strong {
-  color: #d64545;
-}
-
-.sc-ddl-toolbar {
-  display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-ddl-toolbar__select {
-  width: 240px;
+.ddl-hero__side {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 16px;
 }
 
-.sc-ddl-section__header {
+.ddl-hero__art {
+  display: grid;
+  place-items: center;
+  width: 108px;
+  height: 92px;
+  padding: 6px;
+  border-radius: 14px;
+  background: #f1f6ff;
+}
+
+.ddl-hero__art img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.ddl-hero__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ddl-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ddl-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1011,146 +1126,287 @@ async function cancelTask(task: DdlTask): Promise<void> {
   flex-wrap: wrap;
 }
 
-.sc-ddl-muted {
-  color: #7b8794;
-  font-size: 12px;
+.ddl-toolbar__filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.sc-ddl-code {
-  margin-right: 6px;
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: #eef4ff;
-  color: #3d6fd8;
-  font-size: 12px;
+.ddl-toolbar__select {
+  width: 240px;
+}
+
+.ddl-view-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--sc-border);
+  border-radius: 10px;
+  background: var(--sc-surface-muted);
+}
+
+.ddl-view-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--sc-text-secondary);
+  background: transparent;
+  font-family: var(--sc-font-sans);
+  font-size: var(--sc-font-caption);
+  cursor: pointer;
+}
+
+.ddl-view-toggle button.is-active {
+  color: var(--sc-primary-strong);
+  background: var(--sc-surface);
+  box-shadow: var(--sc-shadow);
   font-weight: 600;
 }
 
-.sc-ddl-draft {
+.ddl-muted {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+}
+
+.ddl-code {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--sc-primary-strong);
+  background: var(--sc-primary-soft);
+  font-size: var(--sc-font-hint);
+  font-weight: 600;
+}
+
+.ddl-draft {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 12px 0;
-  border-bottom: 1px dashed #e7ecf5;
+  border-bottom: 1px dashed var(--sc-border);
 }
 
-.sc-ddl-draft:last-child {
+.ddl-draft:last-child {
   border-bottom: 0;
 }
 
-.sc-ddl-draft__title {
-  color: #1d2b45;
+.ddl-draft__title {
+  color: var(--sc-text);
   font-size: 14px;
   font-weight: 600;
 }
 
-.sc-ddl-inbox {
+.ddl-inbox {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 14px;
 }
 
-.sc-ddl-inbox__card {
+.ddl-inbox__card {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 16px;
-  border: 1px solid #f0e2c8;
+  border: 1px solid var(--sc-border);
   border-radius: 12px;
-  background: #fffdf7;
+  background: var(--sc-warning-soft);
 }
 
-.sc-ddl-inbox__head {
+.ddl-inbox__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 
-.sc-ddl-inbox__head strong {
-  color: #1d2b45;
+.ddl-inbox__head strong {
+  color: var(--sc-text);
   font-size: 14px;
 }
 
-.sc-ddl-inbox__reason {
-  margin: 0;
-  color: #6f5a2e;
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.sc-ddl-inbox__time {
+.ddl-inbox__time {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  color: #1d2b45;
+  color: var(--sc-text);
   font-size: 13px;
   font-weight: 500;
 }
 
-.sc-ddl-dialog__notice {
-  margin-top: 8px;
+.ddl-inbox__reason {
+  margin: 0;
+  color: #6f5a2e;
+  font-size: var(--sc-font-caption);
+  line-height: 1.7;
 }
 
-.sc-ddl-inbox__actions {
+[data-theme="dark"] .ddl-inbox__reason {
+  color: #fbbf24;
+}
+
+.ddl-inbox__actions {
   display: flex;
   gap: 8px;
   margin-top: auto;
 }
 
-.sc-ddl-countdown {
+.ddl-countdown {
   margin-top: 4px;
-  color: #3d6fd8;
-  font-size: 12px;
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-ddl-countdown--overdue {
-  color: #d64545;
+.ddl-countdown--overdue {
+  color: var(--sc-danger);
   font-weight: 600;
 }
 
-.sc-ddl-dialog__intro {
-  margin: 0 0 12px;
-  color: #5d6b84;
+.ddl-day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ddl-day-task {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: 10px;
+  transition: background-color 0.18s ease;
+}
+
+.ddl-day-task:hover {
+  background: var(--sc-surface-hover);
+}
+
+.ddl-day-task__time {
+  flex: none;
+  width: 48px;
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-caption);
+  font-weight: 600;
+}
+
+.ddl-day-task__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ddl-day-task__main strong {
+  overflow: hidden;
+  color: var(--sc-text);
   font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ddl-day-task__main small {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+}
+
+.ddl-dialog__intro {
+  margin: 0 0 12px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
   line-height: 1.7;
 }
 
-.sc-ddl-dialog__target {
+.ddl-dialog__target {
   margin-bottom: 12px;
-  color: #1d2b45;
-  font-size: 13px;
+  color: var(--sc-text);
+  font-size: var(--sc-font-caption);
 }
 
-.sc-ddl-dialog__raw {
+.ddl-dialog__raw {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin: 12px 0;
 }
 
-.sc-ddl-diff__changed {
+.ddl-diff__changed {
   color: #c2761a;
   font-weight: 600;
 }
 
-.sc-ddl-form__control {
+[data-theme="dark"] .ddl-diff__changed {
+  color: #fbbf24;
+}
+
+.ddl-form__control {
   width: 100%;
 }
 
-@media (max-width: 640px) {
-  .sc-ddl-hero {
-    padding: 18px;
+@media (max-width: 1200px) {
+  .ddl-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .ddl-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 20px;
   }
 
-  .sc-ddl-toolbar__select {
+  .ddl-hero__side {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .ddl-hero__actions {
+    flex-direction: row;
+  }
+
+  .ddl-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .ddl-hero__art {
+    display: none;
+  }
+
+  .ddl-toolbar__filters {
     width: 100%;
   }
 
-  .sc-ddl-draft {
+  .ddl-toolbar__select {
+    flex: 1;
+    width: auto;
+  }
+
+  .ddl-inbox {
+    grid-template-columns: 1fr;
+  }
+
+  .ddl-draft {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .ddl-day-task {
+    flex-wrap: wrap;
+  }
+
+  .ddl-day-task__main {
+    flex-basis: calc(100% - 60px);
   }
 }
 </style>

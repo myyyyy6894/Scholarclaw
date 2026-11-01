@@ -1,15 +1,42 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import type { Component } from 'vue'
 
+import {
+  BookOpen,
+  ClipboardList,
+  Code2,
+  FileText,
+  Globe,
+  MessageSquare,
+  Sparkles,
+  Trash2,
+  Upload,
+} from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 
 import { listCourses } from '@/api/course'
 import type { CourseNamespace } from '@/api/course'
 import { ApiError } from '@/api/error'
 import { clearMessages, listMessages, streamRagQa } from '@/api/rag'
-import type { CitationPayload, DonePayload, RagCitation } from '@/api/rag'
+import type {
+  ChatMessage,
+  CitationPayload,
+  DonePayload,
+  RagCitation,
+} from '@/api/rag'
+import BaseCard from '@/components/ui/BaseCard.vue'
+import ComingSoonBadge from '@/components/ui/ComingSoonBadge.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import TagBadge from '@/components/ui/TagBadge.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useCourseStore } from '@/stores/course'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
+import {
+  recentChatPairs,
+  relativeTimeLabel,
+  type ChatPair,
+} from '@/views/home/dashboard-data'
 import {
   applyDone,
   applyInterrupted,
@@ -35,10 +62,24 @@ import {
  */
 
 const courseStore = useCourseStore()
+const auth = useAuthStore()
+
+const PROMPT_SUGGESTIONS = [
+  '请基于我的知识库，解释一下这个概念…',
+  '帮我分析这段代码的实现思路…',
+  '我有一个课设/大作业，帮我规划一下实现步骤…',
+  '总结一下这份文档的重点内容…',
+]
+const PROMPT_ICONS: Component[] = [BookOpen, Code2, ClipboardList, FileText]
+
+interface FocusableInput {
+  focus: () => void
+}
 
 const courses = ref<CourseNamespace[]>([])
 const selectedCourseId = ref<string | null>(courseStore.selectedCourseId)
 const messages = ref<UiMessage[]>([])
+const historyItems = ref<ChatMessage[]>([])
 const query = ref('')
 const loadingCourses = ref(true)
 const loadingHistory = ref(false)
@@ -49,9 +90,12 @@ const streaming = ref(false)
 const hasMore = ref(false)
 const nextCursor = ref<string | null>(null)
 const messagesEl = ref<HTMLElement | null>(null)
+const queryInput = ref<FocusableInput | null>(null)
+const nowMs = ref(Date.now())
 
 let streamController: AbortController | null = null
 let historySeq = 0
+let clockTimer: number | null = null
 
 const selectedCourse = computed(
   () => courses.value.find((course) => course.course_id === selectedCourseId.value) ?? null,
@@ -59,13 +103,21 @@ const selectedCourse = computed(
 const canSend = computed(
   () => selectedCourseId.value !== null && !streaming.value && query.value.trim() !== '',
 )
+const recentPairs = computed<ChatPair[]>(() => recentChatPairs(historyItems.value, 4))
 
 onMounted(() => {
   void bootstrap()
+  clockTimer = window.setInterval(() => {
+    nowMs.value = Date.now()
+  }, 60_000)
 })
 
 onUnmounted(() => {
   streamController?.abort()
+  if (clockTimer !== null) {
+    window.clearInterval(clockTimer)
+    clockTimer = null
+  }
 })
 
 async function bootstrap(): Promise<void> {
@@ -99,6 +151,7 @@ async function onCourseChange(): Promise<void> {
   stopStreaming()
   courseStore.select(selectedCourseId.value)
   messages.value = []
+  historyItems.value = []
   nextCursor.value = null
   hasMore.value = false
   historyError.value = ''
@@ -127,6 +180,7 @@ async function loadHistory(reset: boolean): Promise<void> {
     }
     const mapped = historyToUiMessages(page.items)
     messages.value = reset ? mapped : [...mapped, ...messages.value]
+    historyItems.value = reset ? page.items : [...page.items, ...historyItems.value]
     nextCursor.value = page.next_cursor
     hasMore.value = page.has_more
     await scrollToBottom()
@@ -304,6 +358,7 @@ async function clearHistory(): Promise<void> {
   try {
     const result = await clearMessages(courseId)
     messages.value = []
+    historyItems.value = []
     nextCursor.value = null
     hasMore.value = false
     streamError.value = ''
@@ -358,530 +413,1028 @@ function messageMeta(message: UiMessage): string {
   }
   return parts.join(' · ')
 }
+
+function applyPrompt(prompt: string): void {
+  query.value = prompt
+  void nextTick(() => {
+    queryInput.value?.focus()
+  })
+}
+
+function focusComposer(): void {
+  void nextTick(() => {
+    queryInput.value?.focus()
+  })
+}
+
+function jumpToPair(pair: ChatPair): void {
+  const messageId = pair.assistant.message_id
+  const target = document.getElementById(`rag-msg-${messageId}`)
+  if (target !== null) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return
+  }
+  applyPrompt(pair.user.content)
+}
+
+function relativeTime(value: string): string {
+  return relativeTimeLabel(value, nowMs.value)
+}
 </script>
 
 <template>
-  <div class="sc-rag">
-    <aside class="sc-rag__sidebar">
-      <div class="sc-rag__side-block">
-        <label for="rag-course">课程空间</label>
-        <el-select
-          id="rag-course"
-          v-model="selectedCourseId"
-          :loading="loadingCourses"
-          placeholder="选择课程"
-          class="sc-rag__course-select"
-          @change="handleCourseChange"
-        >
-          <el-option
-            v-for="course in courses"
-            :key="course.course_id"
-            :label="course.course_name"
-            :value="course.course_id"
+  <div class="rag-page">
+    <section class="rag-main">
+      <header class="rag-header">
+        <div class="rag-header__copy">
+          <span class="rag-header__eyebrow">AI LEARNING</span>
+          <h2>{{ selectedCourse?.course_name ?? 'AI 学习' }}</h2>
+          <p>基于你的课程知识库与真实引用，提供学习问答、代码解析与学习规划。</p>
+        </div>
+        <div class="rag-header__controls">
+          <el-select
+            v-model="selectedCourseId"
+            :loading="loadingCourses"
+            placeholder="选择课程"
+            class="rag-course-select"
+            @change="handleCourseChange"
+          >
+            <el-option
+              v-for="course in courses"
+              :key="course.course_id"
+              :label="course.course_name"
+              :value="course.course_id"
+            />
+          </el-select>
+          <TagBadge
+            v-if="selectedCourse !== null"
+            :label="`${selectedCourse.embedding_model} · ${selectedCourse.embedding_dim} 维`"
+            tone="primary"
           />
-        </el-select>
-        <p v-if="courseError !== ''" class="sc-rag__muted sc-rag__error-text">{{ courseError }}</p>
-      </div>
-
-      <div v-if="selectedCourse !== null" class="sc-rag__side-block sc-rag__course-meta">
-        <div>
-          <span>索引版本</span>
-          <strong>v{{ selectedCourse.index_version }}</strong>
+          <el-button
+            plain
+            type="danger"
+            :icon="Trash2"
+            :disabled="selectedCourseId === null || loadingHistory"
+            @click="onClearClick"
+          >
+            清空会话
+          </el-button>
         </div>
-        <div>
-          <span>就绪课件</span>
-          <strong>{{ selectedCourse.ready_doc_count }}</strong>
-        </div>
-        <div>
-          <span>解析中</span>
-          <strong>{{ selectedCourse.parsing_doc_count }}</strong>
-        </div>
-        <div>
-          <span>失败</span>
-          <strong>{{ selectedCourse.failed_doc_count }}</strong>
-        </div>
-      </div>
-
-      <el-alert
-        v-if="selectedCourse?.index_status === 'REBUILDING'"
-        title="课程正在重建索引；若无 READY 课件，问答会被拒绝。"
-        type="warning"
-        :closable="false"
-        show-icon
-      />
-
-      <div class="sc-rag__side-actions">
-        <el-button
-          type="danger"
-          plain
-          :disabled="selectedCourseId === null || loadingHistory"
-          @click="onClearClick"
-        >
-          清空当前课程会话
-        </el-button>
-        <router-link class="sc-rag__link" :to="{ name: 'knowledge' }">
-          管理课程与课件 →
-        </router-link>
-      </div>
-    </aside>
-
-    <section class="sc-rag__main">
-      <header class="sc-rag__hero">
-        <div>
-          <span class="sc-rag__eyebrow">COURSE RAG</span>
-          <h2>{{ selectedCourse?.course_name ?? '课程问答' }}</h2>
-          <p>回答只基于当前课程已就绪的课件，并校验真实文件名与页码；无依据时会诚实声明。</p>
-        </div>
-        <el-tag v-if="selectedCourse !== null" type="info" effect="plain">
-          {{ selectedCourse.embedding_model }} · {{ selectedCourse.embedding_dim }} 维
-        </el-tag>
+        <p v-if="courseError !== ''" class="rag-inline-error">{{ courseError }}</p>
+        <el-alert
+          v-if="selectedCourse?.index_status === 'REBUILDING'"
+          class="rag-rebuild-alert"
+          title="课程正在重建索引；若无 READY 课件，问答会被拒绝。"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
       </header>
 
-      <div ref="messagesEl" class="sc-rag__messages">
-        <div v-if="loadingCourses" class="sc-rag__state">正在加载课程…</div>
-        <div v-else-if="courses.length === 0" class="sc-rag__state">
-          还没有课程空间。请先到
-          <router-link :to="{ name: 'courses' }">课程空间</router-link>
-          创建课程并上传课件。
-        </div>
-        <div v-else-if="loadingHistory && messages.length === 0" class="sc-rag__state">
-          正在加载会话历史…
-        </div>
-        <div v-else-if="historyError !== '' && messages.length === 0" class="sc-rag__state sc-rag__state--error">
-          {{ historyError }}
-          <el-button link type="primary" @click="retryHistory">重试</el-button>
-        </div>
-        <div v-else-if="messages.length === 0" class="sc-rag__state">
-          当前课程还没有对话。试试问一个与课件相关的问题。
-        </div>
+      <section class="rag-panel">
+        <div ref="messagesEl" class="rag-messages">
+          <div v-if="loadingCourses" class="rag-state">正在加载课程…</div>
 
-        <el-button
-          v-if="hasMore"
-          class="sc-rag__older"
-          text
-          type="primary"
-          :loading="loadingHistory"
-          @click="loadOlder"
-        >
-          加载更早消息
-        </el-button>
+          <EmptyState
+            v-else-if="courses.length === 0"
+            image="/illustrations/empty-cat-reading.png"
+            title="还没有课程空间"
+            description="先到课程空间创建课程并上传课件，再开始提问。"
+            compact
+          >
+            <template #action>
+              <router-link class="rag-link" :to="{ name: 'courses' }">去课程空间</router-link>
+            </template>
+          </EmptyState>
 
-        <article
-          v-for="message in messages"
-          :key="message.key"
-          class="sc-rag__message"
-          :class="message.role === 'USER' ? 'sc-rag__message--user' : 'sc-rag__message--assistant'"
-        >
-          <div class="sc-rag__bubble">
-            <div v-if="message.noticeText !== null" class="sc-rag__notice">
-              {{ message.noticeText }}
-            </div>
-            <div v-if="message.content !== ''" class="sc-rag__content">
-              <template v-for="(segment, index) in inlineSegments(message)" :key="`seg-${index}`">
-                <span v-if="segment.citationIndex === null">{{ segment.text }}</span>
-                <span v-else class="sc-rag__inline-citation">{{ segment.text }}</span>
-              </template>
-            </div>
-            <div v-if="message.supplement !== ''" class="sc-rag__supplement">
-              <strong>通用知识补充（非本校课件原文）</strong>
-              <p>{{ message.supplement }}</p>
-            </div>
-            <div v-if="message.errorText !== null" class="sc-rag__interrupted">
-              {{ message.errorText }}
-            </div>
-            <div v-if="message.streaming" class="sc-rag__streaming">正在生成…</div>
+          <div v-else-if="loadingHistory && messages.length === 0" class="rag-state">
+            正在加载会话历史…
+          </div>
 
-            <div v-if="message.citations !== null && message.citations.length > 0" class="sc-rag__citations">
-              <div class="sc-rag__citations-title">引用课件片段</div>
-              <details
-                v-for="citation in message.citations"
-                :key="citationKey(citation)"
-                class="sc-rag__citation"
+          <div
+            v-else-if="historyError !== '' && messages.length === 0"
+            class="rag-state rag-state--error"
+          >
+            {{ historyError }}
+            <el-button link type="primary" @click="retryHistory">重试</el-button>
+          </div>
+
+          <div v-else-if="messages.length === 0" class="rag-welcome">
+            <div class="rag-welcome__avatar">
+              <img src="/illustrations/ai-avatar-main.png" alt="" />
+            </div>
+            <h3>你好，{{ auth.displayName }}</h3>
+            <p>
+              我可以帮你解答课程知识、分析代码、规划课设/大作业，也可以基于你的知识库为你提供精准的参考和建议。
+            </p>
+            <div class="rag-welcome__prompts">
+              <button
+                v-for="(prompt, index) in PROMPT_SUGGESTIONS"
+                :key="prompt"
+                type="button"
+                class="rag-prompt"
+                @click="applyPrompt(prompt)"
               >
-                <summary>
-                  <span class="sc-rag__citation-name">{{ citation.doc_name }}</span>
-                  <span class="sc-rag__citation-page">{{ citationPageLabel(citation) }}</span>
-                  <span v-if="citationScoreLabel(citation) !== null" class="sc-rag__citation-score">
-                    {{ citationScoreLabel(citation) }}
-                  </span>
-                </summary>
-                <div class="sc-rag__citation-body">
-                  <p v-if="citation.section_title" class="sc-rag__citation-section">
-                    {{ citation.section_title }}
-                  </p>
-                  <p>{{ citation.content }}</p>
-                </div>
-              </details>
+                <component
+                  :is="PROMPT_ICONS[index] ?? BookOpen"
+                  :size="14"
+                  :stroke-width="1.7"
+                />
+                <span>{{ prompt }}</span>
+              </button>
             </div>
-
-            <div v-if="!message.streaming && messageMeta(message) !== ''" class="sc-rag__meta">
-              {{ messageMeta(message) }}
+            <div class="rag-welcome__art">
+              <img src="/illustrations/empty-cat-reading.png" alt="" />
             </div>
           </div>
-        </article>
-      </div>
 
-      <div v-if="streamError !== ''" class="sc-rag__stream-error" role="alert">
-        {{ streamError }}
-      </div>
+          <template v-else>
+            <el-button
+              v-if="hasMore"
+              class="rag-older"
+              text
+              type="primary"
+              :loading="loadingHistory"
+              @click="loadOlder"
+            >
+              加载更早消息
+            </el-button>
 
-      <form class="sc-rag__composer" @submit.prevent="submitQuery">
-        <el-input
-          v-model="query"
-          type="textarea"
-          :autosize="{ minRows: 2, maxRows: 6 }"
-          maxlength="2000"
-          show-word-limit
-          resize="none"
-          placeholder="输入与当前课程课件相关的问题…（Enter 发送，Shift+Enter 换行）"
-          :disabled="selectedCourseId === null || streaming"
-          @keydown.enter.exact.prevent="submitQuery"
-        />
-        <div class="sc-rag__composer-actions">
-          <span class="sc-rag__hint">回答会标注课件页码；无依据时会明确拒答。</span>
-          <el-button
-            v-if="streaming"
-            type="danger"
-            plain
-            @click="stopStreaming"
-          >
-            停止生成
-          </el-button>
-          <el-button
-            v-else
-            type="primary"
-            native-type="submit"
-            :disabled="!canSend"
-          >
-            发送
-          </el-button>
+            <article
+              v-for="message in messages"
+              :id="`rag-msg-${message.messageId ?? message.key}`"
+              :key="message.key"
+              class="rag-message"
+              :class="message.role === 'USER' ? 'rag-message--user' : 'rag-message--assistant'"
+            >
+              <span v-if="message.role === 'ASSISTANT'" class="rag-message__avatar">
+                <img src="/illustrations/ai-avatar-main.png" alt="" />
+              </span>
+
+              <div class="rag-bubble">
+                <div v-if="message.noticeText !== null" class="rag-notice">
+                  {{ message.noticeText }}
+                </div>
+
+                <div v-if="message.content !== ''" class="rag-content">
+                  <template
+                    v-for="(segment, index) in inlineSegments(message)"
+                    :key="`seg-${index}`"
+                  >
+                    <span v-if="segment.citationIndex === null">{{ segment.text }}</span>
+                    <span v-else class="rag-inline-citation">{{ segment.text }}</span>
+                  </template>
+                </div>
+
+                <div v-if="message.supplement !== ''" class="rag-supplement">
+                  <strong>通用知识补充（非本校课件原文）</strong>
+                  <p>{{ message.supplement }}</p>
+                </div>
+
+                <div v-if="message.errorText !== null" class="rag-interrupted">
+                  {{ message.errorText }}
+                </div>
+
+                <div v-if="message.streaming" class="rag-streaming">
+                  <img src="/illustrations/ai-state-thinking.png" alt="" />
+                  正在生成…
+                </div>
+
+                <div
+                  v-if="message.citations !== null && message.citations.length > 0"
+                  class="rag-citations"
+                >
+                  <div class="rag-citations-title">引用课件片段</div>
+                  <details
+                    v-for="citation in message.citations"
+                    :key="citationKey(citation)"
+                    class="rag-citation"
+                  >
+                    <summary>
+                      <span class="rag-citation-name">{{ citation.doc_name }}</span>
+                      <span class="rag-citation-page">{{ citationPageLabel(citation) }}</span>
+                      <span
+                        v-if="citationScoreLabel(citation) !== null"
+                        class="rag-citation-score"
+                      >
+                        {{ citationScoreLabel(citation) }}
+                      </span>
+                    </summary>
+                    <div class="rag-citation-body">
+                      <p v-if="citation.section_title" class="rag-citation-section">
+                        {{ citation.section_title }}
+                      </p>
+                      <p>{{ citation.content }}</p>
+                    </div>
+                  </details>
+                </div>
+
+                <div v-if="!message.streaming && messageMeta(message) !== ''" class="rag-meta">
+                  {{ messageMeta(message) }}
+                </div>
+              </div>
+            </article>
+          </template>
         </div>
-      </form>
+
+        <div v-if="streamError !== ''" class="rag-stream-error" role="alert">
+          {{ streamError }}
+        </div>
+
+        <form class="rag-composer" @submit.prevent="submitQuery">
+          <el-input
+            ref="queryInput"
+            v-model="query"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 6 }"
+            maxlength="2000"
+            show-word-limit
+            resize="none"
+            placeholder="输入与当前课程课件相关的问题…（Enter 发送，Shift+Enter 换行）"
+            :disabled="selectedCourseId === null || streaming"
+            @keydown.enter.exact.prevent="submitQuery"
+          />
+
+          <div class="rag-composer__bar">
+            <div class="rag-composer__tools">
+              <span class="rag-tool">
+                <BookOpen :size="14" :stroke-width="1.7" />
+                {{ selectedCourse?.course_name ?? '未选择课程' }}
+              </span>
+              <router-link class="rag-tool" :to="{ name: 'knowledge' }">
+                <Upload :size="14" :stroke-width="1.7" />
+                上传文件
+              </router-link>
+              <el-tooltip content="联网搜索暂未开发" placement="top">
+                <span class="rag-tool rag-tool--disabled">
+                  <Globe :size="14" :stroke-width="1.7" />
+                  联网搜索
+                  <ComingSoonBadge compact />
+                </span>
+              </el-tooltip>
+            </div>
+
+            <div class="rag-composer__send">
+              <span class="rag-composer__hint">回答会标注课件页码；无依据时会明确拒答。</span>
+              <el-button v-if="streaming" type="danger" plain @click="stopStreaming">
+                停止生成
+              </el-button>
+              <el-button v-else type="primary" native-type="submit" :disabled="!canSend">
+                发送
+              </el-button>
+            </div>
+          </div>
+        </form>
+      </section>
     </section>
+
+    <aside class="rag-rail">
+      <BaseCard title="快捷入口">
+        <div class="rag-rail__entries">
+          <button type="button" class="rag-entry" @click="focusComposer">
+            <span class="rag-entry__icon">
+              <BookOpen :size="17" :stroke-width="1.7" />
+            </span>
+            <span class="rag-entry__text">
+              <strong>基于知识库问答</strong>
+              <small>选择课程文档，获取精准答案</small>
+            </span>
+          </button>
+          <div class="rag-entry rag-entry--disabled">
+            <span class="rag-entry__icon">
+              <Sparkles :size="17" :stroke-width="1.7" />
+            </span>
+            <span class="rag-entry__text">
+              <strong>课设 / 大作业助手</strong>
+              <small>需求分析 · 方案设计 · 代码实现</small>
+            </span>
+            <ComingSoonBadge compact />
+          </div>
+        </div>
+      </BaseCard>
+
+      <BaseCard title="最近对话">
+        <EmptyState
+          v-if="recentPairs.length === 0"
+          image="/illustrations/empty-cat-reading.png"
+          title="还没有对话"
+          description="向 AI 提问后，最近的问答会显示在这里。"
+          compact
+        />
+        <ul v-else class="rag-recent">
+          <li v-for="pair in recentPairs" :key="pair.assistant.message_id">
+            <button type="button" class="rag-recent__item" @click="jumpToPair(pair)">
+              <span class="rag-recent__icon">
+                <MessageSquare :size="14" :stroke-width="1.7" />
+              </span>
+              <span class="rag-recent__text">
+                <strong>{{ pair.user.content }}</strong>
+                <small>{{ relativeTime(pair.assistant.created_at) }}</small>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </BaseCard>
+
+      <div class="rag-quote">
+        <img src="/illustrations/scene-study-desk.png" alt="" />
+        <p>学习不是一场冲刺<br />而是一段持续积累的旅程</p>
+      </div>
+    </aside>
   </div>
 </template>
 
 <style scoped>
-.sc-rag {
+.rag-page {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: var(--sc-page-gap);
-  min-height: calc(100vh - 190px);
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--sc-card-gap);
+  height: calc(100dvh - var(--sc-topbar-height) - 52px);
+  min-height: 620px;
 }
 
-.sc-rag__sidebar {
+.rag-main {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 18px;
-  background: var(--sc-surface);
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rag-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
   border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius);
-  box-shadow: var(--sc-shadow-soft);
-  align-self: start;
+  border-radius: 16px;
+  background: linear-gradient(
+    120deg,
+    var(--sc-primary-soft) 0%,
+    var(--sc-surface) 58%,
+    var(--sc-accent-soft) 100%
+  );
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-rag__side-block {
+.rag-header__copy {
   display: flex;
   flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.rag-header__eyebrow {
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-hint);
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+
+.rag-header h2 {
+  color: var(--sc-text);
+  font-size: var(--sc-font-title);
+  font-weight: var(--sc-font-title-weight);
+  letter-spacing: -0.3px;
+}
+
+.rag-header p {
+  max-width: 560px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.7;
+}
+
+.rag-header__controls {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
-.sc-rag__side-block label {
-  font-size: var(--sc-text-caption);
-  color: var(--sc-muted);
+.rag-course-select {
+  width: 220px;
 }
 
-.sc-rag__course-select {
-  width: 100%;
+.rag-inline-error {
+  flex-basis: 100%;
+  color: var(--sc-danger);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-rag__course-meta {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  padding: 12px;
-  background: #f8faff;
-  border-radius: var(--sc-radius-sm);
+.rag-rebuild-alert {
+  flex-basis: 100%;
 }
 
-.sc-rag__course-meta div {
+.rag-panel {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sc-rag__course-meta span {
-  font-size: var(--sc-text-caption);
-  color: var(--sc-muted);
-}
-
-.sc-rag__side-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: auto;
-}
-
-.sc-rag__link {
-  color: var(--sc-brand-strong);
-  font-size: var(--sc-text-caption);
-}
-
-.sc-rag__main {
-  display: flex;
+  flex: 1;
   flex-direction: column;
   min-height: 0;
-  background: var(--sc-surface);
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius);
-  box-shadow: var(--sc-shadow-soft);
   overflow: hidden;
+  border: 1px solid var(--sc-border);
+  border-radius: 16px;
+  background: var(--sc-surface);
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-rag__hero {
+.rag-messages {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--sc-border);
-  background: linear-gradient(135deg, #f8faff 0%, #eef4ff 100%);
-}
-
-.sc-rag__eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  color: var(--sc-brand-strong);
-  font-weight: 600;
-}
-
-.sc-rag__hero h2 {
-  margin: 4px 0;
-  font-size: var(--sc-text-title);
-  color: var(--sc-text);
-}
-
-.sc-rag__hero p {
-  margin: 0;
-  color: var(--sc-muted);
-  font-size: var(--sc-text-caption);
-}
-
-.sc-rag__messages {
   flex: 1;
-  min-height: 280px;
-  max-height: calc(100vh - 420px);
-  overflow-y: auto;
-  padding: 18px 22px;
-  display: flex;
   flex-direction: column;
   gap: 14px;
-  background: #fbfdff;
+  min-height: 0;
+  padding: 18px 20px;
+  overflow-y: auto;
+  background: var(--sc-surface-muted);
 }
 
-.sc-rag__state {
+.rag-state {
   margin: auto;
-  color: var(--sc-muted);
-  text-align: center;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
   line-height: 1.8;
+  text-align: center;
 }
 
-.sc-rag__state--error {
+.rag-state--error {
   color: var(--sc-danger);
 }
 
-.sc-rag__older {
+.rag-older {
   align-self: center;
 }
 
-.sc-rag__message {
+.rag-welcome {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  max-width: 660px;
+  margin: auto;
+  padding: 16px;
+  text-align: center;
 }
 
-.sc-rag__message--user {
+.rag-welcome__avatar {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 24px;
+  background: #f1f6ff;
+}
+
+.rag-welcome__avatar img {
+  width: 72px;
+  height: auto;
+}
+
+.rag-welcome h3 {
+  color: var(--sc-text);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+
+.rag-welcome p {
+  max-width: 540px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.8;
+}
+
+.rag-welcome__prompts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.rag-prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--sc-border);
+  border-radius: 10px;
+  color: var(--sc-text-secondary);
+  background: var(--sc-surface);
+  font-family: var(--sc-font-sans);
+  font-size: var(--sc-font-hint);
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+}
+
+.rag-prompt:hover,
+.rag-prompt:focus-visible {
+  border-color: var(--sc-primary);
+  color: var(--sc-primary-strong);
+  background: var(--sc-primary-soft);
+  outline: none;
+}
+
+.rag-prompt svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.rag-welcome__art {
+  width: 220px;
+  max-width: 60%;
+  margin-top: 4px;
+  padding: 8px;
+  border-radius: var(--sc-radius-card);
+  background: #f1f6ff;
+}
+
+.rag-welcome__art img {
+  display: block;
+  width: 100%;
+  max-height: 110px;
+  object-fit: contain;
+}
+
+.rag-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.rag-message--user {
   justify-content: flex-end;
 }
 
-.sc-rag__message--assistant {
+.rag-message--assistant {
   justify-content: flex-start;
 }
 
-.sc-rag__bubble {
-  max-width: min(760px, 88%);
-  padding: 12px 16px;
+.rag-message__avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #eef4ff;
+}
+
+.rag-message__avatar img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+
+.rag-bubble {
+  max-width: min(760px, 80%);
+  padding: 12px 15px;
+  border: 1px solid var(--sc-border);
   border-radius: 14px;
   background: var(--sc-surface);
-  border: 1px solid var(--sc-border);
-  box-shadow: var(--sc-shadow-soft);
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-rag__message--user .sc-rag__bubble {
-  background: var(--sc-brand-soft);
-  border-color: #cfe0ff;
+.rag-message--user .rag-bubble {
+  border-color: transparent;
+  background: var(--sc-primary-soft);
+  box-shadow: none;
 }
 
-.sc-rag__content {
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.75;
-}
-
-.sc-rag__inline-citation {
-  padding: 0 2px;
-  border-radius: 4px;
-  background: var(--sc-brand-soft);
-  color: var(--sc-brand-strong);
-  font-weight: 600;
-}
-
-.sc-rag__notice {
+.rag-notice {
   margin-bottom: 8px;
   padding: 8px 10px;
-  border-left: 3px solid var(--sc-warning);
-  background: #fffbeb;
-  color: #92400e;
-  border-radius: 6px;
+  border-radius: 8px;
+  color: #b45309;
+  background: var(--sc-warning-soft);
+  font-size: var(--sc-font-caption);
   line-height: 1.6;
 }
 
-.sc-rag__supplement {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px dashed #c4b5fd;
-  background: #f5f3ff;
-  border-radius: 8px;
-}
-
-.sc-rag__supplement strong {
-  display: block;
-  margin-bottom: 4px;
-  color: #6d28d9;
-  font-size: var(--sc-text-caption);
-}
-
-.sc-rag__supplement p {
-  margin: 0;
+.rag-content {
+  color: var(--sc-text);
+  font-size: 13px;
+  line-height: 1.75;
   white-space: pre-wrap;
-  line-height: 1.7;
+  word-break: break-word;
 }
 
-.sc-rag__interrupted {
+.rag-inline-citation {
+  padding: 0 2px;
+  border-radius: 4px;
+  color: var(--sc-primary-strong);
+  background: var(--sc-primary-soft);
+}
+
+.rag-supplement {
+  margin-top: 8px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--sc-accent-soft);
+}
+
+.rag-supplement strong {
+  color: var(--sc-accent);
+  font-size: var(--sc-font-hint);
+}
+
+.rag-supplement p {
+  margin-top: 3px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.rag-interrupted {
   margin-top: 8px;
   color: var(--sc-danger);
-  font-size: var(--sc-text-caption);
+  font-size: var(--sc-font-caption);
 }
 
-.sc-rag__streaming {
-  margin-top: 6px;
-  color: var(--sc-brand-strong);
-  font-size: var(--sc-text-caption);
-}
-
-.sc-rag__citations {
-  margin-top: 12px;
-  border-top: 1px solid var(--sc-border);
-  padding-top: 10px;
-}
-
-.sc-rag__citations-title {
-  font-size: var(--sc-text-caption);
-  color: var(--sc-muted);
-  margin-bottom: 6px;
-}
-
-.sc-rag__citation {
-  border: 1px solid var(--sc-border);
-  border-radius: 8px;
-  padding: 6px 10px;
-  margin-bottom: 6px;
-  background: #fff;
-}
-
-.sc-rag__citation summary {
-  cursor: pointer;
+.rag-streaming {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
   align-items: center;
-  font-size: var(--sc-text-caption);
-}
-
-.sc-rag__citation-name {
-  font-weight: 600;
-  color: var(--sc-text);
-}
-
-.sc-rag__citation-page {
-  color: var(--sc-brand-strong);
-}
-
-.sc-rag__citation-score {
-  color: var(--sc-muted);
-}
-
-.sc-rag__citation-body {
+  gap: 6px;
   margin-top: 8px;
+  color: var(--sc-primary);
+  font-size: var(--sc-font-hint);
+}
+
+.rag-streaming img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.rag-citations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.rag-citations-title {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+}
+
+.rag-citation {
+  padding: 8px 10px;
+  border: 1px solid var(--sc-border);
+  border-radius: 10px;
+  background: var(--sc-surface-muted);
+}
+
+.rag-citation summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--sc-font-caption);
+  list-style: none;
+  cursor: pointer;
+}
+
+.rag-citation summary::-webkit-details-marker {
+  display: none;
+}
+
+.rag-citation-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   color: var(--sc-text);
-  font-size: var(--sc-text-caption);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rag-citation-page,
+.rag-citation-score {
+  flex: none;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+}
+
+.rag-citation-body {
+  margin-top: 6px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-hint);
   line-height: 1.7;
   white-space: pre-wrap;
 }
 
-.sc-rag__citation-section {
-  color: var(--sc-muted);
+.rag-citation-section {
+  margin-bottom: 4px;
+  color: var(--sc-primary-strong);
   font-weight: 600;
 }
 
-.sc-rag__meta {
-  margin-top: 10px;
-  color: var(--sc-muted);
-  font-size: 11px;
+.rag-meta {
+  margin-top: 8px;
+  color: var(--sc-text-placeholder);
+  font-size: 10px;
 }
 
-.sc-rag__stream-error {
-  padding: 10px 22px;
-  background: #fef2f2;
-  color: var(--sc-danger);
-  border-top: 1px solid #fecaca;
-  font-size: var(--sc-text-caption);
-}
-
-.sc-rag__composer {
+.rag-stream-error {
+  padding: 9px 16px;
   border-top: 1px solid var(--sc-border);
-  padding: 14px 22px 18px;
+  color: var(--sc-danger);
+  background: var(--sc-danger-soft);
+  font-size: var(--sc-font-hint);
+}
+
+.rag-composer {
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--sc-border);
   background: var(--sc-surface);
 }
 
-.sc-rag__composer-actions {
+.rag-composer__bar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.rag-composer__tools {
+  display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 10px;
+  flex-wrap: wrap;
 }
 
-.sc-rag__hint {
-  color: var(--sc-muted);
-  font-size: var(--sc-text-caption);
+.rag-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-hint);
+  text-decoration: none;
 }
 
-.sc-rag__muted {
-  color: var(--sc-muted);
-  font-size: var(--sc-text-caption);
+.rag-tool--disabled {
+  color: var(--sc-text-placeholder);
+  cursor: not-allowed;
 }
 
-.sc-rag__error-text {
-  color: var(--sc-danger);
+.rag-composer__send {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-@media (max-width: 960px) {
-  .sc-rag {
+.rag-composer__hint {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+}
+
+.rag-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sc-card-gap);
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.rag-rail__entries {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rag-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 10px;
+  color: inherit;
+  background: transparent;
+  font-family: var(--sc-font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.rag-entry:hover {
+  background: var(--sc-surface-hover);
+}
+
+.rag-entry--disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+
+.rag-entry--disabled:hover {
+  background: transparent;
+}
+
+.rag-entry__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--sc-primary);
+  background: var(--sc-primary-soft);
+}
+
+.rag-entry--disabled .rag-entry__icon {
+  color: var(--sc-accent);
+  background: var(--sc-accent-soft);
+}
+
+.rag-entry__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rag-entry__text strong {
+  color: var(--sc-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rag-entry__text small {
+  overflow: hidden;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rag-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rag-recent__item {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 10px;
+  color: inherit;
+  background: transparent;
+  font-family: var(--sc-font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.rag-recent__item:hover,
+.rag-recent__item:focus-visible {
+  background: var(--sc-surface-hover);
+  outline: none;
+}
+
+.rag-recent__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--sc-accent);
+  background: var(--sc-accent-soft);
+}
+
+.rag-recent__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rag-recent__text strong {
+  overflow: hidden;
+  color: var(--sc-text);
+  font-size: var(--sc-font-caption);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rag-recent__text small {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+}
+
+.rag-quote {
+  position: relative;
+  min-height: 110px;
+  overflow: hidden;
+  border-radius: var(--sc-radius-card);
+  background: #eaf2ff;
+}
+
+.rag-quote img {
+  display: block;
+  width: 100%;
+  height: 130px;
+  object-fit: cover;
+  opacity: 0.9;
+}
+
+.rag-quote p {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  color: #1f2937;
+  font-size: var(--sc-font-caption);
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.rag-link {
+  color: var(--sc-primary);
+  font-size: var(--sc-font-caption);
+  text-decoration: none;
+}
+
+@media (max-width: 1199px) {
+  .rag-page {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+  }
+
+  .rag-panel {
+    min-height: 620px;
+  }
+
+  .rag-rail {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    overflow-y: visible;
+  }
+}
+
+@media (max-width: 860px) {
+  .rag-rail {
     grid-template-columns: 1fr;
   }
 
-  .sc-rag__messages {
-    max-height: none;
+  .rag-welcome__prompts {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-bubble {
+    max-width: 90%;
+  }
+}
+
+@media (max-width: 639px) {
+  .rag-header {
+    padding: 16px;
+  }
+
+  .rag-header__controls {
+    width: 100%;
+  }
+
+  .rag-course-select {
+    flex: 1;
+    width: auto;
+  }
+
+  .rag-panel {
+    min-height: 560px;
+  }
+
+  .rag-messages {
+    padding: 14px;
+  }
+
+  .rag-composer {
+    padding: 10px 12px 12px;
+  }
+
+  .rag-composer__hint {
+    display: none;
   }
 }
 </style>

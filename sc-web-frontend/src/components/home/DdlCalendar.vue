@@ -26,8 +26,10 @@ const props = withDefaults(
     loading?: boolean
     error?: string
     authenticated?: boolean
+    /** DDL 页需要在自己的区域展示完整当天列表时可关闭内置三行摘要。 */
+    showDayList?: boolean
   }>(),
-  { loading: false, error: '', authenticated: true },
+  { loading: false, error: '', authenticated: true, showDayList: true },
 )
 
 const emit = defineEmits<{ select: [date: string] }>()
@@ -150,19 +152,21 @@ function timeText(task: DdlTask): string {
         </button>
       </div>
 
-      <ul v-if="authenticated && selectedTasks.length > 0" class="cal__tasks">
-        <li v-for="task in selectedTasks.slice(0, 3)" :key="task.task_id" class="cal__task">
-          <span class="cal__dot" :class="`cal__dot--${toneFor(task.status)}`" />
-          <span class="cal__task-title">{{ task.task_title }}</span>
-          <span class="cal__task-meta">{{ timeText(task) }} · {{ task.course_name }}</span>
-          <span class="cal__task-status">{{ statusLabel(task.status) }}</span>
-        </li>
-      </ul>
-      <p v-else-if="!authenticated" class="cal__empty">登录后即可查看按截止日期聚合的 DDL。</p>
-      <p v-else-if="loading" class="cal__empty">正在读取 DDL…</p>
-      <p v-else-if="error !== ''" class="cal__empty cal__empty--error">{{ error }}</p>
-      <p v-else-if="selectedDate !== null" class="cal__empty">当天没有 DDL 任务。</p>
-      <p v-else-if="monthTaskCount === 0" class="cal__empty">本月暂无 DDL。</p>
+      <template v-if="showDayList">
+        <ul v-if="authenticated && selectedTasks.length > 0" class="cal__tasks">
+          <li v-for="task in selectedTasks.slice(0, 3)" :key="task.task_id" class="cal__task">
+            <span class="cal__dot" :class="`cal__dot--${toneFor(task.status)}`" />
+            <span class="cal__task-title">{{ task.task_title }}</span>
+            <span class="cal__task-meta">{{ timeText(task) }} · {{ task.course_name }}</span>
+            <span class="cal__task-status">{{ statusLabel(task.status) }}</span>
+          </li>
+        </ul>
+        <p v-else-if="!authenticated" class="cal__empty">登录后即可查看按截止日期聚合的 DDL。</p>
+        <p v-else-if="loading" class="cal__empty">正在读取 DDL…</p>
+        <p v-else-if="error !== ''" class="cal__empty cal__empty--error">{{ error }}</p>
+        <p v-else-if="selectedDate !== null" class="cal__empty">当天没有 DDL 任务。</p>
+        <p v-else-if="monthTaskCount === 0" class="cal__empty">本月暂无 DDL。</p>
+      </template>
     </div>
   </BaseCard>
 </template>
@@ -203,8 +207,10 @@ function timeText(task: DdlTask): string {
 .cal__weekdays {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 2px;
-  margin-bottom: 4px;
+  gap: 4px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto 6px;
   color: var(--sc-text-placeholder);
   font-size: var(--sc-font-hint);
   text-align: center;
@@ -213,7 +219,10 @@ function timeText(task: DdlTask): string {
 .cal__grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 2px;
+  gap: 4px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .cal__day {
@@ -223,24 +232,26 @@ function timeText(task: DdlTask): string {
   align-items: center;
   justify-content: center;
   gap: 1px;
-  min-height: 32px;
+  min-height: 38px;
   padding: 2px 0;
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--sc-text-secondary);
-  background: transparent;
+  background: var(--sc-surface-muted);
   font-family: var(--sc-font-sans);
   font-size: var(--sc-font-caption);
   cursor: pointer;
-  transition: background-color 0.16s ease, color 0.16s ease;
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
 }
 
 .cal__day:hover {
+  border-color: var(--sc-border);
   background: var(--sc-surface-hover);
 }
 
 .cal__day--out {
   color: var(--sc-text-placeholder);
+  background: transparent;
   opacity: 0.5;
 }
 

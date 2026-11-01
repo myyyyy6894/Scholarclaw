@@ -116,11 +116,14 @@ SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://127.0.0.1:11434
 
 ## 上线前请自行补齐
 
+**已内置**：Nginx 按客户端 IP 限流——登录/注册 30 次/分钟、全量 API 20 次/秒、单 IP 并发 50，
+超限返回 `429 RATE_LIMITED`。数值在 `sc-web-frontend/nginx.conf` 顶部，按需调整。
+
 这些不在仓库默认配置里，公网部署前需要自己处理：
 
-- **HTTPS**：仓库只提供 80 端口。请在前面加一层 TLS 终止（云负载均衡或宿主机 Nginx）。
+- **HTTPS**：仓库只提供 80 端口。请在前面加一层 TLS 终止（云负载均衡或宿主机 Nginx）；
+  如果 TLS 在上游终止，记得按 `nginx.conf` 里的注释配置 `set_real_ip_from`，否则限流会把所有用户算成同一个代理 IP。
 - **备份**：定时备份 MySQL 数据卷、`vol_shared_storage`（课件原文件）与 `.env` 中的 `SC_MASTER_KEY`。
-- **注册限流**：登录/注册接口没有内置限流，公网开放注册建议在网关层加频率限制。
 - **日志轮转**：Compose 未配置 `logging` 上限，长期运行请自行限制。
 
 更多部署与排障细节见 [`DEPLOYMENT.md`](DEPLOYMENT.md)。

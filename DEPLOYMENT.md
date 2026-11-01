@@ -107,6 +107,8 @@ docker compose --profile onebot up -d sc-napcat-onebot
 | 前端 502 | `docker compose ps sc-java-backend` | Java 未就绪或已退出 |
 | `/internal/**` 返回 404 | — | 预期行为，Nginx 显式阻断 |
 | 上传大文件 413 | Nginx 日志 | 单文件上限 50 MB（`client_max_body_size 60m`） |
+| 频繁 429 `RATE_LIMITED` | `sc-web-frontend/nginx.conf` 顶部 | 按 IP 限流：登录/注册 30 次/分、全量 API 20 次/秒、单 IP 并发 50。共享出口 IP 或 TLS 在上游终止（未配 `real_ip`）时会误伤，见下 |
+| 所有人被限流 | `$remote_addr` 是否为代理 IP | TLS/负载均衡在上游终止时，取消 `nginx.conf` 里 `set_real_ip_from` / `real_ip_header` 注释并填真实代理网段 |
 | 端口被占用 | `ss -ltn \| grep :80` | 改 `.env` 的 `SC_WEB_HTTP_PORT` |
 | 容器反复重启 | `docker compose logs <服务>` | 环境变量缺失（Compose 对必填变量直接拒绝启动） |
 | Java 启动报 `SC_PLATFORM_EMBEDDING_*` | 启动日志 | 平台向量模型只配了一部分，五项要么全配要么全空 |
@@ -123,7 +125,7 @@ docker compose --profile onebot up -d sc-napcat-onebot
 |---|---|---|
 | HTTPS | 未内置，只有 80 端口 | 前置 TLS 终止（云 LB 或宿主机 Nginx） |
 | 备份 | 无脚本 | 定时 `mysqldump` + 备份 `vol_shared_storage` 与 `.env` 的 `SC_MASTER_KEY` |
-| 注册限流 | 无 | 网关层限制登录/注册频率，防止刷账号 |
+| 注册限流 | ✅ 已内置（Nginx 按 IP） | 数值在 `sc-web-frontend/nginx.conf` 顶部；TLS 在上游终止时需配 `real_ip` |
 | 日志轮转 | 未配置 | 给容器加 `logging.options.max-size` |
 | NapCat 版本 | `latest` | pin 具体版本 |
 | 依赖漏洞 | ChromaDB / 部分 Java 依赖无修复版本 | 已做网络隔离与访问收敛，公网部署请自行评估 |

@@ -68,7 +68,10 @@
   --sc-sidebar-width: 240px;
   --sc-sidebar-rail-width: 72px;
   --sc-topbar-height: 64px;
-  --sc-content-max-width: 1440px;
+  --sc-content-max-width: 1920px;
+  --sc-narrow-max-width: 1280px;
+  /* 宽屏内容上限：1536 下不生效；1920 铺满；2560 两侧各留约 172px。
+     如需进一步铺满，可只调这两个值。 */
 
   /* ---------- 层级 ---------- */
   --sc-z-topbar: 10;

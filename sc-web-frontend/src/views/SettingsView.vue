@@ -811,7 +811,7 @@ function goToLogin(): void {
   display: flex;
   flex-direction: column;
   gap: var(--sc-card-gap);
-  max-width: 1120px;
+  max-width: var(--sc-narrow-max-width);
   margin: 0 auto;
 }
 

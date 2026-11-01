@@ -127,7 +127,7 @@ async function doLogout(): Promise<void> {
   align-items: center;
   gap: 20px;
   min-height: var(--sc-topbar-height);
-  padding: 10px var(--sc-page-pad);
+  padding: 10px max(var(--sc-page-pad), calc((100% - var(--sc-content-max-width)) / 2));
   border-bottom: 1px solid var(--sc-border);
   background: var(--sc-topbar-bg);
   backdrop-filter: blur(8px);

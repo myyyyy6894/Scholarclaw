@@ -304,7 +304,7 @@ function showRegister(): void {
   gap: 20px;
   align-items: stretch;
   width: 100%;
-  max-width: 1180px;
+  max-width: var(--sc-narrow-max-width);
   min-height: calc(100dvh - var(--sc-topbar-height) - 52px);
   margin: 0 auto;
 }

@@ -17,6 +17,10 @@ escaped=$(printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
 qq="${SC_OPERATOR_QQ:-}"
 qq=$(printf '%s' "$qq" | tr -cd '0-9')
 
+# --- 机器人 QQ（可选）：只保留数字，用于指南里的「加机器人好友」提示 ---
+bot_qq="${SC_BOT_QQ:-}"
+bot_qq=$(printf '%s' "$bot_qq" | tr -cd '0-9')
+
 # --- 项目主页地址（可选）：只接受 http(s)，其它值一律视为未配置 ---
 project_url="${SC_PROJECT_URL:-}"
 project_url=$(printf '%s' "$project_url" | tr -d '\r\n')
@@ -31,6 +35,7 @@ cat > "$target" <<EOF
 window.__SC_NAPCAT_WEBUI_URL__ = "${escaped}";
 window.__SC_OPERATOR_QQ__ = "${qq}";
 window.__SC_PROJECT_URL__ = "${url_escaped}";
+window.__SC_BOT_QQ__ = "${bot_qq}";
 EOF
 
-echo "[runtime-config] SC_NAPCAT_WEBUI_URL=${value:-<empty: 使用构建期默认值>} SC_OPERATOR_QQ=${qq:-<empty>} SC_PROJECT_URL=${project_url:-<empty>}"
+echo "[runtime-config] SC_NAPCAT_WEBUI_URL=${value:-<empty: 使用构建期默认值>} SC_OPERATOR_QQ=${qq:-<empty>} SC_PROJECT_URL=${project_url:-<empty>} SC_BOT_QQ=${bot_qq:-<empty>}"

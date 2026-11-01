@@ -13,6 +13,7 @@ declare global {
   interface Window {
     __SC_OPERATOR_QQ__?: string
     __SC_PROJECT_URL__?: string
+    __SC_BOT_QQ__?: string
   }
 }
 
@@ -73,4 +74,17 @@ export function normalizeProjectUrl(value?: string): string {
     return ''
   }
   return candidate
+}
+
+/**
+ * 机器人 QQ（`SC_BOT_QQ`，非密钥）。
+ *
+ * 与「维护者 QQ」不是同一个号：维护者用于问题反馈，机器人是真正发提醒的账号，
+ * 用户必须先把机器人加为好友才能收到私聊提醒。未配置时返回空串。
+ */
+export function readRuntimeBotQq(): string | undefined {
+  if (typeof window === 'undefined') {
+    return undefined
+  }
+  return window.__SC_BOT_QQ__
 }

@@ -61,6 +61,24 @@ docker compose up -d sc-java-backend   # 平台向量模型
 docker compose up -d sc-web-nginx      # 联系 QQ / NapCat WebUI 地址
 ```
 
+## 3.1 小内存机器（≤4 GiB）不要在本机构建前端镜像
+
+`npm ci` + `vite build` 在容器内的峰值内存约 1~1.5 GB。2C4G 机器常态已占用 2.5 GB 左右，
+再叠加构建会把内存打满、swap 疯狂换页，整机连 SSH 都会失去响应（实测踩过）。
+
+改前端时改成本机构建 + 传镜像：
+
+```bash
+# 本地（内存充足的机器）
+docker compose build sc-web-nginx
+docker save scholarclaw/sc-web-nginx:1.0.0 | gzip -1 | \
+  ssh root@<服务器> 'gunzip | docker load'
+ssh root@<服务器> 'cd /opt/ScholarClaw && docker compose up -d sc-web-nginx'
+```
+
+镜像压缩后约 50 MB，传输几秒。Java 侧 `mvn package`（约 100 秒、占用较小）仍可在服务器执行；
+`sc-python-ai` 的 `pip install` 占用也比 npm 小，一般没问题。
+
 ## 4. 可选：QQ 机器人（NapCat）
 
 NapCat 是可选 `onebot` profile，默认不启动：
@@ -87,6 +105,22 @@ docker compose --profile onebot up -d sc-napcat-onebot
 远程访问 WebUI 推荐 SSH 隧道（`ssh -L 6099:127.0.0.1:6099 <host>`）。确实要直连时改
 `SC_NAPCAT_WEBUI_BIND=0.0.0.0`，并加防火墙或只放行可信内网。
 
+### 4.1 掉线与自动恢复
+
+QQ 会话过期或触发风控时，NapCat 会一直重试快速登录并失败（日志 `Login Error, ErrType: 1 ErrCode: 3`），
+容器仍是 `Up`，Docker 的 restart 策略救不回来。用看门狗脚本兜底：
+
+```bash
+# 每 2 分钟检查一次登录态，掉线就重启容器（重启会重新尝试快速登录）
+*/2 * * * * cd /opt/ScholarClaw && bash scripts/napcat/watchdog.sh >> /var/log/sc-napcat-watchdog.log 2>&1
+```
+
+脚本只能缓解"会话失效但账号还能快速登录"的情况。**如果连续失败 3 次，说明 QQ 要求重新扫码**，
+日志会提示用 `bash scripts/napcat/webui.sh url` 取带令牌的 WebUI 地址人工扫码。
+
+降低掉线概率的已知做法：绑定手机号、不要频繁改头像/昵称、不要频繁重登同一账号、
+不要在另一台设备同时登录同一个 QQ。
+
 **不用 QQ 也完全没问题**：不启这个 profile、`SC_IM_PUSH_ENABLED=false`，Web 端功能不受影响，
 只是用户收不到 QQ 提醒。
 
@@ -106,15 +140,15 @@ docker compose --profile onebot up -d sc-napcat-onebot
 
 | 模型 | 维度 | 磁盘/内存 | 说明 |
 |---|---|---|---|
-| `qwen3-embedding:0.6b` | 1024 | 约 640 MB | **推荐**：中文与多语言效果好，占用适中 |
-| `nomic-embed-text` | 768 | 约 274 MB | 最小，中文能力弱于上一行 |
-| `bge-m3` | 1024 | 约 1.2 GB | 中文最好，但 4G 机器上偏重，建议 ≥8G |
+| `nomic-embed-text` | 768 | 约 274 MB | **2C4G 推荐**：最省资源，CPU 解析速度可接受 |
+| `qwen3-embedding:0.6b` | 1024 | 约 640 MB | 中文效果更好，4 核以上机器用这个 |
+| `bge-m3` | 1024 | 约 1.2 GB | 中文最好，建议 ≥8G 内存 |
 
 **启动**：
 
 ```bash
 docker compose --profile embedding up -d sc-ollama
-docker compose exec sc-ollama ollama pull qwen3-embedding:0.6b   # 首次需拉模型
+docker compose exec sc-ollama ollama pull nomic-embed-text   # 首次需拉模型
 docker compose exec sc-ollama ollama list                       # 确认已存在
 ```
 
@@ -123,8 +157,8 @@ docker compose exec sc-ollama ollama list                       # 确认已存�
 ```dotenv
 SC_PLATFORM_EMBEDDING_PROVIDER=OLLAMA
 SC_PLATFORM_EMBEDDING_BASE_URL=http://sc-ollama:11434/v1
-SC_PLATFORM_EMBEDDING_MODEL=qwen3-embedding:0.6b
-SC_PLATFORM_EMBEDDING_DIM=1024
+SC_PLATFORM_EMBEDDING_MODEL=nomic-embed-text
+SC_PLATFORM_EMBEDDING_DIM=768
 SC_PLATFORM_EMBEDDING_API_KEY=
 SC_ALLOW_LOCAL_MODEL_BASE_URL=true
 SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://sc-ollama:11434

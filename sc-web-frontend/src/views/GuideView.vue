@@ -5,7 +5,15 @@ import { BookOpen, MessageCircle, Rocket, Settings2, Sparkles } from '@lucide/vu
 
 import BaseCard from '@/components/ui/BaseCard.vue'
 import TagBadge from '@/components/ui/TagBadge.vue'
-import { copyOperatorQq, readRuntimeOperatorQq, readRuntimeProjectUrl, resolveOperatorQq, normalizeProjectUrl } from '@/utils/operator-contact'
+import {
+  copyOperatorQq,
+  normalizeOperatorQq,
+  normalizeProjectUrl,
+  readRuntimeBotQq,
+  readRuntimeOperatorQq,
+  readRuntimeProjectUrl,
+  resolveOperatorQq,
+} from '@/utils/operator-contact'
 import { notifySuccess, notifyWarning } from '@/utils/notify'
 
 /**
@@ -20,9 +28,19 @@ import { notifySuccess, notifyWarning } from '@/utils/notify'
  */
 const operatorQq = resolveOperatorQq(readRuntimeOperatorQq())
 const projectUrl = normalizeProjectUrl(readRuntimeProjectUrl())
+/** 发提醒的机器人账号，与维护者 QQ 是两个号。 */
+const botQq = normalizeOperatorQq(readRuntimeBotQq())
 const buildMode = import.meta.env.MODE
 
 const hasContact = computed(() => Boolean(operatorQq || projectUrl))
+
+async function copyBot(): Promise<void> {
+  if (await copyOperatorQq(botQq)) {
+    notifySuccess('机器人 QQ 已复制。')
+    return
+  }
+  notifyWarning('复制失败，请手动选择号码复制。')
+}
 
 async function copyQq(): Promise<void> {
   if (await copyOperatorQq(operatorQq)) {
@@ -180,13 +198,19 @@ const FAQ = [
       </div>
 
       <div class="guide-block">
-        <h4>IM 绑定（可选）</h4>
+        <h4>QQ 提醒（可选）</h4>
         <p>
-          绑定 QQ 后，机器人可以把截止提醒推送到你的 QQ。不绑定也完全不影响网页端功能，
-          站内通知照常送达。
+          截止提醒默认发到站内通知；如果想让机器人直接私聊提醒你，需要两步：
+          先<b>加机器人 QQ 为好友</b>，再到「设置 → 个人偏好」里绑定你自己的 QQ 号。
+          不绑定也完全不影响网页端功能。
         </p>
+        <div v-if="botQq" class="guide-contact__row">
+          <span class="guide-contact__label">机器人 QQ</span>
+          <strong class="guide-contact__value">{{ botQq }}</strong>
+          <el-button size="small" @click="copyBot">复制</el-button>
+        </div>
         <p v-if="operatorQq" class="guide-note">
-          需要开通 QQ 提醒的同学，可加维护者 QQ 说明（见下方联系方式）。
+          机器人只负责发提醒；使用问题请找下方「维护者 QQ」反馈，两者不是同一个号。
         </p>
       </div>
     </BaseCard>

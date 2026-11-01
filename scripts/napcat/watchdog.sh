@@ -51,6 +51,16 @@ resp=$(curl -s -m 10 -H "Authorization: Bearer ${TOKEN}" "http://127.0.0.1:${POR
 logged_in=$(printf '%s' "$resp" | grep -o '"user_id":[0-9]*' | grep -o '[0-9]*' | head -1 || true)
 
 if [[ -n "$logged_in" && "$logged_in" != "0" ]]; then
+  # 账号校验：扫码时登错号是真实踩过的坑（把个人大号当机器人登了，接收了私人消息）
+  expected="${SC_NAPCAT_ACCOUNT:-}"
+  if [[ -n "$expected" && "$logged_in" != "$expected" ]]; then
+    if [[ ! -f "$OK_FILE.mismatch" ]]; then
+      echo "$(stamp) ⚠️ 登录账号与配置不符：实际 ${logged_in}，期望 ${expected}；请到 WebUI 退出并用正确账号重扫"
+      touch "$OK_FILE.mismatch"
+    fi
+    exit 0
+  fi
+  rm -f "$OK_FILE.mismatch"
   if [[ ! -f "$OK_FILE" ]]; then
     echo "$(stamp) QQ 已登录 user_id=${logged_in}"
     touch "$OK_FILE"

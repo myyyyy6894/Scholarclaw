@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
-import { Search } from '@lucide/vue'
+import { Search, X } from '@lucide/vue'
 
 import SearchResultPanel from '@/components/search/SearchResultPanel.vue'
 
@@ -41,6 +41,12 @@ function handleSubmit(): void {
   panelOpen.value = true
 }
 
+function clearQuery(): void {
+  query.value = ''
+  panelOpen.value = false
+  focusInput()
+}
+
 function handleFocus(): void {
   if (query.value.trim() !== '') {
     panelOpen.value = true
@@ -68,7 +74,14 @@ onBeforeUnmount(() => {
 <template>
   <div ref="rootEl" class="global-search">
     <form class="global-search__field" role="search" @submit.prevent="handleSubmit">
-      <Search class="global-search__icon" :size="17" :stroke-width="1.8" aria-hidden="true" />
+      <button
+        type="button"
+        class="global-search__icon-button"
+        aria-label="聚焦搜索框"
+        @click="focusInput"
+      >
+        <Search :size="17" :stroke-width="1.8" aria-hidden="true" />
+      </button>
       <input
         ref="inputEl"
         v-model="query"
@@ -76,9 +89,20 @@ onBeforeUnmount(() => {
         class="global-search__input"
         placeholder="搜索课程、文档、问题…"
         aria-label="全局搜索"
+        aria-haspopup="dialog"
+        :aria-expanded="panelOpen"
         autocomplete="off"
         @focus="handleFocus"
       />
+      <button
+        v-if="query !== ''"
+        type="button"
+        class="global-search__clear"
+        aria-label="清空搜索"
+        @click="clearQuery"
+      >
+        <X :size="14" :stroke-width="1.9" />
+      </button>
       <kbd class="global-search__kbd">Ctrl K</kbd>
     </form>
 
@@ -109,9 +133,41 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 3px var(--sc-primary-soft);
 }
 
-.global-search__icon {
+.global-search__icon-button {
+  display: grid;
   flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
   color: var(--sc-text-placeholder);
+  background: transparent;
+  cursor: pointer;
+}
+
+.global-search__icon-button:hover {
+  color: var(--sc-primary);
+}
+
+.global-search__clear {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--sc-text-placeholder);
+  background: var(--sc-surface-muted);
+  cursor: pointer;
+}
+
+.global-search__clear:hover {
+  color: var(--sc-text);
+  background: var(--sc-border);
 }
 
 .global-search__input {

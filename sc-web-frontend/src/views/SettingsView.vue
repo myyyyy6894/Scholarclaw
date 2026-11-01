@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import { Info, KeyRound, ShieldAlert, SlidersHorizontal, UserX } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
+import { resolveApiBaseUrl } from '@/api/client'
 import {
   clearApiKeys,
   deactivateAccount,
@@ -18,7 +20,9 @@ import type {
   EmbeddingProvider,
   UserConfig,
 } from '@/api/user-config'
-import { resolveApiBaseUrl } from '@/api/client'
+import BaseCard from '@/components/ui/BaseCard.vue'
+import TagBadge from '@/components/ui/TagBadge.vue'
+import UserAvatar from '@/components/ui/UserAvatar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import { IMPLEMENTED_CAPABILITIES } from '@/views/home/home-tasks'
@@ -334,7 +338,7 @@ function goToLogin(): void {
 </script>
 
 <template>
-  <div>
+  <div class="settings-page">
     <el-skeleton v-if="loading" :rows="6" animated />
 
     <el-result
@@ -350,18 +354,57 @@ function goToLogin(): void {
     </el-result>
 
     <template v-else>
-      <el-card class="sc-card-gap" shadow="never">
+      <section class="settings-hero">
+        <UserAvatar :name="config?.username ?? '用户'" size="lg" online />
+        <div class="settings-hero__copy">
+          <span class="settings-hero__eyebrow">ACCOUNT &amp; PREFERENCES</span>
+          <h2>{{ config?.username ?? '个人设置' }}</h2>
+          <p>user_id {{ config?.user_id ?? '—' }} · 时区 {{ config?.timezone ?? '—' }}</p>
+          <div class="settings-hero__chips">
+            <TagBadge
+              :label="hasAnyConfig ? '模型已配置' : '模型未配置'"
+              :tone="hasAnyConfig ? 'success' : 'warning'"
+              dot
+            />
+            <TagBadge
+              :label="config?.default_embedding_model ?? '未配置 Embedding'"
+              tone="neutral"
+            />
+            <TagBadge
+              v-if="config?.bound_im_platform"
+              label="IM 已绑定"
+              tone="primary"
+            />
+          </div>
+        </div>
+        <div class="settings-hero__status">
+          <div>
+            <span>对话模型</span>
+            <strong>{{ config?.chat_model ?? '未配置' }}</strong>
+          </div>
+          <div>
+            <span>向量维度</span>
+            <strong>{{ config?.default_embedding_dim ?? '未探测' }}</strong>
+          </div>
+        </div>
+      </section>
+
+      <BaseCard class="settings-card">
         <template #header>
-          <div class="sc-settings__header">
-            <span>个人设置</span>
-            <span class="sc-settings__meta">
-              {{ config?.username }} · user_id {{ config?.user_id }}
+          <div class="settings-card__heading">
+            <span class="settings-card__icon">
+              <KeyRound :size="17" :stroke-width="1.8" />
             </span>
+            <div>
+              <h3>BYOK 模型配置</h3>
+              <p>密钥只提交、不落盘；保存时后端重新探测并回填真实向量维度。</p>
+            </div>
           </div>
         </template>
 
         <el-alert
           v-if="!hasAnyConfig"
+          class="settings-card__alert"
           type="info"
           :closable="false"
           show-icon
@@ -370,16 +413,13 @@ function goToLogin(): void {
         />
         <el-alert
           v-else
+          class="settings-card__alert"
           type="success"
           :closable="false"
           show-icon
           :title="`已配置模型：${config?.chat_model ?? ''}`"
           :description="`当前默认向量维度：${config?.default_embedding_dim ?? '未探测'}`"
         />
-      </el-card>
-
-      <el-card class="sc-card-gap" shadow="never">
-        <template #header>BYOK 模型配置</template>
 
         <el-form label-position="top" autocomplete="off">
           <el-divider content-position="left">对话模型</el-divider>
@@ -438,7 +478,9 @@ function goToLogin(): void {
             <el-tag v-if="chatProbe !== null" type="success">
               延迟 {{ chatProbe.latency_ms }} ms
             </el-tag>
-            <span class="sc-settings__hint">当前已保存：{{ keyStatusLabel(modelForm.hasSavedChatKey, modelForm.chatKeyMasked) }}</span>
+            <span class="sc-settings__hint">
+              当前已保存：{{ keyStatusLabel(modelForm.hasSavedChatKey, modelForm.chatKeyMasked) }}
+            </span>
           </div>
 
           <el-divider content-position="left">默认 Embedding 模型</el-divider>
@@ -488,7 +530,11 @@ function goToLogin(): void {
                   data-lpignore="true"
                   data-1p-ignore
                   :disabled="modelForm.reuseChatApiKey"
-                  :placeholder="modelForm.reuseChatApiKey ? '已复用对话模型 Key' : embeddingKeyPlaceholder"
+                  :placeholder="
+                    modelForm.reuseChatApiKey
+                      ? '已复用对话模型 Key'
+                      : embeddingKeyPlaceholder
+                  "
                 />
               </el-form-item>
             </el-col>
@@ -504,10 +550,16 @@ function goToLogin(): void {
               测试 Embedding 模型
             </el-button>
             <el-tag v-if="embeddingProbe !== null" type="success">
-              延迟 {{ embeddingProbe.latency_ms }} ms · 维度 {{ embeddingProbe.actual_dim ?? '—' }}
+              延迟 {{ embeddingProbe.latency_ms }} ms · 维度
+              {{ embeddingProbe.actual_dim ?? '—' }}
             </el-tag>
             <span class="sc-settings__hint">
-              当前已保存：{{ keyStatusLabel(modelForm.hasSavedEmbeddingKey, modelForm.embeddingKeyMasked) }}
+              当前已保存：{{
+                keyStatusLabel(
+                  modelForm.hasSavedEmbeddingKey,
+                  modelForm.embeddingKeyMasked,
+                )
+              }}
             </span>
           </div>
 
@@ -523,10 +575,21 @@ function goToLogin(): void {
             </el-button>
           </div>
         </el-form>
-      </el-card>
+      </BaseCard>
 
-      <el-card class="sc-card-gap" shadow="never">
-        <template #header>个人偏好与 IM 绑定</template>
+      <BaseCard class="settings-card">
+        <template #header>
+          <div class="settings-card__heading">
+            <span class="settings-card__icon">
+              <SlidersHorizontal :size="17" :stroke-width="1.8" />
+            </span>
+            <div>
+              <h3>个人偏好与 IM 绑定</h3>
+              <p>时区与免打扰影响提醒时间；IM 绑定可选，不绑定也能使用全部 Web 功能。</p>
+            </div>
+          </div>
+        </template>
+
         <el-form label-position="top">
           <el-row :gutter="16">
             <el-col :xs="24" :sm="8">
@@ -560,7 +623,12 @@ function goToLogin(): void {
           <el-row :gutter="16">
             <el-col :xs="24" :sm="8">
               <el-form-item label="IM 平台（可选）">
-                <el-select v-model="prefsForm.imPlatform" clearable class="sc-settings__full" placeholder="不绑定">
+                <el-select
+                  v-model="prefsForm.imPlatform"
+                  clearable
+                  class="sc-settings__full"
+                  placeholder="不绑定"
+                >
                   <el-option
                     v-for="item in IM_PLATFORMS"
                     :key="item.value"
@@ -580,8 +648,8 @@ function goToLogin(): void {
             <span class="sc-settings__hint">
               IM 绑定是可选的：不绑定也能使用全部 Web 功能，站内通知照常送达。
               绑定后由部署者运行的机器人 QQ 把提醒推送到你的 QQ。
-              QQ 扫码登录由独立的 NapCat 协议端完成（入口仅供部署者运维使用）；登录后请让 QQ 号与上方绑定保持一致。
-              远程部署时由部署者用
+              QQ 扫码登录由独立的 NapCat 协议端完成（入口仅供部署者运维使用）；登录后请让
+              QQ 号与上方绑定保持一致。 远程部署时由部署者用
               <code>SC_NAPCAT_WEBUI_URL</code>
               （运行期，重启 Web 生效）或
               <code>VITE_NAPCAT_WEBUI_URL</code>
@@ -603,11 +671,23 @@ function goToLogin(): void {
             </el-button>
           </div>
         </el-form>
-      </el-card>
+      </BaseCard>
 
-      <el-card class="sc-card-gap" shadow="never">
-        <template #header>密钥销毁</template>
+      <BaseCard class="settings-card settings-card--danger">
+        <template #header>
+          <div class="settings-card__heading">
+            <span class="settings-card__icon">
+              <ShieldAlert :size="17" :stroke-width="1.8" />
+            </span>
+            <div>
+              <h3>密钥销毁</h3>
+              <p>只清空服务端保存的密文，不影响当前页面输入草稿。</p>
+            </div>
+          </div>
+        </template>
+
         <el-alert
+          class="settings-card__alert"
           type="warning"
           :closable="false"
           show-icon
@@ -641,32 +721,42 @@ function goToLogin(): void {
             销毁全部 Key
           </el-button>
         </div>
-      </el-card>
+      </BaseCard>
 
-      <el-card class="sc-card-gap" shadow="never">
+      <BaseCard class="settings-card settings-card--danger">
         <template #header>
-          <span>注销账号</span>
+          <div class="settings-card__heading">
+            <span class="settings-card__icon">
+              <UserX :size="17" :stroke-width="1.8" />
+            </span>
+            <div>
+              <h3>注销账号</h3>
+              <p>物理擦除课程、课件、向量、DDL、会话与通知，且不可恢复。</p>
+            </div>
+          </div>
         </template>
+
         <el-alert
+          class="settings-card__alert"
           type="error"
           :closable="false"
           show-icon
           title="高危操作"
           description="注销后当前登录立即失效，课程、课件、父块、向量、DDL 任务、会话与通知会被物理擦除，且不可恢复。请输入当前密码并输入 CONFIRM_DEACTIVATE 确认。"
         />
-        <el-input
-          v-model="deactivatePassword"
-          type="password"
-          show-password
-          placeholder="当前密码"
-          class="sc-settings__full"
-          autocomplete="current-password"
-        />
-        <el-input
-          v-model="deactivateConfirm"
-          placeholder="输入 CONFIRM_DEACTIVATE"
-          class="sc-settings__full"
-        />
+        <div class="settings-card__stack">
+          <el-input
+            v-model="deactivatePassword"
+            type="password"
+            show-password
+            placeholder="当前密码"
+            autocomplete="current-password"
+          />
+          <el-input
+            v-model="deactivateConfirm"
+            placeholder="输入 CONFIRM_DEACTIVATE"
+          />
+        </div>
         <div class="sc-settings__row sc-settings__row--end">
           <span class="sc-settings__hint">该操作不可撤销，也不会保留任何个人数据。</span>
           <el-button
@@ -678,9 +768,21 @@ function goToLogin(): void {
             注销账号
           </el-button>
         </div>
-      </el-card>
-      <el-card class="sc-card-gap" shadow="never">
-        <template #header>关于</template>
+      </BaseCard>
+
+      <BaseCard class="settings-card">
+        <template #header>
+          <div class="settings-card__heading">
+            <span class="settings-card__icon">
+              <Info :size="17" :stroke-width="1.8" />
+            </span>
+            <div>
+              <h3>关于</h3>
+              <p>构建环境与已实现能力；开发信息集中在这里，不再占用首页。</p>
+            </div>
+          </div>
+        </template>
+
         <el-collapse v-model="aboutPanels">
           <el-collapse-item title="构建与环境信息" name="build">
             <el-descriptions :column="1" border>
@@ -699,23 +801,149 @@ function goToLogin(): void {
             </ul>
           </el-collapse-item>
         </el-collapse>
-      </el-card>
+      </BaseCard>
     </template>
   </div>
 </template>
 
 <style scoped>
-.sc-settings__header {
+.settings-page {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: var(--sc-card-gap);
+  max-width: 1120px;
+  margin: 0 auto;
 }
 
-.sc-settings__meta {
-  color: #909399;
+.settings-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 24px 28px;
+  border: 1px solid var(--sc-border);
+  border-radius: 16px;
+  background: linear-gradient(
+    120deg,
+    var(--sc-primary-soft) 0%,
+    var(--sc-surface) 58%,
+    var(--sc-accent-soft) 100%
+  );
+  box-shadow: var(--sc-shadow);
+}
+
+.settings-hero__copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-hero__eyebrow {
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-hint);
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+
+.settings-hero h2 {
+  color: var(--sc-text);
+  font-size: var(--sc-font-title);
+  font-weight: var(--sc-font-title-weight);
+  letter-spacing: -0.3px;
+}
+
+.settings-hero p {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+}
+
+.settings-hero__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.settings-hero__status {
+  display: flex;
+  flex: none;
+  gap: 24px;
+  padding-left: 20px;
+  border-left: 1px solid var(--sc-border);
+}
+
+.settings-hero__status div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-hero__status span {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
+}
+
+.settings-hero__status strong {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--sc-text);
   font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-card--danger {
+  border-color: rgba(239, 68, 68, 0.26);
+}
+
+.settings-card__heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-card__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--sc-primary);
+  background: var(--sc-primary-soft);
+}
+
+.settings-card--danger .settings-card__icon {
+  color: var(--sc-danger);
+  background: var(--sc-danger-soft);
+}
+
+.settings-card__heading h3 {
+  color: var(--sc-text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settings-card__heading p {
+  margin-top: 2px;
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
   font-weight: 400;
+  line-height: 1.5;
+}
+
+.settings-card__alert {
+  margin-bottom: 16px;
+}
+
+.settings-card__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .sc-settings__full {
@@ -726,8 +954,8 @@ function goToLogin(): void {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 4px 0 16px;
   flex-wrap: wrap;
+  margin: 4px 0 16px;
 }
 
 .sc-settings__row--end {
@@ -736,8 +964,9 @@ function goToLogin(): void {
 }
 
 .sc-settings__hint {
-  color: #909399;
-  font-size: 13px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.6;
 }
 
 .sc-settings__hint--block {
@@ -749,10 +978,24 @@ function goToLogin(): void {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .sc-settings__checkbox {
   margin-bottom: 16px;
+}
+
+.sc-settings__meta {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-caption);
+  font-weight: 400;
+}
+
+.sc-settings__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .sc-about-list {
@@ -761,5 +1004,42 @@ function goToLogin(): void {
   color: var(--sc-text-secondary);
   font-size: var(--sc-font-caption);
   line-height: 1.9;
+}
+
+.settings-page :deep(code) {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--sc-surface-muted);
+  color: var(--sc-primary-strong);
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  .settings-hero {
+    flex-wrap: wrap;
+    padding: 20px;
+  }
+
+  .settings-hero__status {
+    flex-basis: 100%;
+    padding-left: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--sc-border);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 639px) {
+  .settings-hero {
+    align-items: flex-start;
+  }
+
+  .settings-hero__status {
+    gap: 18px;
+  }
+
+  .sc-settings__row--end {
+    align-items: flex-start;
+  }
 }
 </style>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 
+import { CalendarClock, Library, Sparkles } from '@lucide/vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
@@ -129,138 +130,431 @@ function showRegister(): void {
 </script>
 
 <template>
-  <div class="sc-auth">
-    <el-card class="sc-auth__card" shadow="never">
-      <template #header>
-        <div class="sc-auth__header">
-          <span class="sc-auth__title">ScholarClaw 智学爪</span>
-          <span class="sc-auth__subtitle">课程知识库 · DDL 待办 · RAG 问答</span>
-        </div>
-      </template>
-
-      <el-tabs :model-value="mode" class="sc-auth__tabs" @update:model-value="handleTabChange">
-        <el-tab-pane label="登录" name="login" />
-        <el-tab-pane label="注册" name="register" />
-      </el-tabs>
-
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-position="top"
-        size="large"
-        @submit.prevent="handleEnter"
-      >
-        <el-form-item label="用户名" prop="username">
-          <el-input
-            v-model="form.username"
-            autocomplete="username"
-            placeholder="3~64 位字母、数字、下划线或连字符"
-            @keyup.enter="handleEnter"
-          />
-        </el-form-item>
-
-        <el-form-item label="密码" prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            show-password
-            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-            placeholder="至少 8 位，需同时包含字母与数字"
-            @keyup.enter="handleEnter"
-          />
-        </el-form-item>
-
-        <el-form-item v-if="mode === 'register'" label="确认密码" prop="confirmPassword">
-          <el-input
-            v-model="form.confirmPassword"
-            type="password"
-            show-password
-            autocomplete="new-password"
-            placeholder="再次输入密码"
-            @keyup.enter="handleEnter"
-          />
-        </el-form-item>
-
-        <el-button
-          class="sc-auth__submit"
-          type="primary"
-          size="large"
-          :loading="submitting"
-          @click="handleEnter"
-        >
-          {{ submitLabel }}
-        </el-button>
-      </el-form>
-
-      <div class="sc-auth__footer">
-        <template v-if="mode === 'login'">
-          还没有账号？
-          <el-link type="primary" :underline="false" @click="showRegister">立即注册</el-link>
-        </template>
-        <template v-else>
-          已有账号？
-          <el-link type="primary" :underline="false" @click="switchMode('login')">返回登录</el-link>
-        </template>
+  <div class="auth-page">
+    <section class="auth-brand">
+      <div class="auth-brandline">
+        <span class="auth-brandline__mark">
+          <img src="/illustrations/logo.svg" alt="" />
+        </span>
+        <span class="auth-brandline__text">
+          <strong>ScholarClaw</strong>
+          <small>智 学 爪</small>
+        </span>
       </div>
 
-      <el-alert
-        class="sc-auth__notice"
-        type="info"
-        :closable="false"
-        show-icon
-        title="密钥安全"
-        description="登录凭据只用于换取访问令牌；模型 API Key 只在配置时提交，页面与浏览器存储都不会保存明文。"
-      />
-    </el-card>
+      <div class="auth-brand__copy">
+        <h1>让学习更智能<br />让知识有回声</h1>
+        <p>
+          基于 AI 的学习助手，帮助你在课程知识库中高效检索、规划 DDL，
+          并随时获得有依据的回答。
+        </p>
+      </div>
+
+      <ul class="auth-features">
+        <li>
+          <span class="auth-features__icon">
+            <CalendarClock :size="18" :stroke-width="1.8" />
+          </span>
+          <span class="auth-features__text">
+            <strong>DDL 雷达</strong>
+            <small>智能识别 · 及时提醒 · 任务管理</small>
+          </span>
+        </li>
+        <li>
+          <span class="auth-features__icon">
+            <Library :size="18" :stroke-width="1.8" />
+          </span>
+          <span class="auth-features__text">
+            <strong>课程知识库</strong>
+            <small>上传课件 · 解析索引 · 溯源问答</small>
+          </span>
+        </li>
+        <li>
+          <span class="auth-features__icon">
+            <Sparkles :size="18" :stroke-width="1.8" />
+          </span>
+          <span class="auth-features__text">
+            <strong>AI 学习助手</strong>
+            <small>基于课程知识 · 回答附引用来源</small>
+          </span>
+        </li>
+      </ul>
+
+      <div class="auth-brand__quote">
+        <span>—</span>
+        <p>学习不是一场冲刺<br />而是一段持续积累的旅程。</p>
+      </div>
+
+      <div class="auth-brand__art">
+        <img src="/illustrations/hero-student.webp" alt="" />
+      </div>
+    </section>
+
+    <section class="auth-panel">
+      <div class="auth-card">
+        <div class="auth-card__brand">
+          <span class="auth-brandline__mark">
+            <img src="/illustrations/logo.svg" alt="" />
+          </span>
+          <span class="auth-brandline__text">
+            <strong>ScholarClaw</strong>
+            <small>智 学 爪</small>
+          </span>
+        </div>
+
+        <header class="auth-card__header">
+          <span class="auth-card__eyebrow">
+            {{ mode === 'login' ? 'WELCOME BACK' : 'CREATE ACCOUNT' }}
+          </span>
+          <h2>{{ mode === 'login' ? '欢迎回来' : '创建账号' }}</h2>
+          <p>
+            {{
+              mode === 'login'
+                ? '登录后继续使用课程知识库、DDL 提醒与 AI 问答。'
+                : '注册后会自动登录，并引导你完成模型配置。'
+            }}
+          </p>
+        </header>
+
+        <el-tabs :model-value="mode" class="auth-card__tabs" @update:model-value="handleTabChange">
+          <el-tab-pane label="登录" name="login" />
+          <el-tab-pane label="注册" name="register" />
+        </el-tabs>
+
+        <el-form
+          ref="formRef"
+          :model="form"
+          :rules="rules"
+          label-position="top"
+          size="large"
+          @submit.prevent="handleEnter"
+        >
+          <el-form-item label="用户名" prop="username">
+            <el-input
+              v-model="form.username"
+              autocomplete="username"
+              placeholder="3~64 位字母、数字、下划线或连字符"
+              @keyup.enter="handleEnter"
+            />
+          </el-form-item>
+
+          <el-form-item label="密码" prop="password">
+            <el-input
+              v-model="form.password"
+              type="password"
+              show-password
+              :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+              placeholder="至少 8 位，需同时包含字母与数字"
+              @keyup.enter="handleEnter"
+            />
+          </el-form-item>
+
+          <el-form-item v-if="mode === 'register'" label="确认密码" prop="confirmPassword">
+            <el-input
+              v-model="form.confirmPassword"
+              type="password"
+              show-password
+              autocomplete="new-password"
+              placeholder="再次输入密码"
+              @keyup.enter="handleEnter"
+            />
+          </el-form-item>
+
+          <el-button
+            class="auth-card__submit"
+            type="primary"
+            size="large"
+            :loading="submitting"
+            @click="handleEnter"
+          >
+            {{ submitLabel }}
+          </el-button>
+        </el-form>
+
+        <div class="auth-card__footer">
+          <template v-if="mode === 'login'">
+            还没有账号？
+            <el-link type="primary" :underline="false" @click="showRegister">立即注册</el-link>
+          </template>
+          <template v-else>
+            已有账号？
+            <el-link type="primary" :underline="false" @click="switchMode('login')">
+              返回登录
+            </el-link>
+          </template>
+        </div>
+
+        <el-alert
+          class="auth-card__notice"
+          type="info"
+          :closable="false"
+          show-icon
+          title="密钥安全"
+          description="登录凭据只用于换取访问令牌；模型 API Key 只在配置时提交，页面与浏览器存储都不会保存明文。"
+        />
+      </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.sc-auth {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: calc(100vh - 96px);
+.auth-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 440px);
+  gap: 20px;
+  align-items: stretch;
+  width: 100%;
+  max-width: 1180px;
+  min-height: calc(100dvh - var(--sc-topbar-height) - 52px);
+  margin: 0 auto;
 }
 
-.sc-auth__card {
-  width: min(440px, 100%);
-}
-
-.sc-auth__header {
+.auth-brand {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 18px;
+  padding: 30px;
+  overflow: hidden;
+  border: 1px solid var(--sc-border);
+  border-radius: 18px;
+  background: linear-gradient(
+    160deg,
+    var(--sc-primary-soft) 0%,
+    var(--sc-surface) 55%,
+    var(--sc-accent-soft) 100%
+  );
+  box-shadow: var(--sc-shadow);
 }
 
-.sc-auth__title {
-  font-size: 18px;
+.auth-brandline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-brandline__mark {
+  display: block;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  overflow: hidden;
+}
+
+.auth-brandline__mark img {
+  display: block;
+  width: auto;
+  height: 38px;
+}
+
+.auth-brandline__text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.auth-brandline__text strong {
+  color: var(--sc-text);
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+}
+
+.auth-brandline__text small {
+  color: var(--sc-text-placeholder);
+  font-size: 10px;
+  letter-spacing: 2px;
+}
+
+.auth-brand__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 440px;
+}
+
+.auth-brand__copy h1 {
+  color: var(--sc-text);
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  line-height: 1.35;
+}
+
+.auth-brand__copy p {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.8;
+}
+
+.auth-features {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-features li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--sc-border);
+  border-radius: 12px;
+  background: var(--sc-surface);
+}
+
+.auth-features__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--sc-primary);
+  background: var(--sc-primary-soft);
+}
+
+.auth-features__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.auth-features__text strong {
+  color: var(--sc-text);
+  font-size: 13px;
   font-weight: 600;
 }
 
-.sc-auth__subtitle {
-  color: #909399;
-  font-size: 13px;
+.auth-features__text small {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
 }
 
-.sc-auth__tabs {
-  margin-bottom: 8px;
+.auth-brand__quote {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--sc-border);
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.7;
 }
 
-.sc-auth__submit {
+.auth-brand__quote span {
+  color: var(--sc-primary);
+  font-weight: 700;
+}
+
+.auth-brand__art {
+  margin-top: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #eaf4ff;
+}
+
+.auth-brand__art img {
+  display: block;
   width: 100%;
-  margin-top: 8px;
+  height: 170px;
+  object-fit: cover;
 }
 
-.sc-auth__footer {
+.auth-panel {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.auth-card {
+  width: 100%;
+  padding: 28px;
+  border: 1px solid var(--sc-border);
+  border-radius: 18px;
+  background: var(--sc-surface);
+  box-shadow: var(--sc-shadow);
+}
+
+.auth-card__brand {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.auth-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.auth-card__eyebrow {
+  color: var(--sc-primary-strong);
+  font-size: var(--sc-font-hint);
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+
+.auth-card__header h2 {
+  color: var(--sc-text);
+  font-size: var(--sc-font-title);
+  font-weight: var(--sc-font-title-weight);
+  letter-spacing: -0.3px;
+}
+
+.auth-card__header p {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.6;
+}
+
+.auth-card__tabs {
+  margin: 12px 0 4px;
+}
+
+.auth-card__submit {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.auth-card__footer {
   margin-top: 16px;
-  color: #606266;
-  font-size: 14px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
   text-align: center;
 }
 
-.sc-auth__notice {
+.auth-card__notice {
   margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .auth-page {
+    grid-template-columns: 1fr;
+    max-width: 520px;
+    min-height: 0;
+  }
+
+  .auth-brand {
+    display: none;
+  }
+
+  .auth-card__brand {
+    display: flex;
+  }
+
+  .auth-panel {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 639px) {
+  .auth-card {
+    padding: 20px;
+  }
 }
 </style>

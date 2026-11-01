@@ -402,8 +402,10 @@ services:
         condition: service_healthy
     networks: [scholarclaw-public]
     ports:
-      # 唯一对外暴露的端口（02 §13.1 端口暴露红线）
-      - "${SC_WEB_HTTP_PORT:-80}:80"
+      # 唯一对外暴露的端口（02 §13.1 端口暴露红线）。
+      # 用宿主机 Nginx 做 HTTPS 时，把 SC_WEB_HTTP_BIND 设成 127.0.0.1，
+      # 容器就只接受本机转发，公网无法绕过 443 直连 HTTP。
+      - "${SC_WEB_HTTP_BIND:-0.0.0.0}:${SC_WEB_HTTP_PORT:-80}:80"
     environment:
       TZ: ${SC_TIMEZONE:-Asia/Shanghai}
       # 运行期覆盖 NapCat WebUI 跳转地址（非密钥）；改完重启本容器即可，无需重建镜像。

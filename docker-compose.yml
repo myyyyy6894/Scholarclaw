@@ -73,7 +73,9 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
     volumes:
       - vol_mysql_data:/var/lib/mysql
-    mem_limit: 1536m
+    # 2C4G 机型：MySQL 默认 buffer pool 只有 128M，1g 上限足够；
+    # 腾出的内存留给 PDF 解析（sc-python-ai）。8G 以上机型可调回 1536m。
+    mem_limit: 1g
     stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]

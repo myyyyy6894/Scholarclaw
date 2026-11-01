@@ -119,12 +119,14 @@ public class BaseUrlSecurityValidator {
         // ---------- 第二层：白名单只豁免"本地/私有/回环地址 + http" ----------
         String origin = scheme + "://" + originHost + (port > 0 ? ":" + port : "");
         if (allowLocalModelBaseUrl && allowedOrigins.contains(origin)) {
-            // 白名单不是“任意地址放行”：只允许 http，且主机必须是本地/私有/回环字面量。
+            // 白名单不是“任意地址放行”：只允许 http，且主机必须是本地/私有/回环地址。
             // 公网域名即使被误配进白名单也必须拒绝（DNS 解析后的复核由 Python 侧完成）。
             if (!"http".equals(scheme)) {
                 throw reject("白名单只允许 http");
             }
-            if (!isInternalLiteral(checkHost)) {
+            // 单标签主机名（如 Docker 服务名 `sc-ollama`）只在容器/内网 DNS 里存在，
+            // 公网解析不到；允许它让"平台自带 Ollama"这类部署能通过探测。
+            if (!isInternalLiteral(checkHost) && !isSingleLabelHost(checkHost)) {
                 throw reject("白名单只允许本地/私有/回环地址");
             }
             log.debug("Base URL 命中本地模型白名单（硬拒绝项已先行排除）");
@@ -222,8 +224,17 @@ public class BaseUrlSecurityValidator {
      * <p>只判字面量与明显的内网主机名；域名解析后的 IP 校验由 Python 侧完成（`04` §4.2.2 规则 2），
      * 这里刻意不做 DNS 解析——否则校验器自己就成了"内网 DNS 探测"的入口。
      */
-    static boolean isInternalLiteral(String host) {
-        if ("localhost".equals(host) || host.endsWith(".localhost") || host.endsWith(".internal")) {
+    /**
+     * 单标签主机名（不含点的名字，如 Docker Compose 服务名 `sc-ollama`）。
+     *
+     * <p>这类名字只存在于容器/内网 DNS，公网无法解析；因此只作为"运维显式写进白名单"的
+     * 附加放行条件使用，公网域名（含点）不受影响。IPv6 字面量已在 {@link #isInternalLiteral} 中处理。
+     */
+    private static boolean isSingleLabelHost(String host) {
+        return !host.isEmpty() && !host.contains(".") && !host.contains(":");
+    }
+
+    static boolean isInternalLiteral(String host) {        if ("localhost".equals(host) || host.endsWith(".localhost") || host.endsWith(".internal")) {
             return true;
         }
         if (host.contains(":")) {

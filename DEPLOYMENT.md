@@ -128,8 +128,13 @@ SC_PLATFORM_EMBEDDING_DIM=1024
 SC_PLATFORM_EMBEDDING_API_KEY=
 SC_ALLOW_LOCAL_MODEL_BASE_URL=true
 SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://sc-ollama:11434
-SC_OLLAMA_KEEP_ALIVE=30m
+SC_OLLAMA_KEEP_ALIVE=-1          # 模型常驻内存，避免冷启动重载（小内存机器可改 30m）
+SC_MODEL_READ_TIMEOUT_SECONDS=120 # 冷启动首次加载可能超过默认 30s，放宽探测超时
 ```
+
+> 2 核机器上模型首次加载约 3~5 秒，但容器刚重建、页缓存为空时可能更久；
+> 默认 30 秒的超时会让「测试连接」偶发报 `UPSTREAM_TIMEOUT`，所以这里放宽到 120 秒。
+> `SC_MODEL_READ_TIMEOUT_SECONDS` 由 `sc-python-ai` 读取，改完要重启它（不只是 Java）。
 
 ```bash
 docker compose up -d sc-java-backend sc-python-ai

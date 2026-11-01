@@ -179,4 +179,20 @@ class BaseUrlSecurityValidatorTest {
         assertThatThrownBy(() -> STRICT.validate("https://" + "a".repeat(600)))
                 .isInstanceOf(BusinessException.class);
     }
+
+    @Test
+    @DisplayName("白名单可放行容器服务名（单标签主机名），未白名单的仍然拒绝")
+    void whitelistAllowsSingleLabelServiceHost() {
+        // 部署方自带 Ollama 时用的是 compose 服务名，不是 IP 字面量
+        BaseUrlSecurityValidator containerName = new BaseUrlSecurityValidator(
+                true, "http://sc-ollama:11434");
+
+        assertThatCode(() -> containerName.validate("http://sc-ollama:11434/v1"))
+                .as("显式白名单里的单标签服务名应放行")
+                .doesNotThrowAnyException();
+
+        assertThatThrownBy(() -> containerName.validate("http://sc-other:11434/v1"))
+                .as("未写进白名单的服务名仍然拒绝")
+                .isInstanceOf(BusinessException.class);
+    }
 }

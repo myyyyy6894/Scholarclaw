@@ -124,7 +124,7 @@ docker compose --profile onebot up -d sc-napcat-onebot
 | 项 | 现状 | 建议 |
 |---|---|---|
 | HTTPS | 未内置，只有 80 端口 | 前置 TLS 终止（云 LB 或宿主机 Nginx） |
-| 备份 | 无脚本 | 定时 `mysqldump` + 备份 `vol_shared_storage` 与 `.env` 的 `SC_MASTER_KEY` |
+| 备份 | ✅ 已提供 `scripts/backup/backup.sh` | 需自行加定时任务，并把备份复制到另一台机器（§10） |
 | 注册限流 | ✅ 已内置（Nginx 按 IP） | 数值在 `sc-web-frontend/nginx.conf` 顶部；TLS 在上游终止时需配 `real_ip` |
 | 日志轮转 | 未配置 | 给容器加 `logging.options.max-size` |
 | NapCat 版本 | `latest` | pin 具体版本 |
@@ -140,3 +140,167 @@ docker compose up -d
 ```
 
 新增迁移会在 Java 启动时自动执行。**升级前先备份数据库**：迁移脚本只有正向执行，回滚脚本不保证覆盖每个版本。
+
+## 9. 配置 HTTPS（宿主机 Nginx + Let's Encrypt）
+
+不配 HTTPS 时，登录密码、登录凭证、用户填的 API Key 在公网是明文传输。下面是单机最省事的做法：
+宿主机上的 Nginx 负责加密，容器继续在内部监听 HTTP。
+
+```
+浏览器 --https--> 宿主机 Nginx（证书）--http 127.0.0.1--> 容器 Nginx --> Java
+```
+
+### 9.1 前提
+
+- 一个域名，A 记录指向服务器公网 IP（国内云服务器还需要完成备案）
+- 服务器 80 和 443 端口可访问（Let's Encrypt 要用 80 做验证）
+
+### 9.2 让容器只接受本机转发
+
+`.env` 改两行，然后 `docker compose up -d sc-web-nginx`：
+
+```dotenv
+SC_WEB_HTTP_PORT=8080
+SC_WEB_HTTP_BIND=127.0.0.1
+```
+
+这一步不能省：默认容器绑 `0.0.0.0`，公网仍能直接访问 `http://IP:8080` 绕过证书。
+
+### 9.3 宿主机安装并配置
+
+```bash
+sudo apt install nginx certbot python3-certbot-nginx
+sudo tee /etc/nginx/sites-available/scholarclaw >/dev/null <<'CONF'
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    client_max_body_size 60m;          # 与容器内上传上限一致
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;           # SSE 流式问答必须关缓冲
+        proxy_cache off;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+}
+CONF
+sudo ln -s /etc/nginx/sites-available/scholarclaw /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+# 申请证书：certbot 会自动把上面这个站点改成 443 + 80 跳转
+sudo certbot --nginx -d your-domain.com
+```
+
+`certbot` 装完会提示测试自动续期，选允许即可；也可以手动验证：
+
+```bash
+sudo certbot renew --dry-run
+```
+
+### 9.4 验证
+
+```bash
+curl -I http://your-domain.com        # 应返回 301 → https
+curl -I https://your-domain.com       # 应返回 200
+curl -s http://你的服务器IP:8080      # 应连接失败（容器只绑了本机）
+```
+
+浏览器打开 `https://your-domain.com`，地址栏应显示锁标志；此时「复制 QQ 号」等依赖安全上下文的浏览器 API 才会正常工作。
+
+### 9.5 关于真实客户端 IP
+
+宿主机转发后，容器看到的是 Docker 网桥网关而不是用户，按 IP 限流会把全站算成一个人。
+容器内 `sc-web-frontend/nginx.conf` 已内置：
+
+```nginx
+set_real_ip_from 172.16.0.0/12;   # 只信任私有网段的 X-Forwarded-For
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 192.168.0.0/16;
+real_ip_header   X-Forwarded-For;
+```
+
+所以按第 9.2 步把容器绑到 `127.0.0.1` 之后，限流就按真实用户 IP 计数，不需要再改配置。
+
+## 10. 备份与恢复
+
+### 10.1 备份什么
+
+| 对象 | 丢了会怎样 | 由谁备份 |
+|---|---|---|
+| MySQL 数据 | 账号、课程、文档记录、DDL、会话、通知全没 | 脚本（mysqldump） |
+| 共享卷 `vol_shared_storage` | 用户上传的课件原文件全没 | 脚本（tar） |
+| `.env` 里的 `SC_MASTER_KEY` | **所有已保存的用户 API Key 永久无法解密** | 脚本（复制 `.env`） |
+| ChromaDB 向量库 | 可从课件重建 | 不备份 |
+
+### 10.2 执行备份
+
+```bash
+bash scripts/backup/backup.sh
+
+# 常用变体
+BACKUP_DIR=/var/backups/scholarclaw bash scripts/backup/backup.sh   # 指定目录
+BACKUP_RETENTION_DAYS=30 bash scripts/backup/backup.sh              # 保留 30 天
+BACKUP_STORAGE=0 bash scripts/backup/backup.sh                      # 只备数据库与 .env
+```
+
+每次生成四个文件：
+
+```
+scholarclaw-<时间戳>-mysql.sql.gz      # 数据库全量（--single-transaction，不锁表）
+scholarclaw-<时间戳>-storage.tar.gz    # 课件共享卷
+scholarclaw-<时间戳>-env               # .env（含主密钥，权限 600）
+scholarclaw-<时间戳>-manifest.txt      # 时间/提交号/各文件大小
+```
+
+定时任务（每天凌晨 3 点）：
+
+```bash
+sudo crontab -e
+0 3 * * * cd /opt/ScholarClaw && /usr/bin/bash scripts/backup/backup.sh >> /var/log/sc-backup.log 2>&1
+```
+
+⚠️ **必须把备份复制到另一台机器或对象存储**。只放在同一块磁盘上，磁盘坏了备份也一起没。
+
+### 10.3 恢复
+
+以「换到新服务器」为例，顺序不能反：先 `.env`（主密钥），再数据库，最后课件。
+
+```bash
+# 1. 代码与 .env
+git clone <repo> && cd ScholarClaw
+cp /backup/scholarclaw-xxx-env .env && chmod 600 .env
+
+# 2. 起数据库（其余服务先别起，避免带着空库跑业务）
+docker compose up -d sc-mysql
+# 等待 healthy
+docker compose ps sc-mysql
+
+# 3. 还原数据库（先清空目标库，再导入）
+set -a; source .env; set +a
+docker compose exec -T -e MYSQL_PWD="$SC_DB_ROOT_PASSWORD" sc-mysql \
+  mysql -uroot -e "DROP DATABASE IF EXISTS \`$SC_DB_NAME\`; CREATE DATABASE \`$SC_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+gunzip -c /backup/scholarclaw-xxx-mysql.sql.gz | \
+  docker compose exec -T -e MYSQL_PWD="$SC_DB_ROOT_PASSWORD" sc-mysql mysql -uroot "$SC_DB_NAME"
+
+# 4. 还原课件共享卷（此时 Java 还没起，用一次性容器挂同一个卷）
+docker run --rm -i -v vol_shared_storage:/data alpine:3.20 tar xzf - -C /data \
+  < /backup/scholarclaw-xxx-storage.tar.gz
+
+# 5. 构建并启动全部服务
+mvn -f sc-java-backend/pom.xml -B -DskipTests package
+docker compose up -d
+docker compose ps
+```
+
+验证：登录一个已有账号、打开课程页能看到历史课件、DDL 看板的待办还在。
+
+**`.env` 必须和备份同批恢复**：用错主密钥时数据库能起来，但用户保存的模型 Key 全部解密失败，
+表现为「配置看起来还在、一保存/一问就报错」。

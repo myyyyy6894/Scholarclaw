@@ -89,6 +89,9 @@ rabbitmq-data/
 *.sqlite3
 *.db
 
+# ===== 备份产物（含数据库全量与主密钥，绝不入库）=====
+backups/
+
 # ===== 日志与临时文件 =====
 logs/
 *.log

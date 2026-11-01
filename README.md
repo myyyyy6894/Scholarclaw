@@ -121,9 +121,11 @@ SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://127.0.0.1:11434
 
 这些不在仓库默认配置里，公网部署前需要自己处理：
 
-- **HTTPS**：仓库只提供 80 端口。请在前面加一层 TLS 终止（云负载均衡或宿主机 Nginx）；
-  如果 TLS 在上游终止，记得按 `nginx.conf` 里的注释配置 `set_real_ip_from`，否则限流会把所有用户算成同一个代理 IP。
-- **备份**：定时备份 MySQL 数据卷、`vol_shared_storage`（课件原文件）与 `.env` 中的 `SC_MASTER_KEY`。
+- **HTTPS**：仓库只提供 80 端口。推荐宿主机 Nginx + Let's Encrypt（免费），完整步骤见
+  [`DEPLOYMENT.md` §9](DEPLOYMENT.md#9-配置-https宿主机-nginx--lets-encrypt)。
+  配好后把 `SC_WEB_HTTP_BIND` 设为 `127.0.0.1`，公网就无法绕过证书直连 HTTP。
+- **备份**：`bash scripts/backup/backup.sh` 一键备份数据库、课件共享卷与 `.env`（含主密钥），
+  支持保留天数与定时任务；恢复步骤见 [`DEPLOYMENT.md` §10](DEPLOYMENT.md#10-备份与恢复)。
 - **日志轮转**：Compose 未配置 `logging` 上限，长期运行请自行限制。
 
 更多部署与排障细节见 [`DEPLOYMENT.md`](DEPLOYMENT.md)。

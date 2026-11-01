@@ -12,8 +12,6 @@ import MyCourses from '@/components/home/MyCourses.vue'
 import NoticeList from '@/components/home/NoticeList.vue'
 import RecentChats from '@/components/home/RecentChats.vue'
 import RecentDocs from '@/components/home/RecentDocs.vue'
-import ScheduleCard from '@/components/home/ScheduleCard.vue'
-import SystemStatusCard from '@/components/home/SystemStatusCard.vue'
 import TodayTasks from '@/components/home/TodayTasks.vue'
 import QuickActionCard from '@/components/ui/QuickActionCard.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -26,11 +24,10 @@ import { notificationTarget } from '@/views/notifications/notification-center'
  * 首页 Dashboard（P2）。
  *
  * 参考图 `docs/ui_picture/首页.png` / `首页图片.png`：
- * 左侧主区（Hero、快捷入口、今日待办/课程、最近学习/问答），右侧栏（今日安排、
- * DDL 日历、通知、系统状态）。
+ * 左侧主区（Hero、快捷入口、今日待办/课程、最近学习/问答），右侧栏（DDL 日历、通知）。
  *
- * 数据全部来自 `useHomeData`：有接口的接真实数据；系统状态与课表显式
- * `PENDING_BACKEND`，由 `ComingSoonBadge` 显示「暂未开发」，不写假状态。
+ * 数据全部来自 `useHomeData`：有接口的一律接真实数据；未登录时各模块显示「登录后查看」，
+ * 不写假状态、不留「暂未开发」占位。
  */
 interface QuickAction {
   title: string
@@ -97,8 +94,6 @@ const {
   todayIso,
   nowMs,
   unreadCount,
-  systemStatus,
-  schedule,
   retryCourses,
   retryBoard,
   retryNotifications,
@@ -218,8 +213,6 @@ async function openNotice(item: NotificationItem): Promise<void> {
     </div>
 
     <aside class="home__rail">
-      <ScheduleCard :state="schedule" :date-label="dateLabel" />
-
       <DdlCalendar
         :tasks="calendarTasks"
         :today-iso="todayIso"
@@ -236,8 +229,6 @@ async function openNotice(item: NotificationItem): Promise<void> {
         @open="onNoticeOpen"
         @view-all="onViewAllNotifications"
       />
-
-      <SystemStatusCard :state="systemStatus" />
     </aside>
   </div>
 </template>

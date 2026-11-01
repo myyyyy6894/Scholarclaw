@@ -210,6 +210,13 @@ services:
       SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS: ${SC_DEPENDENCY_PROBE_TIMEOUT_MILLIS:-1500}
       SC_MODEL_CONNECT_TIMEOUT_MILLIS: ${SC_MODEL_CONNECT_TIMEOUT_MILLIS:-5000}
       SC_MODEL_READ_TIMEOUT_MILLIS: ${SC_MODEL_READ_TIMEOUT_MILLIS:-10000}
+      # 平台默认向量模型（部署方自带 Embedding）：五项齐全才启用，只影响新注册账号。
+      # 留空 = 不启用，用户需自行在设置页配置向量模型。
+      SC_PLATFORM_EMBEDDING_PROVIDER: ${SC_PLATFORM_EMBEDDING_PROVIDER:-}
+      SC_PLATFORM_EMBEDDING_BASE_URL: ${SC_PLATFORM_EMBEDDING_BASE_URL:-}
+      SC_PLATFORM_EMBEDDING_MODEL: ${SC_PLATFORM_EMBEDDING_MODEL:-}
+      SC_PLATFORM_EMBEDDING_DIM: ${SC_PLATFORM_EMBEDDING_DIM:-0}
+      SC_PLATFORM_EMBEDDING_API_KEY: ${SC_PLATFORM_EMBEDDING_API_KEY:-}
       # sc-python-ai 内部基址：健康检查会真实调用它（TASK-105）
       SC_PYTHON_AI_BASE_URL: ${SC_PYTHON_AI_BASE_URL:-http://sc-python-ai:8000}
       SC_ALLOW_LOCAL_MODEL_BASE_URL: ${SC_ALLOW_LOCAL_MODEL_BASE_URL:-false}
@@ -402,6 +409,8 @@ services:
       # 运行期覆盖 NapCat WebUI 跳转地址（非密钥）；改完重启本容器即可，无需重建镜像。
       # 留空则沿用构建期 VITE_NAPCAT_WEBUI_URL / 默认 http://127.0.0.1:6099。
       SC_NAPCAT_WEBUI_URL: ${SC_NAPCAT_WEBUI_URL:-}
+      # 部署方联系 QQ（非密钥，可选）：留空则前端不显示「帮助与反馈」里的联系方式。
+      SC_OPERATOR_QQ: ${SC_OPERATOR_QQ:-}
     mem_limit: 128m
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]

@@ -25,6 +25,7 @@ import TagBadge from '@/components/ui/TagBadge.vue'
 import UserAvatar from '@/components/ui/UserAvatar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
+import { copyOperatorQq, readRuntimeOperatorQq, resolveOperatorQq } from '@/utils/operator-contact'
 import { IMPLEMENTED_CAPABILITIES } from '@/views/home/home-tasks'
 import {
   createModelForm,
@@ -62,6 +63,16 @@ const auth = useAuthStore()
 const apiBaseUrl = resolveApiBaseUrl()
 const buildMode = import.meta.env.MODE
 const aboutPanels = ref<string[]>([])
+/** 部署方联系 QQ（`SC_OPERATOR_QQ`）；空串表示不展示联系区块。 */
+const operatorQq = resolveOperatorQq(readRuntimeOperatorQq())
+
+async function copyQq(): Promise<void> {
+  if (await copyOperatorQq(operatorQq)) {
+    notifySuccess('QQ 号已复制。')
+    return
+  }
+  notifyWarning('复制失败，请手动选择号码复制。')
+}
 
 const loading = ref(true)
 const loadError = ref('')
@@ -795,6 +806,16 @@ function goToLogin(): void {
               </el-descriptions-item>
             </el-descriptions>
           </el-collapse-item>
+          <el-collapse-item v-if="operatorQq" title="联系与反馈" name="contact">
+            <p class="sc-about-contact">
+              使用中遇到问题，可以加维护者 QQ 反馈（加好友请备注 ScholarClaw）：
+            </p>
+            <div class="sc-about-qq">
+              <strong>{{ operatorQq }}</strong>
+              <el-button size="small" @click="copyQq">复制</el-button>
+            </div>
+            <p class="sc-about-note">QQ 仅用于问题反馈与答疑；DDL 提醒以站内通知为准。</p>
+          </el-collapse-item>
           <el-collapse-item title="已实现能力" name="capabilities">
             <ul class="sc-about-list">
               <li v-for="item in IMPLEMENTED_CAPABILITIES" :key="item">{{ item }}</li>
@@ -1004,6 +1025,31 @@ function goToLogin(): void {
   color: var(--sc-text-secondary);
   font-size: var(--sc-font-caption);
   line-height: 1.9;
+}
+
+.sc-about-contact {
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.7;
+}
+
+.sc-about-qq {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+}
+
+.sc-about-qq strong {
+  color: var(--sc-text);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.sc-about-note {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
 }
 
 .settings-page :deep(code) {

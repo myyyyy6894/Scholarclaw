@@ -1,20 +1,26 @@
 #!/bin/sh
 # 由官方 nginx 镜像在启动前自动执行（/docker-entrypoint.d/*.sh）。
-# 作用：把 SC_NAPCAT_WEBUI_URL 写成运行期配置，改地址只需重启容器，不必重建前端镜像。
-# 只写入非密钥的跳转地址；空白值会让前端回落到构建期 VITE_NAPCAT_WEBUI_URL / 默认值。
+# 作用：把运行期配置写成 runtime-config.js，改值只需重启容器，不必重建前端镜像。
+# 只写入非密钥信息（跳转地址、部署方联系 QQ）；空白值会让前端回落到构建期默认值或隐藏入口。
 set -eu
 
 target=/usr/share/nginx/html/runtime-config.js
-value="${SC_NAPCAT_WEBUI_URL:-}"
 
+# --- NapCat WebUI 地址（可选）---
+value="${SC_NAPCAT_WEBUI_URL:-}"
 # URL 不可能包含换行；去掉它们避免破坏 JS 字面量。
 value=$(printf '%s' "$value" | tr -d '\r\n')
 # 转义反斜杠与双引号，保证写入的是合法 JS 字符串。
 escaped=$(printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
 
+# --- 部署方联系 QQ（可选）：只保留数字，空值 = 前端不显示联系方式 ---
+qq="${SC_OPERATOR_QQ:-}"
+qq=$(printf '%s' "$qq" | tr -cd '0-9')
+
 cat > "$target" <<EOF
-// 由 sc-web-nginx 启动脚本生成（SC_NAPCAT_WEBUI_URL）；请勿手工编辑。
+// 由 sc-web-nginx 启动脚本生成（SC_NAPCAT_WEBUI_URL / SC_OPERATOR_QQ）；请勿手工编辑。
 window.__SC_NAPCAT_WEBUI_URL__ = "${escaped}";
+window.__SC_OPERATOR_QQ__ = "${qq}";
 EOF
 
-echo "[runtime-config] SC_NAPCAT_WEBUI_URL=${value:-<empty: 使用构建期默认值>}"
+echo "[runtime-config] SC_NAPCAT_WEBUI_URL=${value:-<empty: 使用构建期默认值>} SC_OPERATOR_QQ=${qq:-<empty: 不显示联系方式>}"

@@ -15,18 +15,19 @@ import {
 } from '@lucide/vue'
 import { useRoute } from 'vue-router'
 
-import ComingSoonBadge from '@/components/ui/ComingSoonBadge.vue'
 import UserAvatar from '@/components/ui/UserAvatar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
+import { notifySuccess, notifyWarning } from '@/utils/notify'
+import { copyOperatorQq, readRuntimeOperatorQq, resolveOperatorQq } from '@/utils/operator-contact'
 import { unreadBadge } from '@/views/notifications/notification-center'
 
 /**
  * 工作台左侧导航（P1，参考图 `首页.png` / `首页图片.png`）。
  *
  * 白底、灰字、浅蓝选中态 + 左侧 3px 主色条；导航只暴露真实存在的页面。
- * 「消息通知」不是独立路由，点击打开通知抽屉；「帮助与反馈」没有后端，弹窗如实标注
- * 「暂未开发」。
+ * 「消息通知」不是独立路由，点击打开通知抽屉；「帮助与反馈」显示部署方联系 QQ
+ * （`SC_OPERATOR_QQ`，未配置时只提示暂无在线联系方式）。
  *
  * 同一份组件在桌面侧栏与移动端抽屉中复用（`expanded` 控制是否强制展开文字）。
  */
@@ -73,6 +74,15 @@ const primaryNav = computed<NavEntry[]>(() => {
 
 const ddlBadge = computed(() => unreadBadge(props.ddlPendingCount))
 const notificationBadge = computed(() => unreadBadge(props.unreadCount))
+const operatorQq = computed(() => resolveOperatorQq(readRuntimeOperatorQq()))
+
+async function copyQq(): Promise<void> {
+  if (await copyOperatorQq(operatorQq.value)) {
+    notifySuccess('QQ 号已复制。')
+    return
+  }
+  notifyWarning('复制失败，请手动选择号码复制。')
+}
 
 function isActive(entry: NavEntry): boolean {
   return route.name === entry.routeName
@@ -204,8 +214,17 @@ function openHelp(): void {
 
     <el-dialog v-model="helpOpen" title="帮助与反馈" width="440px" append-to-body>
       <div class="app-sidebar__help">
-        <ComingSoonBadge hint="反馈接口待接入" />
-        <p>帮助文档与反馈入口尚未接入后端；如需支持，请先联系项目维护者。</p>
+        <template v-if="operatorQq">
+          <p>使用中遇到问题，可以加维护者 QQ 反馈（加好友请备注 ScholarClaw）：</p>
+          <div class="app-sidebar__qq">
+            <span class="app-sidebar__qq-number">{{ operatorQq }}</span>
+            <el-button size="small" @click="copyQq">复制</el-button>
+          </div>
+          <p class="app-sidebar__help-note">
+            QQ 仅用于问题反馈与答疑；DDL 提醒以站内通知为准，加好友不会额外推送。
+          </p>
+        </template>
+        <p v-else>帮助文档与在线反馈入口尚未接入；如需支持，请联系部署者。</p>
       </div>
       <template #footer>
         <el-button type="primary" @click="helpOpen = false">知道了</el-button>
@@ -444,6 +463,30 @@ function openHelp(): void {
   color: var(--sc-text-secondary);
   font-size: var(--sc-font-caption);
   line-height: 1.7;
+}
+
+.app-sidebar__qq {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius-button);
+  background: var(--sc-primary-soft);
+}
+
+.app-sidebar__qq-number {
+  color: var(--sc-text);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.app-sidebar__help-note {
+  color: var(--sc-text-placeholder);
+  font-size: var(--sc-font-hint);
 }
 
 /* ---------- <1024px：图标栏 ---------- */

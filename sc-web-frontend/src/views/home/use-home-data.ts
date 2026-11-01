@@ -34,13 +34,11 @@ import {
  *
  * 所有首页模块的取数都收敛在这里，后续后端补接口时只改本文件与 `src/api/*`，
  * 组件不需要重写。每个模块独立 loading/error/empty，`Promise.allSettled` 保证
- * 单个接口失败不会让整页空白。
- *
- * 占位模块（系统状态、课表）显式返回 `PENDING_BACKEND`，由组件渲染
- * `ComingSoonBadge`，不伪造任何状态。
+ * 单个接口失败不会让整页空白。所有模块都接真实接口，未登录时不发请求，
+ * 由组件按 `authenticated` 渲染「登录后查看」，不伪造任何数据。
  */
 
-export type ModuleStatus = 'loading' | 'ready' | 'empty' | 'error' | 'PENDING_BACKEND'
+export type ModuleStatus = 'loading' | 'ready' | 'empty' | 'error'
 
 export interface ModuleState<T> {
   status: ModuleStatus
@@ -48,26 +46,11 @@ export interface ModuleState<T> {
   error: string
 }
 
-export interface PendingModule {
-  status: 'PENDING_BACKEND'
-  hint: string
-}
-
 const EMPTY_BOARD: DdlTaskBoard = {
   pending_inbox_tasks: [],
   pending_change_drafts: [],
   active_tasks: [],
   completed_tasks: [],
-}
-
-const SYSTEM_STATUS_MODULE: PendingModule = {
-  status: 'PENDING_BACKEND',
-  hint: '后端状态接口待接入',
-}
-
-const SCHEDULE_MODULE: PendingModule = {
-  status: 'PENDING_BACKEND',
-  hint: '课表接口待接入',
 }
 
 const MINUTE_MS = 60_000
@@ -351,8 +334,6 @@ export function useHomeData() {
     todayIso,
     nowMs,
     unreadCount,
-    systemStatus: SYSTEM_STATUS_MODULE,
-    schedule: SCHEDULE_MODULE,
     refreshAll,
     retryCourses: loadCourses,
     retryBoard: loadBoard,

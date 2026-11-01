@@ -76,6 +76,16 @@ sc:
     probe:
       connect-timeout-millis: ${SC_MODEL_CONNECT_TIMEOUT_MILLIS:5000}
       read-timeout-millis: ${SC_MODEL_READ_TIMEOUT_MILLIS:10000}
+  # 平台默认向量模型（部署方自带 Embedding 服务）：留空 = 不启用，用户仍需自行配置。
+  # 五项全部配置后，新注册账号自动带上该 Embedding；对话模型仍由用户自己的 Key 提供。
+  # 本地/内网地址同样受上面的 model 白名单约束，否则建课时会被 BaseUrlSecurityValidator 拒绝。
+  platform:
+    embedding:
+      provider: ${SC_PLATFORM_EMBEDDING_PROVIDER:}
+      base-url: ${SC_PLATFORM_EMBEDDING_BASE_URL:}
+      model: ${SC_PLATFORM_EMBEDDING_MODEL:}
+      dim: ${SC_PLATFORM_EMBEDDING_DIM:0}
+      api-key: ${SC_PLATFORM_EMBEDDING_API_KEY:}
   # JWT（TASK-202）：HS256 + SC_JWT_SECRET（仅 Java 容器持有）。密钥缺失或过短时启动失败（失败关闭）。
   jwt:
     secret: ${SC_JWT_SECRET:}

@@ -17,7 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>{@code auth} 模块**不持有 Mapper**，注册与登录都必须经由本服务（`auth` 的 package-info 亦如此约定）。
  * 每个方法只碰自己该碰的字段组：
  * <ul>
- *   <li>{@link #createUserAccount} 只写组 A（认证列）与偏好默认值，BYOK 列保持 `NULL`；</li>
+ *   <li>{@link #createUserAccount} 只写组 A（认证列）与偏好默认值，BYOK 列保持 `NULL`；
+ *       唯一例外是部署方配置了平台默认向量模型时，同事务写入组 B 的 Embedding 列
+ *       （见 {@link PlatformEmbeddingDefaults}），对话模型列仍为 `NULL`；</li>
  *   <li>组 B 的显式更新方法属 TASK-203（BYOK），本阶段不提供"整行更新"入口。</li>
  * </ul>
  */
@@ -29,13 +31,16 @@ public class UserConfigService {
     private static final String DEFAULT_DND_END = "07:30:00";
 
     private final UserConfigMapper userConfigMapper;
+    private final PlatformEmbeddingDefaults platformEmbeddingDefaults;
 
-    public UserConfigService(UserConfigMapper userConfigMapper) {
+    public UserConfigService(UserConfigMapper userConfigMapper,
+                             PlatformEmbeddingDefaults platformEmbeddingDefaults) {
         this.userConfigMapper = userConfigMapper;
+        this.platformEmbeddingDefaults = platformEmbeddingDefaults;
     }
 
     /**
-     * 创建账号（只写组 A）。
+     * 创建账号（只写组 A；平台默认向量模型启用时附带写入 Embedding 列）。
      *
      * <p>并发同名由数据库唯一索引 `uk_user_username` 兜底，冲突时抛
      * {@link DuplicateKeyException} 交给上层映射为 `409 USER_ALREADY_EXISTS`——
@@ -51,6 +56,15 @@ public class UserConfigService {
         entity.setTimezone(timezone);
         entity.setDndStartTime(java.time.LocalTime.parse(DEFAULT_DND_START));
         entity.setDndEndTime(java.time.LocalTime.parse(DEFAULT_DND_END));
+        // 部署方自带向量模型时，注册即写入默认 Embedding（含加密后的平台 Key）。
+        // 是同一次 INSERT，不存在"账号建好但配置没写进去"的中间态。
+        platformEmbeddingDefaults.seed().ifPresent(seed -> {
+            entity.setDefaultEmbeddingProvider(seed.provider());
+            entity.setEmbeddingBaseUrl(seed.baseUrl());
+            entity.setDefaultEmbeddingModel(seed.model());
+            entity.setDefaultEmbeddingDim(seed.dim());
+            entity.setEmbeddingApiKeyCipher(seed.apiKeyCipher());
+        });
         var now = ScTimeZone.now().toLocalDateTime();
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);

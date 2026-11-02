@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.scholarclaw.common.client.OneBotApiClient;
+import com.scholarclaw.common.im.OfficialBotSender;
 import com.scholarclaw.common.enums.OutboundStatus;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
@@ -58,7 +59,8 @@ class NotificationOutboundSchedulerTest {
         jitter = mock(ImPushJitter.class);
         oneBotApiClient = mock(OneBotApiClient.class);
         scheduler = new NotificationOutboundScheduler(mapper, userConfigService, policy,
-                rateLimiter, jitter, oneBotApiClient, CLOCK, true, true, 10, 60, 30);
+                rateLimiter, jitter, oneBotApiClient, mock(OfficialBotSender.class),
+                CLOCK, true, true, 10, 60, 30);
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(new UserConfigEntity()));
         when(mapper.selectOutboundCandidates(NOW, 10))
                 .thenReturn(List.of(candidate(NOTIFICATION_ID, "DDL_T24H", 0)));
@@ -251,6 +253,7 @@ class NotificationOutboundSchedulerTest {
         when(mapper.claimOutbound(NOTIFICATION_ID, now, lease, now)).thenReturn(1);
         NotificationOutboundScheduler nanosScheduler = new NotificationOutboundScheduler(
                 mapper, userConfigService, policy, rateLimiter, jitter, oneBotApiClient,
+                mock(OfficialBotSender.class),
                 Clock.fixed(nanosNow.atZone(ZONE).toInstant(), ZONE),
                 true, true, 10, 60, 30);
 

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.scholarclaw.common.client.OneBotApiClient;
+import com.scholarclaw.common.im.OfficialBotSender;
 import com.scholarclaw.common.enums.OutboundStatus;
 import com.scholarclaw.modules.ddl.entity.DdlTaskEntity;
 import com.scholarclaw.modules.ddl.mapper.DdlTaskMapper;
@@ -127,7 +128,8 @@ class DdlFollowUpDndIntegrationTest {
     private NotificationOutboundScheduler schedulerAt(LocalDateTime now) {
         return new NotificationOutboundScheduler(notificationMapper, userConfigService,
                 new NotificationOutboundPolicy(), rateLimiter, mock(ImPushJitter.class),
-                oneBotApiClient, Clock.fixed(now.atZone(ZONE).toInstant(), ZONE),
+                oneBotApiClient, mock(OfficialBotSender.class),
+                Clock.fixed(now.atZone(ZONE).toInstant(), ZONE),
                 true, true, 10, 60, 30);
     }
 

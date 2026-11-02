@@ -1,6 +1,7 @@
 package com.scholarclaw.modules.notification.service;
 
 import com.scholarclaw.common.client.OneBotApiClient;
+import com.scholarclaw.common.im.OfficialBotSender;
 import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.enums.OutboundStatus;
 import com.scholarclaw.common.exception.BusinessException;
@@ -57,6 +58,7 @@ public class NotificationOutboundScheduler {
     private final ImRateLimiter rateLimiter;
     private final ImPushJitter jitter;
     private final OneBotApiClient oneBotApiClient;
+    private final OfficialBotSender officialBotSender;
     private final Clock clock;
     private final boolean enabled;
     private final boolean imPushEnabled;
@@ -70,6 +72,7 @@ public class NotificationOutboundScheduler {
                                          ImRateLimiter rateLimiter,
                                          ImPushJitter jitter,
                                          OneBotApiClient oneBotApiClient,
+                                         OfficialBotSender officialBotSender,
                                          Clock clock,
                                          @Value("${sc.notification.outbound.enabled:true}")
                                          boolean enabled,
@@ -87,6 +90,7 @@ public class NotificationOutboundScheduler {
         this.rateLimiter = rateLimiter;
         this.jitter = jitter;
         this.oneBotApiClient = oneBotApiClient;
+        this.officialBotSender = officialBotSender;
         this.clock = clock;
         this.enabled = enabled;
         this.imPushEnabled = imPushEnabled;
@@ -178,7 +182,12 @@ public class NotificationOutboundScheduler {
         UserConfigEntity config = userConfigService.findById(candidate.getUserId()).orElse(null);
         NotificationOutboundPolicy.Decision decision = outboundPolicy.resolve(
                 imPushEnabled, config, bizType, now);
+        boolean official = officialBotSender.isConfigured(candidate.getUserId());
         if (decision.status() == OutboundStatus.FALLBACK_WEB_ONLY) {
+            // 用户自带官方机器人时，"没有绑定 OneBot 平台"不再是降级理由
+            if (official) {
+                return dispatchViaOfficialBot(candidate, leaseUntil, now);
+            }
             mapper.markFallback(candidate.getNotificationId(), leaseUntil,
                     decision.imErrorMsg(), now);
             return Outcome.FALLBACK;
@@ -187,6 +196,10 @@ public class NotificationOutboundScheduler {
             mapper.markRateLimited(candidate.getNotificationId(), leaseUntil,
                     decision.scheduledPushAt(), decision.imErrorMsg(), now);
             return Outcome.DELAYED;
+        }
+        if (official) {
+            // 官方机器人优先：它不依赖 bound_im_platform，也不占 OneBot 的令牌桶
+            return dispatchViaOfficialBot(candidate, leaseUntil, now);
         }
         if (!SUPPORTED_PLATFORM.equals(decision.targetImPlatform())) {
             mapper.markFallback(candidate.getNotificationId(), leaseUntil,
@@ -238,6 +251,33 @@ public class NotificationOutboundScheduler {
         int updated = mapper.markSent(candidate.getNotificationId(), leaseUntil, now);
         if (updated != 1) {
             log.warn("IM 已发送但状态更新未生效，租约到期后可能重复 notificationId={}",
+                    candidate.getNotificationId());
+        }
+        return Outcome.SENT;
+    }
+
+    /**
+     * 通过用户自带的官方机器人投递。
+     *
+     * <p>发送与状态写入分开捕获：markSent 抛异常时消息已经送达，不能再当失败重发。
+     */
+    private Outcome dispatchViaOfficialBot(NotificationLogEntity candidate,
+                                           LocalDateTime leaseUntil, LocalDateTime now) {
+        boolean delivered;
+        try {
+            delivered = officialBotSender.sendProactive(candidate.getUserId(), candidate.getContent());
+        } catch (RuntimeException e) {
+            return handleSendFailure(candidate, leaseUntil, now, e);
+        }
+        if (!delivered) {
+            // 用户还没私聊过机器人，拿不到 openid —— 只能站内信
+            mapper.markFallback(candidate.getNotificationId(), leaseUntil,
+                    "用户尚未与官方机器人建立会话，仅站内信", now);
+            return Outcome.FALLBACK;
+        }
+        int updated = mapper.markSent(candidate.getNotificationId(), leaseUntil, now);
+        if (updated != 1) {
+            log.warn("官方机器人已发送但状态更新未生效，租约到期后可能重复 notificationId={}",
                     candidate.getNotificationId());
         }
         return Outcome.SENT;

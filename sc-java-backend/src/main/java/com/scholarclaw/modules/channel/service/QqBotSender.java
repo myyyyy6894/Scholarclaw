@@ -1,6 +1,7 @@
 package com.scholarclaw.modules.channel.service;
 
 import com.scholarclaw.common.client.QqBotApiClient;
+import com.scholarclaw.common.im.OfficialBotSender;
 import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
@@ -15,7 +16,7 @@ import org.springframework.stereotype.Service;
  * （只有连接对象在建连时短暂持有）。发送失败只影响 IM 送达，站内通知不受影响。
  */
 @Service
-public class QqBotSender {
+public class QqBotSender implements OfficialBotSender {
 
     private static final Logger log = LoggerFactory.getLogger(QqBotSender.class);
 
@@ -32,6 +33,7 @@ public class QqBotSender {
     }
 
     /** 用户是否配置了自己的官方机器人（用于出站通道选择）。 */
+    @Override
     public boolean isConfigured(Long userId) {
         return userConfigService.findById(userId)
                 .map(config -> config.getQqbotAppId() != null && config.getQqbotSecretCipher() != null)
@@ -47,20 +49,26 @@ public class QqBotSender {
         apiClient.sendC2cText(credential.appId(), credential.secret(), openid, content, messageId, msgSeq);
     }
 
-    /** 主动推送：不带 msg_id，受平台配额约束（1000 条/用户/天等）。 */
-    public void sendProactive(Long userId, String content) {
+    /**
+     * 主动推送：不带 msg_id，受平台配额约束（1000 条/用户/天等）。
+     *
+     * @return 是否真正投递；用户还没私聊过机器人（无 openid）或凭据不可用时返回 false
+     */
+    @Override
+    public boolean sendProactive(Long userId, String content) {
         Credential credential = credential(userId);
         if (credential == null) {
-            return;
+            return false;
         }
         UserConfigEntity config = userConfigService.findById(userId).orElse(null);
         String openid = config == null ? null : config.getQqbotOpenid();
         if (openid == null || openid.isBlank()) {
             // 用户还没私聊过机器人，拿不到 openid，无法主动推送
             log.debug("用户尚未与机器人建立会话，跳过主动推送 userId={}", userId);
-            return;
+            return false;
         }
         apiClient.sendC2cText(credential.appId(), credential.secret(), openid, content, null, 0);
+        return true;
     }
 
     private Credential credential(Long userId) {

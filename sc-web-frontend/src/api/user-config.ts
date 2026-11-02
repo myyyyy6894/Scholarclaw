@@ -40,6 +40,16 @@ export interface UserConfig {
    * 为 true 时前端标注「平台默认」，用户只需要填对话模型。
    */
   platform_embedding?: boolean
+  /** 用户自带的 QQ 官方机器人 AppID；未配置为 null。 */
+  qqbot_app_id?: string | null
+  /** 是否已保存 AppSecret（只回布尔，接口绝不回显密文）。 */
+  has_qqbot_secret?: boolean
+  /** DISCONNECTED / CONNECTING / ONLINE / ERROR。 */
+  qqbot_status?: 'DISCONNECTED' | 'CONNECTING' | 'ONLINE' | 'ERROR'
+  /** 最近一次连接失败原因（已脱敏）。 */
+  qqbot_last_error?: string | null
+  /** 是否已通过私聊完成 openid 绑定。 */
+  qqbot_bound?: boolean
   timezone: string
   dnd_start_time: string
   dnd_end_time: string
@@ -124,4 +134,17 @@ export function deactivateAccount(password: string, confirmText: string): Promis
     method: 'POST',
     body: { password, confirm_text: confirmText },
   })
+}
+
+/** 连接用户自己的 QQ 官方机器人（AppSecret 只上行，不落前端存储）。 */
+export function connectQqBot(appId: string, clientSecret: string): Promise<{ app_id: string; status: string }> {
+  return apiRequest<{ app_id: string; status: string }>('/v1/user/qqbot/connect', {
+    method: 'POST',
+    body: { app_id: appId, client_secret: clientSecret },
+  })
+}
+
+/** 断开并清除机器人凭据。 */
+export function disconnectQqBot(): Promise<null> {
+  return apiRequest<null>('/v1/user/qqbot/disconnect', { method: 'POST' })
 }

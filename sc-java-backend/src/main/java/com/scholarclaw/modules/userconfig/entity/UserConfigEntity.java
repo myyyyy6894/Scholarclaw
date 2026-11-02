@@ -83,6 +83,24 @@ public class UserConfigEntity {
     /** 组 B：绑定的 IM 账号标识。 */
     private String boundImUid;
 
+    /** 组 B：QQ 官方机器人 AppID（用户自己在开放平台创建的机器人）。 */
+    private String qqbotAppId;
+
+    /** 组 B：QQ 官方机器人 AppSecret 密文（AES-GCM，与模型 Key 同一条加密路径）。 */
+    private String qqbotSecretCipher;
+
+    /** 组 B：用户在该机器人下的 openid（首次私聊后自动记录）。 */
+    private String qqbotOpenid;
+
+    /** 组 B：机器人连接状态 DISCONNECTED / CONNECTING / ONLINE / ERROR。 */
+    private String qqbotStatus;
+
+    /** 组 B：最近一次连接失败原因（脱敏，无密钥）。 */
+    private String qqbotLastError;
+
+    /** 组 B：最近一次连接成功时间。 */
+    private LocalDateTime qqbotConnectedAt;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
@@ -253,5 +271,52 @@ public class UserConfigEntity {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+    public String getQqbotAppId() {
+        return qqbotAppId;
+    }
+
+    public void setQqbotAppId(String qqbotAppId) {
+        this.qqbotAppId = qqbotAppId;
+    }
+
+    public String getQqbotSecretCipher() {
+        return qqbotSecretCipher;
+    }
+
+    public void setQqbotSecretCipher(String qqbotSecretCipher) {
+        this.qqbotSecretCipher = qqbotSecretCipher;
+    }
+
+    public String getQqbotOpenid() {
+        return qqbotOpenid;
+    }
+
+    public void setQqbotOpenid(String qqbotOpenid) {
+        this.qqbotOpenid = qqbotOpenid;
+    }
+
+    public String getQqbotStatus() {
+        return qqbotStatus;
+    }
+
+    public void setQqbotStatus(String qqbotStatus) {
+        this.qqbotStatus = qqbotStatus;
+    }
+
+    public String getQqbotLastError() {
+        return qqbotLastError;
+    }
+
+    public void setQqbotLastError(String qqbotLastError) {
+        this.qqbotLastError = qqbotLastError;
+    }
+
+    public LocalDateTime getQqbotConnectedAt() {
+        return qqbotConnectedAt;
+    }
+
+    public void setQqbotConnectedAt(LocalDateTime qqbotConnectedAt) {
+        this.qqbotConnectedAt = qqbotConnectedAt;
     }
 }

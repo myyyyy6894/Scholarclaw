@@ -235,6 +235,87 @@ public class UserConfigService {
                                   String embeddingModel, Integer embeddingDim, String embeddingApiKeyCipher) {
     }
 
+    // ------------------------------------------------------------------
+    // QQ 官方机器人（用户自带 Bot）：凭据、状态与 openid 绑定
+    // ------------------------------------------------------------------
+
+    /**
+     * 保存机器人凭据（AppID + AppSecret 密文）。
+     *
+     * <p>与模型 Key 同一组 B 字段纪律：只写这一组列，不碰认证列；密文由调用方用
+     * {@code AesGcmCryptoService} 生成，本方法不接触明文。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public UserConfigEntity saveQqBotConfig(Long userId, String appId, String secretCipher) {
+        var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .set(UserConfigEntity::getQqbotAppId, appId)
+                .set(UserConfigEntity::getQqbotSecretCipher, secretCipher)
+                .set(UserConfigEntity::getQqbotStatus, "DISCONNECTED")
+                .set(UserConfigEntity::getQqbotLastError, null)
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
+        requireUpdated(userConfigMapper.update(null, wrapper));
+        return findById(userId).orElseThrow(() -> new BusinessException(
+                ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
+    }
+
+    /** 断开并清除机器人凭据（保留 openid 之外的绑定信息也一并清空）。 */
+    @Transactional(rollbackFor = Exception.class)
+    public UserConfigEntity clearQqBotConfig(Long userId) {
+        var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .set(UserConfigEntity::getQqbotAppId, null)
+                .set(UserConfigEntity::getQqbotSecretCipher, null)
+                .set(UserConfigEntity::getQqbotOpenid, null)
+                .set(UserConfigEntity::getQqbotStatus, "DISCONNECTED")
+                .set(UserConfigEntity::getQqbotLastError, null)
+                .set(UserConfigEntity::getQqbotConnectedAt, null)
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
+        requireUpdated(userConfigMapper.update(null, wrapper));
+        return findById(userId).orElseThrow(() -> new BusinessException(
+                ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
+    }
+
+    /** 更新连接状态；`ONLINE` 时同时写连接时间。失败原因由调用方脱敏后传入。 */
+    @Transactional(rollbackFor = Exception.class)
+    public void updateQqBotStatus(Long userId, String status, String lastError) {
+        var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .set(UserConfigEntity::getQqbotStatus, status)
+                .set(UserConfigEntity::getQqbotLastError, lastError)
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
+        if ("ONLINE".equals(status)) {
+            wrapper.set(UserConfigEntity::getQqbotConnectedAt, ScTimeZone.now().toLocalDateTime());
+        }
+        userConfigMapper.update(null, wrapper);
+    }
+
+    /** 记录用户首次私聊的 openid（后续只接受同一 openid 的消息）。 */
+    @Transactional(rollbackFor = Exception.class)
+    public void bindQqBotOpenid(Long userId, String openid) {
+        userConfigMapper.update(null, Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .set(UserConfigEntity::getQqbotOpenid, openid)
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
+    }
+
+    /** 启动时恢复连接：所有配置了机器人的账号。 */
+    public java.util.List<UserConfigEntity> findQqBotConfigured() {
+        return userConfigMapper.selectList(Wrappers.<UserConfigEntity>lambdaQuery()
+                .isNotNull(UserConfigEntity::getQqbotAppId)
+                .isNotNull(UserConfigEntity::getQqbotSecretCipher));
+    }
+
+    /** AppID 唯一性检查：一个机器人只能归属一个账号。 */
+    public boolean isQqBotAppIdTakenByOther(Long userId, String appId) {
+        UserConfigEntity entity = userConfigMapper.selectOne(Wrappers.<UserConfigEntity>lambdaQuery()
+                .eq(UserConfigEntity::getQqbotAppId, appId)
+                .last("LIMIT 1"));
+        return entity != null && !entity.getUserId().equals(userId);
+    }
+
     /** GC：跨用户扫描滞留超过阈值的 `DEACTIVATING` 账号。 */
     public java.util.List<Long> findStaleDeactivating(java.time.LocalDateTime before, int limit) {
         return userConfigMapper.selectList(Wrappers.<UserConfigEntity>lambdaQuery()

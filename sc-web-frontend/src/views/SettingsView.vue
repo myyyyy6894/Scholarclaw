@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { KeyRound, ShieldAlert, SlidersHorizontal, UserX } from '@lucide/vue'
+import { Bot, KeyRound, ShieldAlert, SlidersHorizontal, UserX } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
 import {
   clearApiKeys,
+  connectQqBot,
   deactivateAccount,
+  disconnectQqBot,
   getUserConfig,
   probeModel,
   saveModelConfig,
@@ -68,6 +70,67 @@ const prefsForm = ref<PreferencesFormState>(createPreferencesForm())
 
 const savingModel = ref(false)
 const savingPrefs = ref(false)
+
+// ---- QQ 官方机器人（用户自带 Bot）----
+const qqbotAppId = ref('')
+const qqbotSecret = ref('')
+const qqbotBusy = ref(false)
+const qqbotStatus = computed(() => config.value?.qqbot_status ?? 'DISCONNECTED')
+const qqbotStatusView = computed(() => {
+  switch (qqbotStatus.value) {
+    case 'ONLINE':
+      return { label: '在线', type: 'success' as const }
+    case 'CONNECTING':
+      return { label: '连接中', type: 'warning' as const }
+    case 'ERROR':
+      return { label: '连接异常', type: 'danger' as const }
+    default:
+      return { label: '未连接', type: 'info' as const }
+  }
+})
+
+async function onConnectQqBot(): Promise<void> {
+  if (qqbotBusy.value) {
+    return
+  }
+  const appId = qqbotAppId.value.trim()
+  const secret = qqbotSecret.value.trim()
+  if (!/^\d{6,32}$/.test(appId)) {
+    notifyWarning('AppID 应为 6~32 位数字。')
+    return
+  }
+  if (secret.length < 8) {
+    notifyWarning('请填写完整的 AppSecret。')
+    return
+  }
+  qqbotBusy.value = true
+  try {
+    await connectQqBot(appId, secret)
+    qqbotSecret.value = ''
+    notifySuccess('机器人连接已启动，请用 QQ 私聊它完成绑定。')
+    await loadConfig()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    qqbotBusy.value = false
+  }
+}
+
+async function onDisconnectQqBot(): Promise<void> {
+  if (qqbotBusy.value) {
+    return
+  }
+  qqbotBusy.value = true
+  try {
+    await disconnectQqBot()
+    notifySuccess('机器人已断开，凭据已清除。')
+    await loadConfig()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    qqbotBusy.value = false
+  }
+}
 const probingChat = ref(false)
 const probingEmbedding = ref(false)
 const clearingTarget = ref<ClearKeysTarget | null>(null)
@@ -650,6 +713,79 @@ function goToLogin(): void {
             <el-button type="primary" :loading="savingPrefs" @click="onSavePreferences">
               保存偏好
             </el-button>
+          </div>
+        </el-form>
+      </BaseCard>
+
+      <BaseCard class="settings-card">
+        <template #header>
+          <div class="settings-card__heading">
+            <span class="settings-card__icon">
+              <Bot :size="17" :stroke-width="1.8" />
+            </span>
+            <div>
+              <h3>QQ 提醒（自带机器人）</h3>
+              <p>
+                在 QQ 开放平台创建你自己的机器人，把 AppID / AppSecret 填在这里，
+                DDL 提醒就能直接发到你的 QQ。
+              </p>
+            </div>
+          </div>
+        </template>
+
+        <div class="sc-settings__row">
+          <span class="sc-settings__hint">当前状态</span>
+          <el-tag :type="qqbotStatusView.type" size="small">{{ qqbotStatusView.label }}</el-tag>
+          <span v-if="config?.qqbot_app_id" class="sc-settings__hint">
+            AppID：{{ config.qqbot_app_id }}
+          </span>
+          <span v-if="config?.qqbot_bound" class="sc-settings__hint">· 已完成绑定</span>
+        </div>
+
+        <el-alert
+          v-if="config?.qqbot_last_error"
+          class="settings-card__alert"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="config.qqbot_last_error"
+        />
+
+        <el-form label-position="top" autocomplete="off">
+          <el-row :gutter="16">
+            <el-col :xs="24" :sm="10">
+              <el-form-item label="AppID">
+                <el-input v-model="qqbotAppId" placeholder="开放平台「开发设置」里的 AppID" />
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="14">
+              <el-form-item label="AppSecret">
+                <el-input
+                  v-model="qqbotSecret"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  placeholder="只提交一次，服务端加密保存，不会回显"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <div class="sc-settings__row sc-settings__row--end">
+            <span class="sc-settings__hint">
+              还没有机器人？
+              <a href="https://bot.q.qq.com/open" target="_blank" rel="noopener noreferrer">
+                去 QQ 开放平台创建
+              </a>
+              ；连接后用 QQ 私聊机器人一次即完成绑定。
+            </span>
+            <div class="sc-settings__row">
+              <el-button v-if="config?.qqbot_app_id" :loading="qqbotBusy" @click="onDisconnectQqBot">
+                断开并清除
+              </el-button>
+              <el-button type="primary" :loading="qqbotBusy" @click="onConnectQqBot">
+                连接
+              </el-button>
+            </div>
           </div>
         </el-form>
       </BaseCard>

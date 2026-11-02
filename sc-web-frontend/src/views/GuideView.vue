@@ -7,9 +7,7 @@ import BaseCard from '@/components/ui/BaseCard.vue'
 import TagBadge from '@/components/ui/TagBadge.vue'
 import {
   copyOperatorQq,
-  normalizeOperatorQq,
   normalizeProjectUrl,
-  readRuntimeBotQq,
   readRuntimeOperatorQq,
   readRuntimeProjectUrl,
   resolveOperatorQq,
@@ -28,19 +26,9 @@ import { notifySuccess, notifyWarning } from '@/utils/notify'
  */
 const operatorQq = resolveOperatorQq(readRuntimeOperatorQq())
 const projectUrl = normalizeProjectUrl(readRuntimeProjectUrl())
-/** 发提醒的机器人账号，与维护者 QQ 是两个号。 */
-const botQq = normalizeOperatorQq(readRuntimeBotQq())
 const buildMode = import.meta.env.MODE
 
 const hasContact = computed(() => Boolean(operatorQq || projectUrl))
-
-async function copyBot(): Promise<void> {
-  if (await copyOperatorQq(botQq)) {
-    notifySuccess('机器人 QQ 已复制。')
-    return
-  }
-  notifyWarning('复制失败，请手动选择号码复制。')
-}
 
 async function copyQq(): Promise<void> {
   if (await copyOperatorQq(operatorQq)) {
@@ -198,19 +186,23 @@ const FAQ = [
       </div>
 
       <div class="guide-block">
-        <h4>QQ 提醒（可选）</h4>
+        <h4>QQ 提醒（可选，自带机器人）</h4>
         <p>
-          截止提醒默认发到站内通知；如果想让机器人直接私聊提醒你，需要两步：
-          先<b>加机器人 QQ 为好友</b>，再到「设置 → 个人偏好」里绑定你自己的 QQ 号。
-          不绑定也完全不影响网页端功能。
+          截止提醒默认走站内通知。想让机器人直接私聊提醒你，需要用自己的 QQ 号创建一个官方机器人：
         </p>
-        <div v-if="botQq" class="guide-contact__row">
-          <span class="guide-contact__label">机器人 QQ</span>
-          <strong class="guide-contact__value">{{ botQq }}</strong>
-          <el-button size="small" @click="copyBot">复制</el-button>
-        </div>
+        <ol class="guide-steps-inline">
+          <li>打开 <a href="https://bot.q.qq.com/open" target="_blank" rel="noopener noreferrer">QQ 开放平台</a>，用 QQ 登录并创建机器人</li>
+          <li>在「开发设置」里复制 <code>AppID</code> 与 <code>AppSecret</code></li>
+          <li>回到「设置 → QQ 提醒」，填入并点「连接」</li>
+          <li>用 QQ 私聊这个机器人一次，即完成绑定</li>
+        </ol>
+        <p class="guide-note">
+          机器人是你自己创建的，只有你能给它发消息，也只有你会收到提醒。
+          AppSecret 在服务端加密保存，页面不会回显。
+          平台对主动消息有配额（每个用户每天 1000 条），日常提醒远够用。
+        </p>
         <p v-if="operatorQq" class="guide-note">
-          机器人只负责发提醒；使用问题请找下方「维护者 QQ」反馈，两者不是同一个号。
+          机器人与下方「维护者 QQ」不是同一个号：机器人给你发提醒，维护者用于问题反馈。
         </p>
       </div>
     </BaseCard>
@@ -418,6 +410,14 @@ const FAQ = [
 .guide-block ul {
   margin: 6px 0 0;
   padding-left: 20px;
+}
+
+.guide-steps-inline {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: var(--sc-text-secondary);
+  font-size: var(--sc-font-caption);
+  line-height: 1.9;
 }
 
 .guide-note {

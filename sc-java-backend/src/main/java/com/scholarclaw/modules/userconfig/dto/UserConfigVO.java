@@ -39,6 +39,16 @@ public record UserConfigVO(
         String boundImUid,
         String updatedAt,
         boolean hasByokConfig,
+        /** 用户自带的 QQ 官方机器人 AppID（未配置为 null）。 */
+        String qqbotAppId,
+        /** 是否已保存 AppSecret（只回布尔，绝不回显密文）。 */
+        boolean hasQqbotSecret,
+        /** DISCONNECTED / CONNECTING / ONLINE / ERROR。 */
+        String qqbotStatus,
+        /** 最近一次连接失败原因（已脱敏）。 */
+        String qqbotLastError,
+        /** 是否已完成 openid 绑定（用户私聊过机器人）。 */
+        boolean qqbotBound,
         /** 部署方是否统一提供向量模型（`SC_PLATFORM_EMBEDDING_*`）；前端据此标注「平台默认」。 */
         boolean platformEmbedding,
         @JsonInclude(JsonInclude.Include.NON_NULL) Integer existingCourseCount) {

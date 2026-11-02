@@ -490,6 +490,11 @@ public class UserConfigController {
                 entity.getBoundImUid(),
                 formatTimestamp(entity.getUpdatedAt(), entity.getTimezone()),
                 modelConfigRules.isChatConfigValid(entity),
+                entity.getQqbotAppId(),
+                entity.getQqbotSecretCipher() != null,
+                entity.getQqbotStatus() == null ? "DISCONNECTED" : entity.getQqbotStatus(),
+                entity.getQqbotLastError(),
+                entity.getQqbotOpenid() != null && !entity.getQqbotOpenid().isBlank(),
                 platformEmbedding,
                 existingCourseCount);
     }

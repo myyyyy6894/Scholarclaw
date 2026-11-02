@@ -141,7 +141,11 @@ public class QqBotConnection {
         }
     }
 
-    private void identify() {
+    private void identify(WebSocket socket) {
+        if (socket == null) {
+            statusListener.accept(new StatusChange(userId, "ERROR", "Identify 失败：连接尚未就绪"));
+            return;
+        }
         try {
             String token = apiClient.accessToken(appId, clientSecret);
             var payload = objectMapper.createObjectNode();
@@ -151,10 +155,11 @@ public class QqBotConnection {
             data.put("intents", INTENTS);
             data.putArray("shard").add(0).add(1);
             data.putObject("properties");
-            webSocket.sendText(objectMapper.writeValueAsString(payload), true).get(10, TimeUnit.SECONDS);
+            socket.sendText(objectMapper.writeValueAsString(payload), true).get(10, TimeUnit.SECONDS);
             log.info("QQ 机器人已发送 Identify userId={}", userId);
         } catch (Exception e) {
-            statusListener.accept(new StatusChange(userId, "ERROR", "鉴权失败：" + e.getClass().getSimpleName()));
+            statusListener.accept(new StatusChange(userId, "ERROR",
+                    "Identify 失败：" + e.getClass().getSimpleName() + " " + String.valueOf(e.getMessage())));
             reconnectNow("Identify 失败");
         }
     }
@@ -215,9 +220,12 @@ public class QqBotConnection {
     /** WebSocket 回调；文本帧按累积缓冲处理（平台可能分片下发）。 */
     private final class Listener implements WebSocket.Listener {
         private final StringBuilder buffer = new StringBuilder();
+        /** 回调里拿到的连接句柄；字段 webSocket 可能还没赋值（建连竞态）。 */
+        private volatile WebSocket socket;
 
         @Override
         public void onOpen(WebSocket webSocket) {
+            this.socket = webSocket;
             webSocket.request(1);
         }
 
@@ -247,8 +255,8 @@ public class QqBotConnection {
             switch (op) {
                 case 10 -> {
                     // 协议要求：收到 Hello 后先起心跳，再发 Identify
-                    startHeartbeat(payload.path("d").path("heartbeat_interval").asLong(30000));
-                    identify();
+                    startHeartbeat(socket, payload.path("d").path("heartbeat_interval").asLong(30000));
+                    identify(socket);
                 }
                 case 0 -> dispatch(payload);
                 case 7 -> reconnectNow("服务端要求重连");
@@ -263,11 +271,11 @@ public class QqBotConnection {
             }
         }
 
-        private void startHeartbeat(long intervalMillis) {
+        private void startHeartbeat(WebSocket socket, long intervalMillis) {
             cancelHeartbeat();
             long period = Math.max(intervalMillis, 5000);
             heartbeatTask = scheduler.scheduleAtFixedRate(() -> {
-                WebSocket ws = webSocket;
+                WebSocket ws = socket;
                 if (ws == null || ws.isOutputClosed()) {
                     return;
                 }

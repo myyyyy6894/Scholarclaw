@@ -58,9 +58,11 @@ public class QqBotController {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "AppSecret 格式不正确（长度或字符超出限制）。");
         }
-        // 先校验凭据再落库：校验失败时不要覆盖用户原有的可用配置
-        connectionManager.connect(userId, appId, secret);
+        // 顺序很关键：先校验凭据 → 再落库 → 最后连接。
+        // 反过来会出现"连接时库里还是旧配置"或"凭据错误却覆盖了原配置"。
+        connectionManager.validateCredentials(appId, secret);
         userConfigService.saveQqBotConfig(userId, appId, cipher);
+        connectionManager.connect(userId);
         return Result.ok("机器人连接已启动，请用 QQ 私聊该机器人完成绑定。",
                 new QqBotConnectVO(appId, "CONNECTING"));
     }

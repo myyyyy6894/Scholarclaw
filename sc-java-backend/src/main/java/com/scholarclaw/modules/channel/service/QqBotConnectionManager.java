@@ -78,20 +78,26 @@ public class QqBotConnectionManager {
     }
 
     /**
-     * 建立（或重建）某个用户的机器人连接。
+     * 校验 AppID/AppSecret 是否可用（真实换一次 token）。
      *
-     * <p>先真实换一次 token 做凭据校验：AppID/Secret 错误时立刻返回可读错误，
-     * 而不是让连接在后台反复重试。
+     * <p>必须在**保存凭据之前**调用：凭据错误时不能覆盖用户原有的可用配置。
      */
-    public void connect(Long userId, String appId, String clientSecret) {
+    public void validateCredentials(String appId, String clientSecret) {
         apiClient.invalidateToken(appId);
         try {
             apiClient.accessToken(appId, clientSecret);
         } catch (QqBotApiClient.QqBotException e) {
-            userConfigService.updateQqBotStatus(userId, "ERROR", e.getMessage());
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "机器人凭据校验失败，请检查 AppID 与 AppSecret 是否正确。");
         }
+    }
+
+    /**
+     * 用**已保存**的凭据建立（或重建）连接。
+     *
+     * <p>调用方必须先把凭据落库——本方法从 `t_user_config` 读取，不接收明文。
+     */
+    public void connect(Long userId) {
         stop(userId);
         userConfigService.updateQqBotStatus(userId, "CONNECTING", null);
         start(userId);

@@ -29,6 +29,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.tracing import TraceIdMiddleware
 from app.services.ingest.consumer import build_ingest_consumer
+from app.services.ingest.supervisor import IngestSupervisor
 
 SERVICE_TITLE = "sc-python-ai"
 SERVICE_VERSION = "1.0.0"
@@ -53,18 +54,18 @@ def create_app() -> FastAPI:
     if settings.ingest_consumer_enabled:
         consumer = build_ingest_consumer(settings)
 
+    supervisor = IngestSupervisor(consumer) if consumer is not None else None
+
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
-        if consumer is not None:
-            try:
-                await consumer.start()
-            except Exception:  # broker 未就绪不应拖垮 HTTP 服务
-                logger.exception("文档解析消费者启动失败，HTTP 服务继续运行")
+    async def lifespan(app: FastAPI):
+        app.state.ingest_supervisor = supervisor
+        if supervisor is not None:
+            supervisor.start()
         try:
             yield
         finally:
-            if consumer is not None:
-                await consumer.close()
+            if supervisor is not None:
+                await supervisor.close()
 
     app = FastAPI(
         title=SERVICE_TITLE,

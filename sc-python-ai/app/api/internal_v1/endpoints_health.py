@@ -6,7 +6,7 @@
   "依赖不健康"这类 HTTP 语义），依赖状态体现在 `data.status` 与 `data.dependencies`。
   Compose 的 healthcheck 因此**必须解析响应体的 `data.status`**（见 `healthcheck.py`），
   只看 HTTP 状态等于只看进程存活。
-* `data.status` 只由自身依赖（共享卷只读挂载、ChromaDB）决定；跨服务观测放在 `data.peers`
+* `data.status` 由自身依赖（共享卷、ChromaDB 和启用时的解析消费者）决定；跨服务观测放在 `data.peers`
   且当前恒为空——Python → Java 方向的连通性由容器 healthcheck 承担，理由见 `app/schemas/health.py`。
 * 数据最小化：只返回服务标识、状态、依赖存活状态与跨服务观测，绝不返回路径、地址或凭据。
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.core.config import get_settings
 from app.core.health import STATUS_DOWN, build_dependency_probes, overall_status, run_dependency_probes
@@ -36,10 +36,14 @@ router = APIRouter(tags=["internal-health"])
     description="返回本服务存活状态与已注册依赖探针的存活状态；不返回任何敏感信息。",
 )
 async def health(
+    request: Request,
     _: Annotated[None, Depends(require_internal_token_or_loopback)],
 ) -> InternalResponse[HealthData]:
     settings = get_settings()
     dependencies = run_dependency_probes(build_dependency_probes(settings))
+    if settings.ingest_consumer_enabled:
+        supervisor = getattr(request.app.state, "ingest_supervisor", None)
+        dependencies["ingest_consumer"] = "UP" if supervisor and supervisor.is_ready() else "DOWN"
     status = overall_status(dependencies)
     if status == STATUS_DOWN:
         logger.warning("健康检查依赖不可用 status=%s dependencies=%s", status, dependencies)

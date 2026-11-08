@@ -33,6 +33,7 @@ _MANAGED_ENV_VARS = (
     "SC_MODEL_CONNECT_TIMEOUT_SECONDS",
     "SC_MODEL_READ_TIMEOUT_SECONDS",
     "SC_CHROMADB_BASE_URL",
+    "SC_INGEST_CONSUMER_ENABLED",
 )
 
 
@@ -65,6 +66,8 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterat
     monkeypatch.setenv("SC_TIMEZONE", "Asia/Shanghai")
     monkeypatch.setenv("SC_STORAGE_RAW_PATH", str(raw))
     monkeypatch.setenv("SC_LOG_LEVEL", "WARNING")
+    # 普通测试不允许意外连接机器上运行的真实 RabbitMQ；专项测试显式使用替身。
+    monkeypatch.setenv("SC_INGEST_CONSUMER_ENABLED", "false")
 
     reset_settings_cache()
     yield

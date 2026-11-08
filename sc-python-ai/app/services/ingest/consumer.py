@@ -117,6 +117,14 @@ class IngestConsumer:
         self._sleep = sleep
         self._connection: aio_pika.abc.AbstractRobustConnection | None = None
         self._channel: aio_pika.abc.AbstractRobustChannel | None = None
+        self._consuming = False
+
+    def is_ready(self) -> bool:
+        """只有完成订阅且当前连接和通道可用时才报告可消费。"""
+        return bool(self._consuming and self._connection and self._channel
+                    and not self._connection.is_closed
+                    and self._connection.connected.is_set()
+                    and not self._channel.is_closed)
 
     async def start(self) -> None:
         """建立连接并开始消费。
@@ -142,8 +150,8 @@ class IngestConsumer:
                 last_error = error
                 logger.warning("RabbitMQ 连接失败（第 %d 次），稍后重试", attempt)
         else:
-            # 重试用尽：抛出去让容器退出，由 restart 策略再起一轮
-            logger.error("RabbitMQ 多次连接失败，放弃启动消费者")
+            # 交给外层监管器继续重试，同时健康状态保持 DOWN。
+            logger.error("RabbitMQ 多次连接失败，本轮启动结束")
             if last_error is not None:
                 raise last_error
             raise RuntimeError("RabbitMQ 连接失败")
@@ -152,15 +160,20 @@ class IngestConsumer:
         await self._channel.set_qos(prefetch_count=1)
         queue = await self._channel.declare_queue(self._settings.mq_ingest_queue, passive=True)
         await queue.consume(self._on_message)
+        self._consuming = True
         logger.info("文档解析消费者已启动 queue=%s", self._settings.mq_ingest_queue)
 
     async def close(self) -> None:
-        if self._channel is not None:
-            await self._channel.close()
-        if self._connection is not None:
-            await self._connection.close()
+        self._consuming = False
+        channel, connection = self._channel, self._connection
         self._channel = None
         self._connection = None
+        try:
+            if channel is not None:
+                await channel.close()
+        finally:
+            if connection is not None:
+                await connection.close()
 
     async def _on_message(self, message: aio_pika.abc.AbstractIncomingMessage) -> None:
         async with message.process(requeue=False, ignore_processed=True):

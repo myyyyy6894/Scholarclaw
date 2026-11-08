@@ -6,11 +6,13 @@ import com.scholarclaw.common.response.Result;
 import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.common.security.SecurityContextUtils;
 import com.scholarclaw.modules.channel.service.QqBotConnectionManager;
+import com.scholarclaw.modules.channel.service.QqBotBindingService;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -32,13 +34,16 @@ public class QqBotController {
     private final QqBotConnectionManager connectionManager;
     private final UserConfigService userConfigService;
     private final AesGcmCryptoService cryptoService;
+    private final QqBotBindingService bindingService;
 
     public QqBotController(QqBotConnectionManager connectionManager,
                            UserConfigService userConfigService,
-                           AesGcmCryptoService cryptoService) {
+                           AesGcmCryptoService cryptoService,
+                           QqBotBindingService bindingService) {
         this.connectionManager = connectionManager;
         this.userConfigService = userConfigService;
         this.cryptoService = cryptoService;
+        this.bindingService = bindingService;
     }
 
     /** 保存凭据并建立连接；凭据错误会立刻返回可读错误。 */
@@ -61,9 +66,8 @@ public class QqBotController {
         // 顺序很关键：先校验凭据 → 再落库 → 最后连接。
         // 反过来会出现"连接时库里还是旧配置"或"凭据错误却覆盖了原配置"。
         connectionManager.validateCredentials(appId, secret);
-        userConfigService.saveQqBotConfig(userId, appId, cipher);
-        connectionManager.connect(userId);
-        return Result.ok("机器人连接已启动，请用 QQ 私聊该机器人完成绑定。",
+        connectionManager.configureAndConnect(userId, appId, cipher);
+        return Result.ok("机器人连接已启动，请在 Web 获取绑定码后用 QQ 私聊发送。",
                 new QqBotConnectVO(appId, "CONNECTING"));
     }
 
@@ -71,9 +75,17 @@ public class QqBotController {
     @PostMapping("/disconnect")
     public Result<Void> disconnect() {
         Long userId = SecurityContextUtils.requireCurrentUserId();
-        connectionManager.disconnect(userId);
-        userConfigService.clearQqBotConfig(userId);
+        connectionManager.disconnectAndClear(userId);
         return Result.ok("机器人已断开，凭据已清除。", null);
+    }
+
+    /** 绑定码只展示一次；不能被缓存或写入日志。 */
+    @PostMapping("/binding-challenge")
+    public Result<QqBotChallengeVO> bindingChallenge(HttpServletResponse response) {
+        Long userId = SecurityContextUtils.requireCurrentUserId();
+        response.setHeader("Cache-Control", "no-store");
+        return Result.ok("请在有效期内将绑定码私聊发送给机器人。",
+                new QqBotChallengeVO(bindingService.issue(userId), QqBotBindingService.VALID_SECONDS));
     }
 
     /** 连接请求体。 */
@@ -90,4 +102,6 @@ public class QqBotController {
     /** 连接结果（不含任何密钥）。 */
     public record QqBotConnectVO(String appId, String status) {
     }
+
+    public record QqBotChallengeVO(String token, int expiresInSeconds) { }
 }

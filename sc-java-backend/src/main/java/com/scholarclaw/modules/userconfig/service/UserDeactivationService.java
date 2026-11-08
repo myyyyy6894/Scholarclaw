@@ -86,6 +86,13 @@ public class UserDeactivationService {
                 .set(UserConfigEntity::getEmbeddingApiKeyCipher, null)
                 .set(UserConfigEntity::getBoundImPlatform, null)
                 .set(UserConfigEntity::getBoundImUid, null)
+                .set(UserConfigEntity::getQqbotAppId, null)
+                .set(UserConfigEntity::getQqbotSecretCipher, null)
+                .set(UserConfigEntity::getQqbotOpenid, null)
+                .set(UserConfigEntity::getQqbotBindingVerified, 0)
+                .set(UserConfigEntity::getQqbotChallengeHash, null)
+                .set(UserConfigEntity::getQqbotChallengeExpiresAt, null)
+                .setSql("qqbot_binding_version = qqbot_binding_version + 1")
                 .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
         if (updated != 1) {
             UserConfigEntity current = userConfigMapper.selectById(userId);

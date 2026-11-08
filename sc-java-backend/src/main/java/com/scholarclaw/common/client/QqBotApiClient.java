@@ -77,6 +77,17 @@ public class QqBotApiClient {
         if (cached != null && cached.usable()) {
             return cached.token();
         }
+        CachedToken fresh = requestAccessToken(appId, clientSecret);
+        tokenCache.put(appId, fresh);
+        return fresh.token();
+    }
+
+    /** 每次独立校验新凭据，不能借用其他请求为同一 AppID 缓存的 token。 */
+    public void validateCredentials(String appId, String clientSecret) {
+        requestAccessToken(appId, clientSecret);
+    }
+
+    private CachedToken requestAccessToken(String appId, String clientSecret) {
         JsonNode body = postJson(TOKEN_URL, Map.of("appId", appId, "clientSecret", clientSecret), null);
         if (body.hasNonNull("code")) {
             // 失败时 HTTP 也是 200，只能看业务码：100016 = AppID 或 Secret 不正确
@@ -87,9 +98,8 @@ public class QqBotApiClient {
             throw new QqBotException("获取 access_token 失败：响应缺少 access_token");
         }
         long expiresIn = parseExpiresIn(body.path("expires_in"));
-        tokenCache.put(appId, new CachedToken(token, Instant.now().plusSeconds(expiresIn)));
         log.info("QQ 机器人 token 已刷新 appId={} 有效期={}s", appId, expiresIn);
-        return token;
+        return new CachedToken(token, Instant.now().plusSeconds(expiresIn));
     }
 
     /** 使某个机器人的缓存 token 失效（连接被踢/鉴权失败时调用）。 */

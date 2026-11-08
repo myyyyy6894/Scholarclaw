@@ -41,6 +41,7 @@ public class QqBotConnection {
 
     private final Long userId;
     private final String appId;
+    private final Long connectionVersion;
     private final String clientSecret;
     private final QqBotApiClient apiClient;
     private final ObjectMapper objectMapper;
@@ -60,6 +61,8 @@ public class QqBotConnection {
     /** 入站消息（已解析出 openid / 内容 / 消息 ID）。 */
     public record InboundMessage(
             Long userId,
+            String appId,
+            Long connectionVersion,
             String openid,
             String content,
             String messageId,
@@ -71,12 +74,13 @@ public class QqBotConnection {
     public record StatusChange(Long userId, String status, String message) {
     }
 
-    public QqBotConnection(Long userId, String appId, String clientSecret,
+    public QqBotConnection(Long userId, String appId, Long connectionVersion, String clientSecret,
                            QqBotApiClient apiClient, ObjectMapper objectMapper,
                            Consumer<InboundMessage> inboundHandler,
                            Consumer<StatusChange> statusListener) {
         this.userId = userId;
         this.appId = appId;
+        this.connectionVersion = connectionVersion;
         this.clientSecret = clientSecret;
         this.apiClient = apiClient;
         this.objectMapper = objectMapper;
@@ -213,7 +217,7 @@ public class QqBotConnection {
             boolean group = "GROUP_AT_MESSAGE_CREATE".equals(event);
             String groupOpenid = group ? data.path("group_openid").asText("") : null;
             inboundHandler.accept(new InboundMessage(
-                    userId, openid, content.trim(), messageId, group, groupOpenid));
+                    userId, appId, connectionVersion, openid, content.trim(), messageId, group, groupOpenid));
         }
     }
 

@@ -36,13 +36,19 @@ public class QqBotSender implements OfficialBotSender {
     @Override
     public boolean isConfigured(Long userId) {
         return userConfigService.findById(userId)
-                .map(config -> config.getQqbotAppId() != null && config.getQqbotSecretCipher() != null)
+                .map(config -> "ACTIVE".equals(config.getAccountStatus())
+                        && config.getQqbotAppId() != null && config.getQqbotSecretCipher() != null)
                 .orElse(false);
     }
 
     /** 被动回复：带 msg_id 与递增 msg_seq（单聊 60 分钟内、每条最多 4 次）。 */
-    public void reply(Long userId, String openid, String messageId, int msgSeq, String content) {
-        Credential credential = credential(userId);
+    public void reply(Long userId, String appId, Long version, String openid, String messageId,
+                      int msgSeq, String content) {
+        UserConfigEntity config = userConfigService.findById(userId).orElse(null);
+        if (!verifiedFor(config, appId, version, openid)) {
+            return;
+        }
+        Credential credential = credential(config);
         if (credential == null) {
             return;
         }
@@ -56,23 +62,30 @@ public class QqBotSender implements OfficialBotSender {
      */
     @Override
     public boolean sendProactive(Long userId, String content) {
-        Credential credential = credential(userId);
-        if (credential == null) {
-            return false;
-        }
         UserConfigEntity config = userConfigService.findById(userId).orElse(null);
         String openid = config == null ? null : config.getQqbotOpenid();
-        if (openid == null || openid.isBlank()) {
-            // 用户还没私聊过机器人，拿不到 openid，无法主动推送
-            log.debug("用户尚未与机器人建立会话，跳过主动推送 userId={}", userId);
+        if (config == null || !verifiedFor(config, config.getQqbotAppId(),
+                config.getQqbotBindingVersion(), openid)) {
+            log.debug("用户尚未验证 QQ 身份，跳过主动推送 userId={}", userId);
+            return false;
+        }
+        Credential credential = credential(config);
+        if (credential == null) {
             return false;
         }
         apiClient.sendC2cText(credential.appId(), credential.secret(), openid, content, null, 0);
         return true;
     }
 
-    private Credential credential(Long userId) {
-        UserConfigEntity config = userConfigService.findById(userId).orElse(null);
+    private boolean verifiedFor(UserConfigEntity config, String appId, Long version, String openid) {
+        return config != null && "ACTIVE".equals(config.getAccountStatus())
+                && appId != null && appId.equals(config.getQqbotAppId())
+                && version != null && version.equals(config.getQqbotBindingVersion())
+                && Integer.valueOf(1).equals(config.getQqbotBindingVerified())
+                && openid != null && !openid.isBlank() && openid.equals(config.getQqbotOpenid());
+    }
+
+    private Credential credential(UserConfigEntity config) {
         if (config == null || config.getQqbotAppId() == null || config.getQqbotSecretCipher() == null) {
             return null;
         }
@@ -80,7 +93,7 @@ public class QqBotSender implements OfficialBotSender {
             return new Credential(config.getQqbotAppId(),
                     cryptoService.decrypt(config.getQqbotSecretCipher()));
         } catch (RuntimeException e) {
-            log.warn("机器人凭据解密失败 userId={} error={}", userId, e.getClass().getSimpleName());
+            log.warn("机器人凭据解密失败 userId={} error={}", config.getUserId(), e.getClass().getSimpleName());
             return null;
         }
     }

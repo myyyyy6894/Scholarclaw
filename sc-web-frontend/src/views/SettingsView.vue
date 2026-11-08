@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router'
 import {
   clearApiKeys,
   connectQqBot,
+  createQqBotBindingChallenge,
   deactivateAccount,
   disconnectQqBot,
   getUserConfig,
@@ -75,6 +76,8 @@ const savingPrefs = ref(false)
 const qqbotAppId = ref('')
 const qqbotSecret = ref('')
 const qqbotBusy = ref(false)
+const qqbotBindingToken = ref('')
+const qqbotBindingExpires = ref(0)
 const qqbotStatus = computed(() => config.value?.qqbot_status ?? 'DISCONNECTED')
 const qqbotStatusView = computed(() => {
   switch (qqbotStatus.value) {
@@ -107,7 +110,8 @@ async function onConnectQqBot(): Promise<void> {
   try {
     await connectQqBot(appId, secret)
     qqbotSecret.value = ''
-    notifySuccess('机器人连接已启动，请用 QQ 私聊它完成绑定。')
+    qqbotBindingToken.value = ''
+    notifySuccess('机器人连接已启动，请获取绑定码并通过 QQ 私聊发送。')
     await loadConfig()
   } catch (error) {
     notifyError(error)
@@ -123,8 +127,23 @@ async function onDisconnectQqBot(): Promise<void> {
   qqbotBusy.value = true
   try {
     await disconnectQqBot()
+    qqbotBindingToken.value = ''
     notifySuccess('机器人已断开，凭据已清除。')
     await loadConfig()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    qqbotBusy.value = false
+  }
+}
+
+async function onCreateQqBotBinding(): Promise<void> {
+  if (qqbotBusy.value) return
+  qqbotBusy.value = true
+  try {
+    const challenge = await createQqBotBindingChallenge()
+    qqbotBindingToken.value = challenge.token
+    qqbotBindingExpires.value = challenge.expires_in_seconds
   } catch (error) {
     notifyError(error)
   } finally {
@@ -776,7 +795,7 @@ function goToLogin(): void {
               <a href="https://bot.q.qq.com/open" target="_blank" rel="noopener noreferrer">
                 去 QQ 开放平台创建
               </a>
-              ；连接后用 QQ 私聊机器人一次即完成绑定。
+              ；连接后获取绑定码，并用自己的 QQ 私聊机器人发送。
             </span>
             <div class="sc-settings__row">
               <el-button v-if="config?.qqbot_app_id" :loading="qqbotBusy" @click="onDisconnectQqBot">
@@ -788,6 +807,18 @@ function goToLogin(): void {
             </div>
           </div>
         </el-form>
+        <div v-if="config?.qqbot_app_id" class="sc-settings__row">
+          <el-button :loading="qqbotBusy" @click="onCreateQqBotBinding">
+            {{ config.qqbot_bound ? '重新绑定 QQ' : '获取绑定码' }}
+          </el-button>
+          <el-button :loading="loading" @click="loadConfig">刷新绑定状态</el-button>
+        </div>
+        <el-alert v-if="qqbotBindingToken" class="settings-card__alert" type="warning" :closable="false" show-icon>
+          <template #title>
+            请在 {{ Math.floor(qqbotBindingExpires / 60) }} 分钟内用自己的 QQ 私聊发送：
+            <strong>/绑定 {{ qqbotBindingToken }}</strong>。绑定码仅使用一次，请勿转发或在群内发送。
+          </template>
+        </el-alert>
       </BaseCard>
 
       <BaseCard class="settings-card settings-card--danger">

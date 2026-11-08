@@ -19,8 +19,7 @@ import org.springframework.stereotype.Service;
  * <p>与 OneBot 通道的区别：
  * <ul>
  *   <li><b>没有 sender→账号的全局映射</b>：连接本身就属于某个用户，消息天然归属该用户；</li>
- *   <li>首次私聊时把 openid 记到该用户名下，之后只接受同一 openid（防止他人给这个机器人发消息
- *       被当成账号主人的输入）；</li>
+ *   <li>只接受经 Web 一次性挑战确认的私聊 openid；群身份与私聊身份不能直接等同；</li>
  *   <li>回复走被动回复（带 msg_id），不走主动推送。</li>
  * </ul>
  */
@@ -34,32 +33,41 @@ public class QqBotChannelAdapter {
     private final AgentOrchestratorService orchestrator;
     private final UserConfigService userConfigService;
     private final QqBotSender sender;
+    private final QqBotBindingService bindingService;
 
     public QqBotChannelAdapter(AgentOrchestratorService orchestrator,
                                UserConfigService userConfigService,
-                               QqBotSender sender) {
+                               QqBotSender sender, QqBotBindingService bindingService) {
         this.orchestrator = orchestrator;
         this.userConfigService = userConfigService;
         this.sender = sender;
+        this.bindingService = bindingService;
     }
 
     /** 处理一条已连接机器人的入站消息。 */
     public void handle(QqBotConnection.InboundMessage message) {
         Long userId = message.userId();
         String openid = message.openid();
-        if (openid == null || openid.isBlank() || message.messageId() == null) {
-            return;
-        }
-        if (!acceptOpenid(userId, openid)) {
-            log.warn("QQ 机器人收到非绑定 openid 的消息，已忽略 userId={}", userId);
+        if (openid == null || openid.isBlank() || message.messageId() == null || message.group()) {
             return;
         }
         String text = message.content() == null ? "" : message.content().trim();
+        if (text.startsWith("/绑定")) {
+            String[] parts = text.split("\\s+", 2);
+            if (parts.length == 2 && bindingService.consume(message, parts[1])) {
+                safeReply(message, "✅ QQ 身份已绑定，可继续私聊使用。");
+            }
+            return; // 绑定码绝不进入 Agent、模型或日志。
+        }
+        if (!acceptOpenid(message)) {
+            log.warn("QQ 机器人收到非绑定 openid 的消息，已忽略 userId={}", userId);
+            return;
+        }
         if (text.isEmpty()) {
             return;
         }
         if (text.length() > MAX_TEXT_LENGTH) {
-            safeReply(userId, openid, message.messageId(),
+            safeReply(message,
                     "⚠️ 消息文本过长，请分段发送，或在 PC Web 工作台粘贴完整通知。");
             return;
         }
@@ -67,36 +75,25 @@ public class QqBotChannelAdapter {
             AgentReply reply = orchestrator.handle(new AgentInboundMessage(
                     userId, "QQ_OFFICIAL", message.messageId(), text, referenceTime(userId), null, false));
             if (reply != null && reply.replyText() != null && !reply.replyText().isBlank()) {
-                safeReply(userId, openid, message.messageId(), reply.replyText());
+                safeReply(message, reply.replyText());
             }
         } catch (BusinessException e) {
             log.warn("QQ 机器人文本处理失败 userId={} code={}", userId, e.getErrorCode().code());
-            safeReply(userId, openid, message.messageId(), userMessage(e));
+            safeReply(message, userMessage(e));
         } catch (RuntimeException e) {
             log.error("QQ 机器人文本处理未预期失败 userId={} error={}",
                     userId, e.getClass().getSimpleName(), e);
-            safeReply(userId, openid, message.messageId(), GENERIC_FAILURE);
+            safeReply(message, GENERIC_FAILURE);
         }
     }
 
-    /**
-     * 首次私聊自动绑定 openid；之后必须一致。
-     *
-     * <p>绑定后该机器人只服务账号主人——这也是「用户自带 Bot」模式的安全性来源：
-     * 别人给他的机器人发消息会被忽略。
-     */
-    private boolean acceptOpenid(Long userId, String openid) {
-        UserConfigEntity config = userConfigService.findById(userId).orElse(null);
-        if (config == null) {
-            return false;
-        }
-        String bound = config.getQqbotOpenid();
-        if (bound == null || bound.isBlank()) {
-            userConfigService.bindQqBotOpenid(userId, openid);
-            log.info("QQ 机器人已绑定首个 openid userId={}", userId);
-            return true;
-        }
-        return bound.equals(openid);
+    private boolean acceptOpenid(QqBotConnection.InboundMessage message) {
+        UserConfigEntity config = userConfigService.findById(message.userId()).orElse(null);
+        return config != null && "ACTIVE".equals(config.getAccountStatus())
+                && java.util.Objects.equals(config.getQqbotAppId(), message.appId())
+                && java.util.Objects.equals(config.getQqbotBindingVersion(), message.connectionVersion())
+                && Integer.valueOf(1).equals(config.getQqbotBindingVerified())
+                && message.openid().equals(config.getQqbotOpenid());
     }
 
     /** 参考时间：按用户时区成 ISO 偏移时间（DDL 相对时间解析依赖它）。 */
@@ -114,11 +111,12 @@ public class QqBotChannelAdapter {
         return java.time.ZonedDateTime.now(zone).toOffsetDateTime().toString();
     }
 
-    private void safeReply(Long userId, String openid, String messageId, String content) {
+    private void safeReply(QqBotConnection.InboundMessage message, String content) {
         try {
-            sender.reply(userId, openid, messageId, 1, content);
+            sender.reply(message.userId(), message.appId(), message.connectionVersion(),
+                    message.openid(), message.messageId(), 1, content);
         } catch (RuntimeException e) {
-            log.warn("QQ 机器人回复失败 userId={} error={}", userId, e.getClass().getSimpleName());
+            log.warn("QQ 机器人回复失败 userId={} error={}", message.userId(), e.getClass().getSimpleName());
         }
     }
 

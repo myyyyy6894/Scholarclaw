@@ -5,9 +5,12 @@ import com.scholarclaw.common.client.QqBotApiClient;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.common.security.AesGcmCryptoService;
+import com.scholarclaw.common.event.UserDeactivatingEvent;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
+import jakarta.annotation.PreDestroy;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -18,6 +21,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * 用户自带 QQ 机器人的连接管理。
@@ -39,7 +44,9 @@ public class QqBotConnectionManager {
     private final ObjectMapper objectMapper;
     private final QqBotChannelAdapter channelAdapter;
 
-    private final Map<Long, QqBotConnection> connections = new ConcurrentHashMap<>();
+    private record ConnectionSlot(UUID token, QqBotConnection connection) { }
+    private final Map<Long, ConnectionSlot> connections = new ConcurrentHashMap<>();
+    private final Object[] locks = java.util.stream.IntStream.range(0, 64).mapToObj(i -> new Object()).toArray();
     private final ThreadPoolExecutor inboundExecutor;
 
     public QqBotConnectionManager(UserConfigService userConfigService,
@@ -69,7 +76,9 @@ public class QqBotConnectionManager {
     public void restoreOnStartup() {
         for (UserConfigEntity config : userConfigService.findQqBotConfigured()) {
             try {
-                start(config.getUserId());
+                synchronized (lockFor(config.getUserId())) {
+                    start(config.getUserId());
+                }
             } catch (RuntimeException e) {
                 log.warn("启动恢复机器人连接失败 userId={} error={}",
                         config.getUserId(), e.getClass().getSimpleName());
@@ -83,75 +92,110 @@ public class QqBotConnectionManager {
      * <p>必须在**保存凭据之前**调用：凭据错误时不能覆盖用户原有的可用配置。
      */
     public void validateCredentials(String appId, String clientSecret) {
-        apiClient.invalidateToken(appId);
         try {
-            apiClient.accessToken(appId, clientSecret);
+            apiClient.validateCredentials(appId, clientSecret);
         } catch (QqBotApiClient.QqBotException e) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "机器人凭据校验失败，请检查 AppID 与 AppSecret 是否正确。");
         }
     }
 
-    /**
-     * 用**已保存**的凭据建立（或重建）连接。
-     *
-     * <p>调用方必须先把凭据落库——本方法从 `t_user_config` 读取，不接收明文。
-     */
-    public void connect(Long userId) {
-        stop(userId);
-        userConfigService.updateQqBotStatus(userId, "CONNECTING", null);
-        start(userId);
+    /** 串行保存密文并重建连接；不接收明文。 */
+    public void configureAndConnect(Long userId, String appId, String cipher) {
+        synchronized (lockFor(userId)) {
+            UserConfigEntity config = userConfigService.saveQqBotConfig(userId, appId, cipher);
+            stop(userId);
+            apiClient.invalidateToken(appId);
+            userConfigService.updateQqBotStatus(userId, appId, config.getQqbotBindingVersion(), "CONNECTING", null);
+            start(userId);
+        }
     }
 
-    /** 断开并停止重连（不清库里的凭据）。 */
-    public void disconnect(Long userId) {
-        stop(userId);
-        userConfigService.updateQqBotStatus(userId, "DISCONNECTED", null);
+    /** 原子使凭据和连接版本失效，然后停止本进程的连接。 */
+    public void disconnectAndClear(Long userId) {
+        synchronized (lockFor(userId)) {
+            userConfigService.clearQqBotConfig(userId);
+            stop(userId);
+        }
     }
 
     /** 当前是否在线（内存态，不查库）。 */
     public boolean isOnline(Long userId) {
-        QqBotConnection connection = connections.get(userId);
-        return connection != null;
+        return connections.containsKey(userId);
     }
 
     private void start(Long userId) {
         UserConfigEntity config = userConfigService.findById(userId).orElse(null);
-        if (config == null || config.getQqbotAppId() == null || config.getQqbotSecretCipher() == null) {
+        if (config == null || !"ACTIVE".equals(config.getAccountStatus())
+                || config.getQqbotAppId() == null || config.getQqbotSecretCipher() == null) {
             return;
         }
         String secret;
         try {
             secret = cryptoService.decrypt(config.getQqbotSecretCipher());
         } catch (RuntimeException e) {
-            userConfigService.updateQqBotStatus(userId, "ERROR", "凭据解密失败，请重新填写 AppSecret。");
+            userConfigService.updateQqBotStatus(userId, config.getQqbotAppId(), config.getQqbotBindingVersion(),
+                    "ERROR", "凭据解密失败，请重新填写 AppSecret。");
             return;
         }
+        UUID token = UUID.randomUUID();
         QqBotConnection connection = new QqBotConnection(
-                userId, config.getQqbotAppId(), secret, apiClient, objectMapper,
-                message -> inboundExecutor.execute(() -> channelAdapter.handle(message)),
-                this::onStatus);
-        connections.put(userId, connection);
+                userId, config.getQqbotAppId(), config.getQqbotBindingVersion(), secret, apiClient, objectMapper,
+                message -> inboundExecutor.execute(() -> {
+                    if (isCurrent(userId, token)) {
+                        channelAdapter.handle(message);
+                    }
+                }),
+                change -> onStatus(change, token, config.getQqbotAppId(), config.getQqbotBindingVersion()));
+        ConnectionSlot previous = connections.put(userId, new ConnectionSlot(token, connection));
+        if (previous != null) {
+            previous.connection().stop();
+        }
         connection.start();
         log.info("QQ 机器人连接已启动 userId={}", userId);
     }
 
     private void stop(Long userId) {
-        QqBotConnection connection = connections.remove(userId);
-        if (connection != null) {
-            connection.stop();
+        ConnectionSlot slot = connections.remove(userId);
+        if (slot != null) {
+            slot.connection().stop();
             log.info("QQ 机器人连接已停止 userId={}", userId);
         }
     }
 
-    private void onStatus(QqBotConnection.StatusChange change) {
+    private boolean isCurrent(Long userId, UUID token) {
+        ConnectionSlot slot = connections.get(userId);
+        return slot != null && slot.token().equals(token);
+    }
+
+    private Object lockFor(Long userId) {
+        return locks[Math.floorMod(userId.hashCode(), locks.length)];
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onUserDeactivating(UserDeactivatingEvent event) {
+        synchronized (lockFor(event.userId())) {
+            stop(event.userId());
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        connections.keySet().forEach(this::stop);
+        inboundExecutor.shutdownNow();
+    }
+
+    private void onStatus(QqBotConnection.StatusChange change, UUID token, String appId, Long version) {
+        if (!isCurrent(change.userId(), token)) {
+            return;
+        }
         String status = change.status();
         String message = change.message();
         if (message != null && message.length() > 200) {
             message = message.substring(0, 200);
         }
         try {
-            userConfigService.updateQqBotStatus(change.userId(), status, message);
+            userConfigService.updateQqBotStatus(change.userId(), appId, version, status, message);
         } catch (RuntimeException e) {
             log.warn("更新机器人连接状态失败 userId={} status={}", change.userId(), status);
         }

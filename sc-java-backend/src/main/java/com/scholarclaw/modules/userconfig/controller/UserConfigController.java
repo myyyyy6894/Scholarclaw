@@ -494,7 +494,8 @@ public class UserConfigController {
                 entity.getQqbotSecretCipher() != null,
                 entity.getQqbotStatus() == null ? "DISCONNECTED" : entity.getQqbotStatus(),
                 entity.getQqbotLastError(),
-                entity.getQqbotOpenid() != null && !entity.getQqbotOpenid().isBlank(),
+                Integer.valueOf(1).equals(entity.getQqbotBindingVerified())
+                        && entity.getQqbotOpenid() != null && !entity.getQqbotOpenid().isBlank(),
                 platformEmbedding,
                 existingCourseCount);
     }

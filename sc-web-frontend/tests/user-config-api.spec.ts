@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { resetApiClient } from '@/api/client'
 import {
   clearApiKeys,
+  createQqBotBindingChallenge,
   deactivateAccount,
   getUserConfig,
   probeModel,
@@ -72,6 +73,18 @@ describe('user config api', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     resetApiClient()
+  })
+
+  it('绑定挑战使用认证 POST，绑定码只在响应中返回', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(envelope({ token: 'challenge-token', expires_in_seconds: 300 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const challenge = await createQqBotBindingChallenge()
+
+    expect(captured(fetchMock).url).toBe('/api/v1/user/qqbot/binding-challenge')
+    expect(captured(fetchMock).method).toBe('POST')
+    expect(captured(fetchMock).body).toBeUndefined()
+    expect(challenge.token).toBe('challenge-token')
   })
 
   it('GET /v1/user/config 返回掩码视图', async () => {

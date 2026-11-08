@@ -148,3 +148,8 @@ export function connectQqBot(appId: string, clientSecret: string): Promise<{ app
 export function disconnectQqBot(): Promise<null> {
   return apiRequest<null>('/v1/user/qqbot/disconnect', { method: 'POST' })
 }
+
+/** 绑定码只保存在页面内存中，服务端仅保存其短期哈希。 */
+export function createQqBotBindingChallenge(): Promise<{ token: string; expires_in_seconds: number }> {
+  return apiRequest('/v1/user/qqbot/binding-challenge', { method: 'POST' })
+}

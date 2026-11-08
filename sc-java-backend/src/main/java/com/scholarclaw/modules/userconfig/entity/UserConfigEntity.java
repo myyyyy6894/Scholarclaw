@@ -89,8 +89,13 @@ public class UserConfigEntity {
     /** 组 B：QQ 官方机器人 AppSecret 密文（AES-GCM，与模型 Key 同一条加密路径）。 */
     private String qqbotSecretCipher;
 
-    /** 组 B：用户在该机器人下的 openid（首次私聊后自动记录）。 */
+    /** 组 B：用户在该机器人下的 openid；只有验证标记为 1 才可使用。 */
     private String qqbotOpenid;
+
+    private Integer qqbotBindingVerified;
+    private Long qqbotBindingVersion;
+    private String qqbotChallengeHash;
+    private LocalDateTime qqbotChallengeExpiresAt;
 
     /** 组 B：机器人连接状态 DISCONNECTED / CONNECTING / ONLINE / ERROR。 */
     private String qqbotStatus;
@@ -294,6 +299,38 @@ public class UserConfigEntity {
 
     public void setQqbotOpenid(String qqbotOpenid) {
         this.qqbotOpenid = qqbotOpenid;
+    }
+
+    public Integer getQqbotBindingVerified() {
+        return qqbotBindingVerified;
+    }
+
+    public void setQqbotBindingVerified(Integer qqbotBindingVerified) {
+        this.qqbotBindingVerified = qqbotBindingVerified;
+    }
+
+    public Long getQqbotBindingVersion() {
+        return qqbotBindingVersion;
+    }
+
+    public void setQqbotBindingVersion(Long qqbotBindingVersion) {
+        this.qqbotBindingVersion = qqbotBindingVersion;
+    }
+
+    public String getQqbotChallengeHash() {
+        return qqbotChallengeHash;
+    }
+
+    public void setQqbotChallengeHash(String qqbotChallengeHash) {
+        this.qqbotChallengeHash = qqbotChallengeHash;
+    }
+
+    public LocalDateTime getQqbotChallengeExpiresAt() {
+        return qqbotChallengeExpiresAt;
+    }
+
+    public void setQqbotChallengeExpiresAt(LocalDateTime qqbotChallengeExpiresAt) {
+        this.qqbotChallengeExpiresAt = qqbotChallengeExpiresAt;
     }
 
     public String getQqbotStatus() {

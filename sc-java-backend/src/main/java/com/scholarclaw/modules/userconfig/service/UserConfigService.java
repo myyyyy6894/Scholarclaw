@@ -247,6 +247,7 @@ public class UserConfigService {
      */
     @Transactional(rollbackFor = Exception.class)
     public UserConfigEntity saveQqBotConfig(Long userId, String appId, String secretCipher) {
+        UserConfigEntity current = lockForUpdate(userId);
         var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
                 .eq(UserConfigEntity::getUserId, userId)
                 .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
@@ -254,7 +255,14 @@ public class UserConfigService {
                 .set(UserConfigEntity::getQqbotSecretCipher, secretCipher)
                 .set(UserConfigEntity::getQqbotStatus, "DISCONNECTED")
                 .set(UserConfigEntity::getQqbotLastError, null)
+                .set(UserConfigEntity::getQqbotChallengeHash, null)
+                .set(UserConfigEntity::getQqbotChallengeExpiresAt, null)
+                .setSql("qqbot_binding_version = qqbot_binding_version + 1")
                 .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
+        if (!java.util.Objects.equals(current.getQqbotAppId(), appId)) {
+            wrapper.set(UserConfigEntity::getQqbotOpenid, null)
+                    .set(UserConfigEntity::getQqbotBindingVerified, 0);
+        }
         requireUpdated(userConfigMapper.update(null, wrapper));
         return findById(userId).orElseThrow(() -> new BusinessException(
                 ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
@@ -269,6 +277,10 @@ public class UserConfigService {
                 .set(UserConfigEntity::getQqbotAppId, null)
                 .set(UserConfigEntity::getQqbotSecretCipher, null)
                 .set(UserConfigEntity::getQqbotOpenid, null)
+                .set(UserConfigEntity::getQqbotBindingVerified, 0)
+                .set(UserConfigEntity::getQqbotChallengeHash, null)
+                .set(UserConfigEntity::getQqbotChallengeExpiresAt, null)
+                .setSql("qqbot_binding_version = qqbot_binding_version + 1")
                 .set(UserConfigEntity::getQqbotStatus, "DISCONNECTED")
                 .set(UserConfigEntity::getQqbotLastError, null)
                 .set(UserConfigEntity::getQqbotConnectedAt, null)
@@ -280,9 +292,12 @@ public class UserConfigService {
 
     /** 更新连接状态；`ONLINE` 时同时写连接时间。失败原因由调用方脱敏后传入。 */
     @Transactional(rollbackFor = Exception.class)
-    public void updateQqBotStatus(Long userId, String status, String lastError) {
+    public void updateQqBotStatus(Long userId, String appId, Long version, String status, String lastError) {
         var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
                 .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .eq(UserConfigEntity::getQqbotAppId, appId)
+                .eq(UserConfigEntity::getQqbotBindingVersion, version)
                 .set(UserConfigEntity::getQqbotStatus, status)
                 .set(UserConfigEntity::getQqbotLastError, lastError)
                 .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
@@ -292,18 +307,45 @@ public class UserConfigService {
         userConfigMapper.update(null, wrapper);
     }
 
-    /** 记录用户首次私聊的 openid（后续只接受同一 openid 的消息）。 */
+    /** 保存短期挑战的哈希；该行锁也使其与更换/断开机器人操作串行。 */
     @Transactional(rollbackFor = Exception.class)
-    public void bindQqBotOpenid(Long userId, String openid) {
-        userConfigMapper.update(null, Wrappers.<UserConfigEntity>lambdaUpdate()
+    public void issueQqBotChallenge(Long userId, String challengeHash, java.time.LocalDateTime expiresAt) {
+        UserConfigEntity config = lockForUpdate(userId);
+        if (!"ACTIVE".equals(config.getAccountStatus()) || config.getQqbotAppId() == null
+                || config.getQqbotSecretCipher() == null) {
+            throw new BusinessException(ErrorCode.STATE_CONFLICT, "请先连接 QQ 机器人。");
+        }
+        requireUpdated(userConfigMapper.update(null, Wrappers.<UserConfigEntity>lambdaUpdate()
                 .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .eq(UserConfigEntity::getQqbotBindingVersion, config.getQqbotBindingVersion())
+                .set(UserConfigEntity::getQqbotChallengeHash, challengeHash)
+                .set(UserConfigEntity::getQqbotChallengeExpiresAt, expiresAt)));
+    }
+
+    /** 一条条件更新同时核验挑战并消费它，竞争者至多一人能绑定。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean consumeQqBotChallenge(Long userId, String appId, Long version, String openid,
+                                         String challengeHash) {
+        var now = ScTimeZone.now().toLocalDateTime();
+        return userConfigMapper.update(null, Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .eq(UserConfigEntity::getQqbotAppId, appId)
+                .eq(UserConfigEntity::getQqbotBindingVersion, version)
+                .eq(UserConfigEntity::getQqbotChallengeHash, challengeHash)
+                .gt(UserConfigEntity::getQqbotChallengeExpiresAt, now)
                 .set(UserConfigEntity::getQqbotOpenid, openid)
-                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
+                .set(UserConfigEntity::getQqbotBindingVerified, 1)
+                .set(UserConfigEntity::getQqbotChallengeHash, null)
+                .set(UserConfigEntity::getQqbotChallengeExpiresAt, null)
+                .set(UserConfigEntity::getUpdatedAt, now)) == 1;
     }
 
     /** 启动时恢复连接：所有配置了机器人的账号。 */
     public java.util.List<UserConfigEntity> findQqBotConfigured() {
         return userConfigMapper.selectList(Wrappers.<UserConfigEntity>lambdaQuery()
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
                 .isNotNull(UserConfigEntity::getQqbotAppId)
                 .isNotNull(UserConfigEntity::getQqbotSecretCipher));
     }

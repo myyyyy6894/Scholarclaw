@@ -44,6 +44,7 @@ class ModuleDependencyTest {
             new ModuleRule("userconfig", List.of()),
             new ModuleRule("auth", List.of("userconfig")),
             new ModuleRule("course", List.of("userconfig")),
+            new ModuleRule("schedule", List.of("course", "userconfig")),
             new ModuleRule("notification", List.of("userconfig")),
             new ModuleRule("ddl", List.of("course", "userconfig", "notification")),
             new ModuleRule("knowledge", List.of("course", "userconfig", "notification")),
@@ -66,7 +67,7 @@ class ModuleDependencyTest {
     }
 
     @Test
-    @DisplayName("九个模块包与公共层都已存在（防止规则退化为空层而假通过）")
+    @DisplayName("各模块包与公共层都已存在（防止规则退化为空层而假通过）")
     void allModulePackagesArePresent() {
         assertThat(productionClasses.that(resideInAPackage("com.scholarclaw.common..")))
                 .as("公共基础设施层 com.scholarclaw.common 必须存在")

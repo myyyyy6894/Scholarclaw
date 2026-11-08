@@ -1,7 +1,7 @@
 /**
  * 第 1~3 层：业务与入口模块（{@code 02} §4.1 的 Strict DAG）。
  *
- * <p>九个模块及其唯一写入权（{@code 02} §4.3），常量名即包名后缀：
+ * <p>各模块及其唯一写入权（{@code 02} §4.3），常量名即包名后缀：
  * <table border="1">
  *   <caption>模块与依赖方向</caption>
  *   <tr><th>层</th><th>模块</th><th>允许依赖的模块</th><th>唯一拥有写入权的存储</th></tr>
@@ -13,6 +13,8 @@
  *       <td>t_ddl_task, t_ddl_subtask</td></tr>
  *   <tr><td>2</td><td>knowledge</td><td>course, userconfig, notification, common</td>
  *       <td>t_knowledge_doc, t_knowledge_parent_chunk, rag.ingest.queue/dlq</td></tr>
+ *   <tr><td>2</td><td>schedule</td><td>course, userconfig, common</td>
+ *       <td>t_schedule_term, t_schedule_period, t_schedule_rule, t_schedule_exception</td></tr>
  *   <tr><td>3</td><td>course</td><td>userconfig, common</td><td>t_course_namespace</td></tr>
  *   <tr><td>3</td><td>auth</td><td>userconfig, common</td><td>Redis JWT 黑名单</td></tr>
  *   <tr><td>3</td><td>userconfig</td><td>common</td><td>t_user_config</td></tr>

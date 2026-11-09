@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读核对 V1.0.9 课表结构；必须显式指定目标库，密码使用 MySQL 标准环境变量。"""
+"""只读核对 V1.0.9–V1.0.10 课表结构；必须显式指定目标库，密码使用 MySQL 标准环境变量。"""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,15 @@ import subprocess
 import sys
 
 COLUMNS = {
+    "t_schedule_import": {
+        "import_id": "bigint", "user_id": "bigint", "term_id": "bigint",
+        "client_request_id": "varchar(64)", "input_fingerprint": "char(64)", "source_type": "varchar(8)",
+        "source_text": "mediumtext", "source_path": "varchar(512)", "source_media_type": "varchar(32)",
+        "status": "varchar(20)", "schedule_version": "bigint", "draft_json": "json", "error_message": "varchar(255)",
+        "attempt": "smallint", "lease_token": "char(36)", "lease_until": "datetime(3)", "version": "bigint",
+        "expires_at": "datetime(3)", "confirm_request_id": "varchar(64)", "confirm_fingerprint": "char(64)",
+        "receipt_json": "json", "created_at": "datetime(3)", "updated_at": "datetime(3)",
+    },
     "t_schedule_term": {
         "term_id": "bigint", "user_id": "bigint", "name": "varchar(100)",
         "first_monday": "date", "week_count": "smallint", "timezone": "varchar(64)",
@@ -32,12 +41,20 @@ COLUMNS = {
     },
 }
 NULLABLE = {
+    "t_schedule_import": {"source_text", "source_path", "source_media_type", "draft_json", "error_message",
+                          "lease_token", "lease_until", "confirm_request_id", "confirm_fingerprint", "receipt_json"},
     "t_schedule_term": {"active_user_id"},
     "t_schedule_period": set(),
     "t_schedule_rule": {"course_id", "teacher", "room", "start_period", "end_period"},
     "t_schedule_exception": {"target_date", "target_start_time", "target_end_time", "target_room"},
 }
 INDEXES = {
+    "t_schedule_import": {"PRIMARY": (0, "import_id"),
+                         "uk_schedule_import_request": (0, "user_id,client_request_id"),
+                         "uk_schedule_import_confirm": (0, "user_id,confirm_request_id"),
+                         "idx_schedule_import_user_term": (1, "user_id,term_id,import_id"),
+                         "idx_schedule_import_recovery": (1, "status,lease_until,import_id"),
+                         "idx_schedule_import_expiry": (1, "status,expires_at,import_id")},
     "t_schedule_term": {"PRIMARY": (0, "term_id"), "uk_schedule_active_user": (0, "active_user_id"),
                         "idx_schedule_term_user": (1, "user_id,term_id")},
     "t_schedule_period": {"PRIMARY": (0, "term_id,period_no"),
@@ -48,11 +65,12 @@ INDEXES = {
                              "uk_schedule_exception_occurrence": (0, "rule_id,original_date"),
                              "idx_schedule_exception_user_term": (1, "user_id,term_id,target_date")},
 }
-CHECKS = {"chk_schedule_term", "chk_schedule_period", "chk_schedule_rule", "chk_schedule_exception"}
-DEFAULTS = {("t_schedule_term", "is_active"): "0", ("t_schedule_term", "version"): "1",
+CHECKS = {"chk_schedule_import", "chk_schedule_term", "chk_schedule_period", "chk_schedule_rule", "chk_schedule_exception"}
+DEFAULTS = {("t_schedule_import", "attempt"): "0", ("t_schedule_import", "version"): "1",
+            ("t_schedule_term", "is_active"): "0", ("t_schedule_term", "version"): "1",
             ("t_schedule_term", "schedule_version"): "1", ("t_schedule_rule", "version"): "1",
             ("t_schedule_exception", "version"): "1"}
-AUTO_IDS = {("t_schedule_term", "term_id"), ("t_schedule_rule", "rule_id"),
+AUTO_IDS = {("t_schedule_import", "import_id"), ("t_schedule_term", "term_id"), ("t_schedule_rule", "rule_id"),
             ("t_schedule_exception", "exception_id")}
 
 

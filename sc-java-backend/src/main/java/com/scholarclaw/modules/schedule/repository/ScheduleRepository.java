@@ -134,7 +134,7 @@ public class ScheduleRepository {
         jdbc.update("UPDATE t_schedule_rule SET course_id=NULL,version=version+1,updated_at=? WHERE user_id=? AND course_id=?", now, userId, courseId);
     }
     public void deleteUserData(long userId) {
-        for (String table : List.of("t_schedule_exception", "t_schedule_rule", "t_schedule_period", "t_schedule_term")) {
+        for (String table : List.of("t_schedule_import", "t_schedule_exception", "t_schedule_rule", "t_schedule_period", "t_schedule_term")) {
             jdbc.update("DELETE FROM " + table + " WHERE user_id=?", userId);
         }
     }

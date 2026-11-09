@@ -1,0 +1,35 @@
+-- Import drafts and receipts belong to the Java schedule domain; Python never writes them.
+CREATE TABLE `t_schedule_import` (
+  `import_id` BIGINT NOT NULL AUTO_INCREMENT,
+  `user_id` BIGINT NOT NULL,
+  `term_id` BIGINT NOT NULL,
+  `client_request_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `input_fingerprint` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `source_type` VARCHAR(8) NOT NULL,
+  `source_text` MEDIUMTEXT NULL,
+  `source_path` VARCHAR(512) NULL,
+  `source_media_type` VARCHAR(32) NULL,
+  `status` VARCHAR(20) NOT NULL,
+  `schedule_version` BIGINT NOT NULL,
+  `draft_json` JSON NULL,
+  `error_message` VARCHAR(255) NULL,
+  `attempt` SMALLINT NOT NULL DEFAULT 0,
+  `lease_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  `lease_until` DATETIME(3) NULL,
+  `version` BIGINT NOT NULL DEFAULT 1,
+  `expires_at` DATETIME(3) NOT NULL,
+  `confirm_request_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  `confirm_fingerprint` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  `receipt_json` JSON NULL,
+  `created_at` DATETIME(3) NOT NULL,
+  `updated_at` DATETIME(3) NOT NULL,
+  PRIMARY KEY (`import_id`),
+  UNIQUE KEY `uk_schedule_import_request` (`user_id`,`client_request_id`),
+  UNIQUE KEY `uk_schedule_import_confirm` (`user_id`,`confirm_request_id`),
+  KEY `idx_schedule_import_user_term` (`user_id`,`term_id`,`import_id`),
+  KEY `idx_schedule_import_recovery` (`status`,`lease_until`,`import_id`),
+  KEY `idx_schedule_import_expiry` (`status`,`expires_at`,`import_id`),
+  CONSTRAINT `chk_schedule_import` CHECK (`source_type` IN ('TEXT','IMAGE')
+    AND `status` IN ('QUEUED','RUNNING','REVIEW_REQUIRED','FAILED','CONFIRMED','EXPIRED','CANCELED')
+    AND `attempt` BETWEEN 0 AND 3 AND `version` > 0 AND `schedule_version` > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

@@ -18,6 +18,7 @@ import type {
 } from '@/api/schedule'
 import { getUserConfig } from '@/api/user-config'
 import BaseCard from '@/components/ui/BaseCard.vue'
+import ScheduleImportDialog from '@/views/schedule/ScheduleImportDialog.vue'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import { formatClock, formatClockSeconds, mondayOf, parseWeeks, shiftDate, todayInZone, weekDates } from '@/views/schedule/schedule-date'
 
@@ -34,6 +35,7 @@ const mode = ref<'week' | 'day'>('week')
 const loading = ref(true)
 const errorMessage = ref('')
 const busy = ref(false)
+const importDialog = ref(false)
 const weekNo = ref<number | null>(null)
 const nowMs = ref(Date.now())
 let generation = 0
@@ -391,6 +393,7 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       </div>
       <div class="schedule-actions">
         <el-button @click="openTermEditor()">新建学期</el-button>
+        <el-button v-if="term" @click="importDialog = true">导入文字</el-button>
         <el-button v-if="term" type="primary" @click="openRuleEditor()"><Plus :size="16" /> 添加课程</el-button>
       </div>
     </div>
@@ -456,6 +459,8 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
         </li>
       </ul>
     </BaseCard>
+
+    <ScheduleImportDialog v-if="term" v-model="importDialog" :term="term" :rules="rules" :periods="periods" @saved="refresh(termId)" />
 
     <el-dialog v-model="termDialog" :title="editingTerm ? '编辑学期' : '新建学期'" width="520px" class="schedule-dialog">
       <el-form label-position="top">

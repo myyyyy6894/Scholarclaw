@@ -64,6 +64,10 @@ public enum ErrorCode {
     DRAFT_EXPIRED_OR_NOT_FOUND("DRAFT_EXPIRED_OR_NOT_FOUND", HttpStatus.NOT_FOUND, null,
             "该变更草案已过期或已被处理，请刷新任务看板。"),
 
+    // ---------- 410 Gone：导入源材料已过期 ----------
+    SCHEDULE_IMPORT_EXPIRED("SCHEDULE_IMPORT_EXPIRED", HttpStatus.GONE, null,
+            "导入任务已过期，请重新导入。"),
+
     // ---------- 409 Conflict：唯一约束与状态机冲突（04 §2.3.2 第 5 类）----------
     USER_ALREADY_EXISTS("USER_ALREADY_EXISTS", HttpStatus.CONFLICT, null,
             "该用户名已被占用，请更换其他用户名。"),

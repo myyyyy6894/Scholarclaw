@@ -9,6 +9,7 @@ import HomeView from '@/views/HomeView.vue'
 import KnowledgeView from '@/views/KnowledgeView.vue'
 import LoginView from '@/views/LoginView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
+import PlanningView from '@/views/PlanningView.vue'
 import RagView from '@/views/RagView.vue'
 import ScheduleView from '@/views/ScheduleView.vue'
 import SettingsView from '@/views/SettingsView.vue'
@@ -73,6 +74,12 @@ const routes: RouteRecordRaw[] = [
         name: 'schedule',
         component: ScheduleView,
         meta: { title: '我的课表', requiresAuth: true },
+      },
+      {
+        path: 'planning',
+        name: 'planning',
+        component: PlanningView,
+        meta: { title: '时间规划', requiresAuth: true },
       },
       {
         path: 'settings',

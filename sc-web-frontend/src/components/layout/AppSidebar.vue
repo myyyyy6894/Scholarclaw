@@ -65,6 +65,7 @@ const primaryNav = computed<NavEntry[]>(() => {
     { key: 'knowledge', label: '知识库', icon: Library, routeName: 'knowledge' },
     { key: 'courses', label: '我的课程', icon: BookOpen, routeName: 'courses' },
     { key: 'schedule', label: '我的课表', icon: CalendarDays, routeName: 'schedule' },
+    { key: 'planning', label: '时间规划', icon: CalendarClock, routeName: 'planning' },
     { key: 'ddl', label: 'DDL 任务', icon: CalendarClock, routeName: 'ddl' },
   ]
 })

@@ -26,6 +26,7 @@ const PAGE_META: Record<string, { title: string; subtitle?: string }> = {
   knowledge: { title: '知识库', subtitle: '上传课件并跟踪真实解析状态' },
   courses: { title: '我的课程', subtitle: '管理课程空间与 Embedding 绑定' },
   schedule: { title: '我的课表', subtitle: '查看教学周课程与停调课安排' },
+  planning: { title: '时间规划', subtitle: '设置学习时间、固定日程和任务工时' },
   ddl: { title: 'DDL 任务', subtitle: '通知提取、待确认收件箱与任务闭环' },
   settings: { title: '设置', subtitle: '模型配置、偏好与账号安全' },
   guide: { title: '使用指南', subtitle: '功能说明、模型配置与常见问题' },

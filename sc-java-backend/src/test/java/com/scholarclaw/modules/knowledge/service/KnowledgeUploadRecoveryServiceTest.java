@@ -117,6 +117,18 @@ class KnowledgeUploadRecoveryServiceTest {
         assertThat(Files.exists(raw)).isTrue();
     }
 
+    @Test
+    void recoveryDoesNotDeleteScheduleImages() throws Exception {
+        Path image = root.resolve("raw/schedule-import/10001/" + "1".repeat(32) + ".png");
+        Files.createDirectories(image.getParent());
+        Files.write(image, new byte[]{1});
+        Files.setLastModifiedTime(image, FileTime.from(Instant.now().minusSeconds(7200)));
+        when(docMapper.selectList(any())).thenReturn(List.of());
+        var report = service.recover();
+        assertThat(report.removedOrphanRawFiles()).isZero();
+        assertThat(Files.exists(image)).isTrue();
+    }
+
     private static KnowledgeDocEntity pendingDoc() {
         KnowledgeDocEntity doc = new KnowledgeDocEntity();
         doc.setDocId(DOC_ID);

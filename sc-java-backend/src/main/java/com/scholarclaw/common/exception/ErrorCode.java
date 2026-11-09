@@ -68,6 +68,10 @@ public enum ErrorCode {
     SCHEDULE_IMPORT_EXPIRED("SCHEDULE_IMPORT_EXPIRED", HttpStatus.GONE, null,
             "导入任务已过期，请重新导入。"),
 
+    // ---------- 429 Too Many Requests：图片解码容量 ----------
+    SCHEDULE_IMAGE_BUSY("SCHEDULE_IMAGE_BUSY", HttpStatus.TOO_MANY_REQUESTS, null,
+            "图片处理繁忙，请稍后重试。"),
+
     // ---------- 409 Conflict：唯一约束与状态机冲突（04 §2.3.2 第 5 类）----------
     USER_ALREADY_EXISTS("USER_ALREADY_EXISTS", HttpStatus.CONFLICT, null,
             "该用户名已被占用，请更换其他用户名。"),

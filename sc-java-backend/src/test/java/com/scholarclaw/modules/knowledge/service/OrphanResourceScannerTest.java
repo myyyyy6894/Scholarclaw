@@ -73,6 +73,17 @@ class OrphanResourceScannerTest {
         assertThat(Files.exists(deleting)).isTrue();
     }
 
+    @Test
+    void ignoresScheduleImagesEvenWhenOld() throws IOException {
+        Path image = root.resolve("raw/schedule-import/10001/" + "1".repeat(32) + ".png");
+        Files.createDirectories(image.getParent());
+        Files.write(image, new byte[]{1});
+        Files.setLastModifiedTime(image, FileTime.from(Instant.now().minus(Duration.ofDays(2))));
+        var result = scanner.scanOrphanRawFiles(Duration.ofHours(1), 100);
+        assertThat(result.scanned()).isZero();
+        assertThat(Files.exists(image)).isTrue();
+    }
+
     private Path file(Long docId, String extension, Duration age) throws IOException {
         return file(String.valueOf(docId), extension, age);
     }

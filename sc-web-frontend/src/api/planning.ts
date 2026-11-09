@@ -54,3 +54,46 @@ export const saveTaskProfile = (id: BigIntId, body: ProfileWrite): Promise<TaskP
   apiRequest(taskPath(id), { method: 'PUT', body })
 export const deleteTaskProfile = (id: BigIntId, version: number): Promise<null> =>
   apiRequest(`${taskPath(id)}?version=${version}`, { method: 'DELETE' })
+
+export interface StudyPlanBlock {
+  block_id: BigIntId
+  task_id: BigIntId
+  title: string
+  start_at: string
+  end_at: string
+  state: 'PROPOSED' | 'PLANNED' | 'DONE' | 'CANCELED'
+  locked: boolean
+  overdue: boolean
+  version: number
+}
+export interface StudyPlanSummary {
+  plan_id: BigIntId
+  from_date: string
+  to_date: string
+  timezone: string
+  state: 'DRAFT' | 'ACCEPTED' | 'CANCELED'
+  revision: number
+  created_at: string
+}
+export interface StudyPlan extends Omit<StudyPlanSummary, 'created_at'> {
+  stale: boolean
+  warnings: string[]
+  shortages: Array<{ task_id: BigIntId; title: string; missing_minutes: number; reason: string; overdue: boolean }>
+  unavailable_tasks: Array<{ task_id: BigIntId; title: string; reason: string }>
+  blocks: StudyPlanBlock[]
+}
+export interface CreateStudyPlan {
+  from_date: string
+  to_date: string
+  client_request_id: string
+  confirm_no_active_term: boolean
+}
+const planPath = (id: BigIntId) => `/v1/planning/plans/${encodeURIComponent(id)}`
+export const createStudyPlan = (body: CreateStudyPlan): Promise<StudyPlan> =>
+  apiRequest('/v1/planning/plans', { method: 'POST', body })
+export const listStudyPlans = (): Promise<StudyPlanSummary[]> => apiRequest('/v1/planning/plans')
+export const getStudyPlan = (id: BigIntId): Promise<StudyPlan> => apiRequest(planPath(id))
+export const acceptStudyPlan = (id: BigIntId, revision: number, clientRequestId: string, blockIds: BigIntId[]): Promise<StudyPlan> =>
+  apiRequest(`${planPath(id)}/accept`, { method: 'POST', body: { revision, client_request_id: clientRequestId, block_ids: blockIds } })
+export const cancelStudyPlan = (id: BigIntId, revision: number): Promise<null> =>
+  apiRequest(`${planPath(id)}?revision=${revision}`, { method: 'DELETE' })

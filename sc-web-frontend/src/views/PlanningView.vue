@@ -12,12 +12,14 @@ import { getUserConfig } from '@/api/user-config'
 import BaseCard from '@/components/ui/BaseCard.vue'
 import { notifyError, notifySuccess } from '@/utils/notify'
 import { formatLocalMinute, parseLocalMinute, requireOffsetTimestamp } from '@/views/planning/planning-time'
+import StudyPlans from '@/views/planning/StudyPlans.vue'
 
 const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 type WindowForm = { weekday: number | undefined; start: string; end: string }
 const loading = ref(true)
 const loadError = ref('')
 const saving = ref(false)
+const inputRevision = ref(0)
 const preferenceVersion = ref<number | null>(null)
 const preference = reactive({ timezone: '', windows: [] as WindowForm[], focus: null as number | null,
   dailyLimit: null as number | null, buffer: null as number | null })
@@ -77,6 +79,7 @@ async function savePreference(): Promise<void> {
       daily_limit_minutes: requiredNumber(preference.dailyLimit, '每日学习上限'),
       buffer_minutes: requiredNumber(preference.buffer, '缓冲时间'), version: preferenceVersion.value })
     applyPreference(result, preference.timezone)
+    inputRevision.value++
     notifySuccess('学习时间已保存。')
   } catch (error) { notifyError(error) } finally { saving.value = false }
 }
@@ -107,6 +110,7 @@ async function saveEvent(): Promise<void> {
     if (editingEvent.value) await updatePersonalEvent(editingEvent.value.event_id, body)
     else await createPersonalEvent(body)
     events.value = await listPersonalEvents()
+    inputRevision.value++
     eventDialog.value = false
     notifySuccess('日程已保存。')
   } catch (error) { notifyError(error) } finally { saving.value = false }
@@ -118,6 +122,7 @@ async function removeEvent(event: PersonalEvent): Promise<void> {
   try {
     await deletePersonalEvent(event.event_id, event.version)
     events.value = await listPersonalEvents()
+    inputRevision.value++
     notifySuccess('日程已删除。')
   } catch (error) { notifyError(error) } finally { saving.value = false }
 }
@@ -151,6 +156,7 @@ async function saveProfile(): Promise<void> {
     saving.value = true
     await saveTaskProfile(task.task_id, body)
     profiles.value = await listTaskProfiles()
+    inputRevision.value++
     profileDialog.value = false
     notifySuccess('任务工时已保存。')
   } catch (error) { notifyError(error) } finally { saving.value = false }
@@ -164,6 +170,7 @@ async function removeProfile(task: DdlTask): Promise<void> {
   try {
     await deleteTaskProfile(task.task_id, profile.version)
     profiles.value = await listTaskProfiles()
+    inputRevision.value++
     notifySuccess('工时资料已清除。')
   } catch (error) { notifyError(error) } finally { saving.value = false }
 }
@@ -179,6 +186,7 @@ function deadline(task: DdlTask): string {
     <p v-if="loading" class="planning-hint">正在读取规划资料…</p>
     <div v-else-if="loadError" role="alert" class="planning-error">{{ loadError }} <el-button @click="load">重试</el-button></div>
     <template v-else>
+      <StudyPlans :timezone="preference.timezone" :input-revision="inputRevision" />
       <BaseCard title="我的学习时间" subtitle="只在你明确填写的时间内安排学习；免打扰设置不会被当作睡眠。">
         <div class="planning-grid">
           <label>计划时区<el-input v-model="preference.timezone" placeholder="例如 Asia/Shanghai" /></label>

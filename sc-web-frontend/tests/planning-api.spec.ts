@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resetApiClient } from '@/api/client'
-import { deletePersonalEvent, savePlanningPreference, saveTaskProfile } from '@/api/planning'
+import { acceptStudyPlan, createStudyPlan, deletePersonalEvent, savePlanningPreference, saveTaskProfile } from '@/api/planning'
 
 function response(): Response {
   return new Response(JSON.stringify({ code: 'OK', message: 'ok', data: {}, trace_id: 'test', timestamp: '2026-01-01T00:00:00Z' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -32,5 +32,17 @@ describe('时间规划输入 API', () => {
     await deletePersonalEvent('9007199254740994', 5)
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/planning/events/9007199254740994?version=5')
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe('DELETE')
+  })
+
+  it('生成及部分采纳携带稳定请求标识、版本和字符串时间块 ID', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(response()))
+    vi.stubGlobal('fetch', fetchMock)
+    await createStudyPlan({ from_date: '2026-11-10', to_date: '2026-11-16', client_request_id: 'generate-1', confirm_no_active_term: true })
+    const createBody = (fetchMock.mock.calls[0]?.[1] as RequestInit).body
+    expect(JSON.parse(typeof createBody === 'string' ? createBody : '{}')).toMatchObject({ client_request_id: 'generate-1', confirm_no_active_term: true })
+    await acceptStudyPlan('9007199254740993', 7, 'accept-1', ['9007199254740994'])
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/planning/plans/9007199254740993/accept')
+    const acceptBody = (fetchMock.mock.calls[1]?.[1] as RequestInit).body
+    expect(JSON.parse(typeof acceptBody === 'string' ? acceptBody : '{}')).toEqual({ revision: 7, client_request_id: 'accept-1', block_ids: ['9007199254740994'] })
   })
 })

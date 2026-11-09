@@ -313,6 +313,8 @@ public class DdlExtractionService {
             return replayed;
         }
 
+        // 与规划采纳及建课一致，先用户、再课程、最后任务，避免新任务插入穿过规划快照。
+        userConfigResolver.lockActiveForDecision(userId);
         // 锁序必须是“先课程、后任务”：课程删除事务先锁课程行再解绑任务行，
         // 若这里先锁目标任务行再锁课程行，会形成反向锁序（MySQL 死锁/500）。
         // 草案本身存放在 Redis，读取它不需要数据库行锁。

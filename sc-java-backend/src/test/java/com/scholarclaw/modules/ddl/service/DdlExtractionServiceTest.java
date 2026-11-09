@@ -509,6 +509,10 @@ class DdlExtractionServiceTest {
         assertThat(result.taskId()).isEqualTo(TASK_ID);
         verify(taskService).createFromDraft(USER_ID, draft, "req_decide_002");
         verify(draftStore).deleteDraftAfterCommitStrict(USER_ID, TASK_ID);
+        var locks = inOrder(userConfigResolver, mapper, taskService);
+        locks.verify(userConfigResolver).lockActiveForDecision(USER_ID);
+        locks.verify(mapper).selectByIdForUpdate(TASK_ID, USER_ID);
+        locks.verify(taskService).createFromDraft(USER_ID, draft, "req_decide_002");
     }
 
     @Test

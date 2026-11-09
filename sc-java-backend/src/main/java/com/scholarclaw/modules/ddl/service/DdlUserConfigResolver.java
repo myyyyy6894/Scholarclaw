@@ -45,6 +45,12 @@ public class DdlUserConfigResolver {
         return new ResolvedUser(config, timezoneName, timeRuleValidator.resolveUserZone(timezoneName));
     }
 
+    /** 草案决策可能新建任务，必须在课程和任务行锁之前持有用户锁。 */
+    public void lockActiveForDecision(Long userId) {
+        UserConfigEntity config = userConfigService.lockForUpdate(userId);
+        if (!"ACTIVE".equals(config.getAccountStatus())) throw new BusinessException(ErrorCode.ACCOUNT_DEACTIVATED);
+    }
+
     public ModelEndpoint resolveChatEndpoint(UserConfigEntity config) {
         if (!modelConfigRules.isChatConfigValid(config)) {
             throw new BusinessException(ErrorCode.E_SYS_01,

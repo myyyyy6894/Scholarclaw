@@ -68,6 +68,7 @@ class DdlTaskServiceTest {
         service = new DdlTaskService(mapper, courseService, userConfigService,
                 new DdlTimeRuleValidator(), draftStore, mock(org.springframework.context.ApplicationEventPublisher.class));
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(userConfig("Asia/Shanghai")));
+        when(userConfigService.lockForUpdate(USER_ID)).thenReturn(userConfig("Asia/Shanghai"));
         when(draftStore.listDrafts(USER_ID)).thenReturn(List.of());
         doAnswer(invocation -> {
             DdlTaskEntity entity = invocation.getArgument(0);

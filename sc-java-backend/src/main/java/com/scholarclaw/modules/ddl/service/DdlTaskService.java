@@ -113,6 +113,7 @@ public class DdlTaskService {
             return new DdlTaskCreationResult(toVO(replayedTask, replayUser.zoneId()), false);
         }
 
+        lockActiveUserForPlanningMutation(userId);
         UserContext user = resolveUserContext(userId);
         CourseRef course = resolveCourse(userId, request.courseId(), request.courseName(), true);
         LocalDateTime now = ScTimeZone.now().toLocalDateTime();
@@ -640,6 +641,7 @@ public class DdlTaskService {
      */
     @Transactional(rollbackFor = Exception.class)
     public DdlTaskVO setCompletion(Long userId, Long taskId, boolean completed) {
+        if (!completed) lockActiveUserForPlanningMutation(userId);
         UserContext user = resolveUserContext(userId);
         DdlTaskEntity entity = lockOwnedTask(userId, taskId);
         LocalDateTime now = ScTimeZone.now().toLocalDateTime();
@@ -673,6 +675,7 @@ public class DdlTaskService {
      */
     @Transactional(rollbackFor = Exception.class)
     public List<DdlTaskVO> setCompletionBatch(Long userId, List<Long> taskIds, boolean completed) {
+        if (!completed) lockActiveUserForPlanningMutation(userId);
         UserContext user = resolveUserContext(userId);
         List<Long> ids = requireDistinctTaskIds(taskIds);
         if (ids.isEmpty()) {
@@ -875,6 +878,7 @@ public class DdlTaskService {
      */
     @Transactional(rollbackFor = Exception.class)
     public DdlTaskCreationResult createExtractedTask(DdlTaskEntity entity) {
+        lockActiveUserForPlanningMutation(entity.getUserId());
         // 建单事务内重新锁定课程行：提取阶段解析课程发生在事务外，期间课程可能已被删除。
         // 课程已删除时按 PO-05 解绑为 NULL，保留 course_name，不得写回已删除的 course_id。
         if (entity.getCourseId() != null) {
@@ -964,6 +968,7 @@ public class DdlTaskService {
     public DdlTaskCreationResult createFromDraft(Long userId, DdlTaskDraft draft,
                                                  String clientRequestIdRaw) {
         String clientRequestId = requireClientRequestId(clientRequestIdRaw);
+        lockActiveUserForPlanningMutation(userId);
         UserContext user = resolveUserContext(userId);
         String idempotencyKey = DdlIdempotencyKey.forWebRequest(userId, clientRequestId);
         String requestFingerprint = DdlRequestFingerprint.forDraftCreateNew(draft);
@@ -1248,6 +1253,12 @@ public class DdlTaskService {
         }
         String timezoneName = timeRuleValidator.normalizeUserTimezone(config.getTimezone());
         return new UserContext(timezoneName, timeRuleValidator.resolveUserZone(timezoneName));
+    }
+
+    /** 建单/恢复完成与规划采纳共享用户锁，避免任务集合在快照复验之后变化。 */
+    private void lockActiveUserForPlanningMutation(Long userId) {
+        UserConfigEntity user = userConfigService.lockForUpdate(userId);
+        if (!"ACTIVE".equals(user.getAccountStatus())) throw new BusinessException(ErrorCode.ACCOUNT_DEACTIVATED);
     }
 
     private CourseRef resolveCourse(Long userId, String courseIdRaw, String courseNameRaw,

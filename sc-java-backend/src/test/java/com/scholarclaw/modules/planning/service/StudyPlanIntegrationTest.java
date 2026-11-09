@@ -32,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -232,6 +233,74 @@ class StudyPlanIntegrationTest {
         var current = plans.get(owner, Long.parseLong(draft.planId()));
         assertThat(current.stale()).isTrue();
         assertThat(current.blocks()).noneMatch(block -> block.state().equals("PLANNED"));
+    }
+
+    @Test
+    void acceptanceWaitsForConcurrentTaskCreationAndRejectsChangedSnapshot() throws Exception {
+        long owner = user(); setup(owner);
+        var draft = plans.create(owner, new CreatePlan(tomorrow(), tomorrow(), "create-race-plan", true));
+        CountDownLatch inserted = new CountDownLatch(1), allowCommit = new CountDownLatch(1), accepting = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var create = pool.submit(() -> new TransactionTemplate(transactionManager).execute(status -> {
+                ddl.createManualTask(owner, new CreateDdlTaskRequest("concurrent-create-" + UUID.randomUUID(), null,
+                        "测试课程", "新任务", "DATE_ONLY", tomorrow().plusDays(3).toString(), null, null, null));
+                inserted.countDown();
+                try { if (!allowCommit.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("超时"); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                return null;
+            }));
+            assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
+            var accept = pool.submit(() -> {
+                accepting.countDown();
+                try {
+                    plans.accept(owner, Long.parseLong(draft.planId()), new AcceptPlan(draft.revision(), "create-race-accept",
+                            draft.blocks().stream().map(BlockView::blockId).toList()));
+                    return "accepted";
+                } catch (BusinessException e) { return e.getErrorCode().name(); }
+            });
+            assertThat(accepting.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> accept.get(500, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            allowCommit.countDown();
+            create.get(10, TimeUnit.SECONDS);
+            assertThat(accept.get(10, TimeUnit.SECONDS)).isEqualTo(ErrorCode.STATE_CONFLICT.name());
+        }
+        var current = plans.get(owner, Long.parseLong(draft.planId()));
+        assertThat(current.stale()).isTrue();
+        assertThat(current.blocks()).noneMatch(block -> block.state().equals("PLANNED"));
+    }
+
+    @Test
+    void acceptanceWaitsForReopenedTaskAndRejectsChangedSnapshot() throws Exception {
+        long owner = user(); setup(owner);
+        var extra = ddl.createManualTask(owner, new CreateDdlTaskRequest("reopen-" + UUID.randomUUID(), null,
+                "测试课程", "已完成任务", "DATE_ONLY", tomorrow().plusDays(3).toString(), null, null, null)).task();
+        ddl.setCompletion(owner, extra.taskId(), true);
+        var draft = plans.create(owner, new CreatePlan(tomorrow(), tomorrow(), "reopen-race-plan", true));
+        CountDownLatch reopened = new CountDownLatch(1), allowCommit = new CountDownLatch(1), accepting = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var reopen = pool.submit(() -> new TransactionTemplate(transactionManager).execute(status -> {
+                ddl.setCompletion(owner, extra.taskId(), false);
+                reopened.countDown();
+                try { if (!allowCommit.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("超时"); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                return null;
+            }));
+            assertThat(reopened.await(10, TimeUnit.SECONDS)).isTrue();
+            var accept = pool.submit(() -> {
+                accepting.countDown();
+                try {
+                    plans.accept(owner, Long.parseLong(draft.planId()), new AcceptPlan(draft.revision(), "reopen-race-accept",
+                            draft.blocks().stream().map(BlockView::blockId).toList()));
+                    return "accepted";
+                } catch (BusinessException e) { return e.getErrorCode().name(); }
+            });
+            assertThat(accepting.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> accept.get(500, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            allowCommit.countDown();
+            reopen.get(10, TimeUnit.SECONDS);
+            assertThat(accept.get(10, TimeUnit.SECONDS)).isEqualTo(ErrorCode.STATE_CONFLICT.name());
+        }
+        assertThat(plans.get(owner, Long.parseLong(draft.planId())).stale()).isTrue();
     }
 
     @Test

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.probe import ModelEndpointPayload
+
 
 class ScheduleTextExtractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -39,3 +41,14 @@ class ScheduleSuggestion(BaseModel):
 
 class ScheduleTextExtractData(BaseModel):
     rows: list[ScheduleSuggestion]
+
+
+class ScheduleImageExtractRequest(BaseModel):
+    """Java-owned, sanitized image identifier; never an arbitrary path or URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str = Field(pattern=r"^[0-9]{1,19}$")
+    source_name: str = Field(pattern=r"^[0-9a-f]{32}\.(png|jpg)$")
+    week_count: int = Field(strict=True, ge=1, le=53)
+    chat_config: ModelEndpointPayload

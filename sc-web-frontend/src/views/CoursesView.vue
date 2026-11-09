@@ -308,28 +308,14 @@ function toneFor(index: number): (typeof TONES)[number] {
     </div>
 
     <aside class="courses-rail">
-      <BaseCard title="课程日历" subtitle="学期视图">
-        <template #actions>
-          <ComingSoonBadge compact />
-        </template>
+      <BaseCard title="我的课表" subtitle="教学周与上课安排">
         <div class="rail-placeholder">
           <span class="rail-placeholder__art">
             <img src="/illustrations/status-schedule.png" alt="" loading="lazy" />
           </span>
-          <p>课程日历功能暂未开发；后端暂无学期与课表数据。</p>
+          <p>按学期查看本周课程，也可以记录停课和调课。</p>
+          <router-link :to="{ name: 'schedule' }">查看课表</router-link>
         </div>
-      </BaseCard>
-
-      <BaseCard title="本周课程">
-        <template #actions>
-          <ComingSoonBadge compact />
-        </template>
-        <EmptyState
-          image="/illustrations/status-schedule.png"
-          title="课表功能暂未开发"
-          description="接入后这里会显示本周课程与上课时间。"
-          compact
-        />
       </BaseCard>
 
       <BaseCard title="课程快捷操作">

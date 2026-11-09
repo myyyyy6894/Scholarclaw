@@ -10,8 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.scholarclaw.modules.auth.jwt.JwtService;
 import com.scholarclaw.modules.auth.service.TokenRevocationService;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
+import com.scholarclaw.support.IsolatedMysqlTestSupport;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
-import java.sql.DriverManager;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -42,26 +42,9 @@ import org.springframework.test.web.servlet.MockMvc;
         "sc.dependencies.redis.pool-probe=false"
 })
 class QqBotBindingIntegrationTest {
-    private static final String URL = "jdbc:mysql://127.0.0.1:13306/scholarclaw_unit_test"
-            + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai";
-
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) throws Exception {
-        String expected = System.getProperty("sc.qq.test-datadir", "");
-        if (!expected.startsWith("/tmp/scholarclaw-test-mysql.") || !expected.endsWith("/")) {
-            throw new IllegalStateException("Explicit temporary MySQL datadir required");
-        }
-        try (var connection = DriverManager.getConnection(URL, "scholarclaw", "temporary-test-only");
-             var statement = connection.createStatement();
-             var result = statement.executeQuery("SELECT @@datadir, DATABASE()")) {
-            if (!result.next() || !expected.equals(result.getString(1))
-                    || !"scholarclaw_unit_test".equals(result.getString(2))) {
-                throw new IllegalStateException("Refusing to run against non-test database");
-            }
-        }
-        registry.add("spring.datasource.url", () -> URL);
-        registry.add("spring.datasource.username", () -> "scholarclaw");
-        registry.add("spring.datasource.password", () -> "temporary-test-only");
+        IsolatedMysqlTestSupport.register(registry);
     }
 
     @Autowired UserConfigService configs;

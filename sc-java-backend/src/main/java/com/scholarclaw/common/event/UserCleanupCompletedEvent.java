@@ -18,6 +18,7 @@ public record UserCleanupCompletedEvent(Long userId, Module module) {
         KNOWLEDGE,
         DDL,
         AGENT,
-        NOTIFICATION
+        NOTIFICATION,
+        SCHEDULE
     }
 }

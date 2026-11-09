@@ -49,6 +49,11 @@ INDEXES = {
                              "idx_schedule_exception_user_term": (1, "user_id,term_id,target_date")},
 }
 CHECKS = {"chk_schedule_term", "chk_schedule_period", "chk_schedule_rule", "chk_schedule_exception"}
+DEFAULTS = {("t_schedule_term", "is_active"): "0", ("t_schedule_term", "version"): "1",
+            ("t_schedule_term", "schedule_version"): "1", ("t_schedule_rule", "version"): "1",
+            ("t_schedule_exception", "version"): "1"}
+AUTO_IDS = {("t_schedule_term", "term_id"), ("t_schedule_rule", "rule_id"),
+            ("t_schedule_exception", "exception_id")}
 
 
 def main() -> int:
@@ -70,15 +75,20 @@ def main() -> int:
     names = ",".join("'" + table + "'" for table in COLUMNS)
     problems: list[str] = []
     try:
-        columns = rows("SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,EXTRA "
+        columns = rows("SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,EXTRA,"
+                       "COALESCE(COLUMN_DEFAULT,'<NULL>') "
                        "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (" + names + ")")
         observed: dict[str, dict[str, str]] = {table: {} for table in COLUMNS}
-        for table, column, column_type, nullable, extra in columns:
+        for table, column, column_type, nullable, extra, default in columns:
             observed[table][column] = column_type
             if (nullable == "YES") != (column in NULLABLE[table]):
                 problems.append(f"{table}.{column} 可空性不匹配")
             if column == "active_user_id" and "STORED GENERATED" not in extra.upper():
                 problems.append("active_user_id 应为 STORED GENERATED")
+            if (table, column) in AUTO_IDS and "auto_increment" not in extra.lower():
+                problems.append(f"{table}.{column} 应为 AUTO_INCREMENT")
+            if default != DEFAULTS.get((table, column), "<NULL>"):
+                problems.append(f"{table}.{column} 默认值不匹配")
         for table, expected in COLUMNS.items():
             if observed[table] != expected:
                 problems.append(f"{table} 字段/类型不匹配：实际={observed[table]} 预期={expected}")

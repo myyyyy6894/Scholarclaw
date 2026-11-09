@@ -10,10 +10,13 @@ import { listNotifications } from '@/api/notifications'
 import type { NotificationItem } from '@/api/notifications'
 import { listMessages } from '@/api/rag'
 import type { ChatMessage } from '@/api/rag'
+import { listOccurrences, listScheduleTerms } from '@/api/schedule'
+import type { ScheduleOccurrence, ScheduleTerm } from '@/api/schedule'
 import { getUserConfig } from '@/api/user-config'
 import { useAuthStore } from '@/stores/auth'
 import { useCourseStore } from '@/stores/course'
 import { useUiStore } from '@/stores/ui'
+import { todayInZone } from '@/views/schedule/schedule-date'
 import {
   DEFAULT_TIMEZONE,
   errorMessage,
@@ -86,6 +89,10 @@ export function useHomeData() {
     error: '',
   })
   const selectedCourse = ref<CourseNamespace | null>(null)
+  const scheduleState = ref<ModuleState<ScheduleOccurrence[]>>({ status: 'loading', data: [], error: '' })
+  const scheduleTerm = ref<ScheduleTerm | null>(null)
+  const scheduleDate = ref('')
+  let scheduleGeneration = 0
   const timezone = ref(DEFAULT_TIMEZONE)
   const unreadCount = ref(0)
   const nowMs = ref(Date.now())
@@ -161,6 +168,35 @@ export function useHomeData() {
       timezone.value = config.timezone === '' ? DEFAULT_TIMEZONE : config.timezone
     } catch {
       timezone.value = DEFAULT_TIMEZONE
+    }
+  }
+
+  async function loadTodaySchedule(): Promise<void> {
+    const request = ++scheduleGeneration
+    if (!auth.isAuthenticated) {
+      scheduleState.value = { status: 'empty', data: [], error: '' }
+      scheduleTerm.value = null
+      scheduleDate.value = ''
+      return
+    }
+    scheduleState.value = { status: 'loading', data: [], error: '' }
+    try {
+      const active = (await listScheduleTerms()).find((item) => item.active) ?? null
+      if (request !== scheduleGeneration) return
+      scheduleTerm.value = active
+      if (!active) {
+        scheduleDate.value = ''
+        scheduleState.value = { status: 'empty', data: [], error: '' }
+        return
+      }
+      const date = todayInZone(active.timezone)
+      const result = await listOccurrences(active.term_id, date, date)
+      if (request !== scheduleGeneration) return
+      scheduleDate.value = date
+      scheduleState.value = { status: result.occurrences.length ? 'ready' : 'empty', data: result.occurrences, error: '' }
+    } catch (error) {
+      if (request !== scheduleGeneration) return
+      scheduleState.value = { status: 'error', data: [], error: errorMessage(error, '今日课程读取失败。') }
     }
   }
 
@@ -297,6 +333,7 @@ export function useHomeData() {
       loadCourses(),
       loadBoard(),
       loadNotifications(),
+      loadTodaySchedule(),
     ])
   }
 
@@ -308,6 +345,9 @@ export function useHomeData() {
     void refreshAll()
     clockTimer = setInterval(() => {
       nowMs.value = Date.now()
+      if (scheduleTerm.value && todayInZone(scheduleTerm.value.timezone) !== scheduleDate.value) {
+        void loadTodaySchedule()
+      }
     }, MINUTE_MS)
   })
 
@@ -320,6 +360,9 @@ export function useHomeData() {
 
   return {
     coursesState,
+    scheduleState,
+    scheduleTerm,
+    scheduleDate,
     boardState,
     todayTasksState,
     noticesState,
@@ -336,6 +379,7 @@ export function useHomeData() {
     unreadCount,
     refreshAll,
     retryCourses: loadCourses,
+    retrySchedule: loadTodaySchedule,
     retryBoard: loadBoard,
     retryNotifications: loadNotifications,
     retryContent,

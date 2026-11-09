@@ -13,6 +13,7 @@ import NoticeList from '@/components/home/NoticeList.vue'
 import RecentChats from '@/components/home/RecentChats.vue'
 import RecentDocs from '@/components/home/RecentDocs.vue'
 import TodayTasks from '@/components/home/TodayTasks.vue'
+import TodaySchedule from '@/components/home/TodaySchedule.vue'
 import QuickActionCard from '@/components/ui/QuickActionCard.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -81,6 +82,9 @@ const router = useRouter()
 
 const {
   coursesState,
+  scheduleState,
+  scheduleTerm,
+  scheduleDate,
   boardState,
   todayTasksState,
   noticesState,
@@ -95,6 +99,7 @@ const {
   nowMs,
   unreadCount,
   retryCourses,
+  retrySchedule,
   retryBoard,
   retryNotifications,
   retryContent,
@@ -177,6 +182,9 @@ async function openNotice(item: NotificationItem): Promise<void> {
           :tone="action.tone"
         />
       </section>
+
+      <TodaySchedule :state="scheduleState" :term="scheduleTerm" :date="scheduleDate"
+        :now-ms="nowMs" :authenticated="authenticated" @retry="retrySchedule" />
 
       <div class="home__grid">
         <TodayTasks

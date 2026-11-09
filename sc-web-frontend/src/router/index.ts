@@ -10,6 +10,7 @@ import KnowledgeView from '@/views/KnowledgeView.vue'
 import LoginView from '@/views/LoginView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
 import RagView from '@/views/RagView.vue'
+import ScheduleView from '@/views/ScheduleView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 
 /**
@@ -66,6 +67,12 @@ const routes: RouteRecordRaw[] = [
         name: 'ddl',
         component: DdlView,
         meta: { title: 'DDL 待办', requiresAuth: true },
+      },
+      {
+        path: 'schedule',
+        name: 'schedule',
+        component: ScheduleView,
+        meta: { title: '我的课表', requiresAuth: true },
       },
       {
         path: 'settings',

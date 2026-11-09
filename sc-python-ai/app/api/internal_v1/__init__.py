@@ -18,6 +18,7 @@ from app.api.internal_v1 import (
     endpoints_health,
     endpoints_probe,
     endpoints_rag,
+    endpoints_schedule,
 )
 
 INTERNAL_API_PREFIX = "/internal/ai/v1"
@@ -27,5 +28,6 @@ internal_v1_router.include_router(endpoints_health.router)
 internal_v1_router.include_router(endpoints_probe.router)
 internal_v1_router.include_router(endpoints_agent.router)
 internal_v1_router.include_router(endpoints_rag.router)
+internal_v1_router.include_router(endpoints_schedule.router)
 
 __all__ = ["INTERNAL_API_PREFIX", "internal_v1_router"]

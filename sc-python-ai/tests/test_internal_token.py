@@ -77,6 +77,7 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
     TASK-604 新增 `POST /rag/qa-stream`；TASK-701 新增
     `POST /agent/route-and-extract`（仅 FORCE_DDL_EXTRACT）；P9 复核新增
     `GET /rag/collections`（ChromaDB 孤儿对账，只读）。均为跨容器调用，
+    课表文字建议 `/schedule/extract-text` 同样必须携带令牌和用户身份。
     必须携带 `X-Internal-Token`。
     """
     from app.main import create_app
@@ -87,7 +88,8 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
     assert paths == {HEALTH_PATH, "/internal/ai/v1/model/probe",
                      "/internal/ai/v1/rag/vectors", "/internal/ai/v1/rag/collections",
                      "/internal/ai/v1/rag/qa-stream",
-                     "/internal/ai/v1/agent/route-and-extract"}
+                     "/internal/ai/v1/agent/route-and-extract",
+                     "/internal/ai/v1/schedule/extract-text"}
 
 
 def test_user_id_header_is_ignored_when_token_invalid(remote_client: TestClient) -> None:

@@ -90,6 +90,13 @@ export interface ModelConfigUpdateRequest {
   /** 已有课程存在且 Embedding 目标变化时必须为 true：后端会同步迁移课程并重建索引。 */
   migrate_existing_courses?: boolean
 }
+export interface ChatModelUpdateRequest {
+  chat_provider: ChatProvider
+  chat_base_url: string
+  chat_api_key?: string
+  chat_model: string
+  confirm_probe: true
+}
 
 export interface PreferencesUpdateRequest {
   timezone: string
@@ -113,6 +120,11 @@ export function probeModel(request: ModelProbeRequest): Promise<ModelProbeResult
 
 export function saveModelConfig(request: ModelConfigUpdateRequest): Promise<UserConfig> {
   return apiRequest<UserConfig>('/v1/user/model-config', { method: 'PUT', body: request })
+}
+
+/** 单独配置对话模型，避免课表等功能依赖 Embedding。 */
+export function saveChatModelConfig(request: ChatModelUpdateRequest): Promise<UserConfig> {
+  return apiRequest<UserConfig>('/v1/user/model-config/chat', { method: 'PUT', body: request })
 }
 
 export function updatePreferences(request: PreferencesUpdateRequest): Promise<UserConfig> {

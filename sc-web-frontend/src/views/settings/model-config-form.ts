@@ -1,5 +1,6 @@
 import type {
   ChatProvider,
+  ChatModelUpdateRequest,
   EmbeddingProvider,
   ModelConfigUpdateRequest,
   ModelProbeRequest,
@@ -150,6 +151,18 @@ export function toSaveRequest(
   if (!form.reuseChatApiKey && embeddingKey !== undefined) {
     request.embedding_api_key = embeddingKey
   }
+  return request
+}
+
+export function toChatSaveRequest(form: ModelConfigFormState): ChatModelUpdateRequest {
+  const request: ChatModelUpdateRequest = {
+    chat_provider: form.chatProvider,
+    chat_base_url: form.chatBaseUrl.trim(),
+    chat_model: form.chatModel.trim(),
+    confirm_probe: true,
+  }
+  const key = normalizeSecret(form.chatApiKey)
+  if (key !== undefined) request.chat_api_key = key
   return request
 }
 

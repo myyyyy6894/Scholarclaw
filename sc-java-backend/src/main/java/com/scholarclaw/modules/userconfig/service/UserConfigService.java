@@ -181,6 +181,22 @@ public class UserConfigService {
                 ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
     }
 
+    /** 独立更新对话模型，绝不修改已有向量模型及其密钥。 */
+    @Transactional(rollbackFor = Exception.class)
+    public UserConfigEntity updateChatModelConfig(Long userId, ChatModelUpdate update) {
+        var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
+                .eq(UserConfigEntity::getUserId, userId)
+                .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
+                .set(UserConfigEntity::getChatProvider, update.provider())
+                .set(UserConfigEntity::getChatBaseUrl, update.baseUrl())
+                .set(UserConfigEntity::getChatModel, update.model())
+                .set(UserConfigEntity::getKeyVersion, "v1")
+                .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime())
+                .set(update.apiKeyCipher() != null, UserConfigEntity::getChatApiKeyCipher, update.apiKeyCipher());
+        requireUpdated(userConfigMapper.update(null, wrapper));
+        return findById(userId).orElseThrow(() -> new BusinessException(ErrorCode.AUTH_UNAUTHORIZED));
+    }
+
     /** 更新组 B 的偏好列（时区/免打扰/IM 绑定），同样不碰组 A。 */
     @Transactional(rollbackFor = Exception.class)
     public UserConfigEntity updatePreferences(Long userId, String timezone, java.time.LocalTime dndStart,
@@ -234,6 +250,7 @@ public class UserConfigService {
                                   String chatApiKeyCipher, String embeddingProvider, String embeddingBaseUrl,
                                   String embeddingModel, Integer embeddingDim, String embeddingApiKeyCipher) {
     }
+    public record ChatModelUpdate(String provider, String baseUrl, String model, String apiKeyCipher) { }
 
     // ------------------------------------------------------------------
     // QQ 官方机器人（用户自带 Bot）：凭据、状态与 openid 绑定

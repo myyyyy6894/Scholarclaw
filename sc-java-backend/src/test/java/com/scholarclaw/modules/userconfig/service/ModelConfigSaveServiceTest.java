@@ -76,6 +76,21 @@ class ModelConfigSaveServiceTest {
     }
 
     @Test
+    void chatOnlySaveRejectsStaleConfigAndDoesNotMigrateCourses() {
+        var update = new UserConfigService.ChatModelUpdate("DEEPSEEK", "https://example.com/v1", "vision", "cipher");
+        var snapshot = ModelConfigSaveService.ChatSnapshot.of(locked("embed"));
+        var sameMillisecondChanged = new ModelConfigSaveService.ChatSnapshot("OTHER", null, null, null, UPDATED_AT);
+        assertThatThrownBy(() -> service.saveChat(USER_ID, update, sameMillisecondChanged))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo(ErrorCode.STATE_CONFLICT));
+        verify(userConfigService, never()).updateChatModelConfig(any(), any());
+        UserConfigEntity updated = new UserConfigEntity();
+        when(userConfigService.updateChatModelConfig(USER_ID, update)).thenReturn(updated);
+        assertThat(service.saveChat(USER_ID, update, snapshot)).isSameAs(updated);
+        verify(migrationPort, never()).migrateExistingCourses(any(), any(), any(), anyInt());
+    }
+
+    @Test
     @DisplayName("目标未变化时不做迁移")
     void doesNotMigrateWhenTargetUnchanged() {
         when(countProvider.countActiveCourses(USER_ID)).thenReturn(2);

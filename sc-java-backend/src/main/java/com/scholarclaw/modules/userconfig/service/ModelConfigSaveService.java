@@ -62,6 +62,25 @@ public class ModelConfigSaveService {
         return updated;
     }
 
+    /** 只更新对话模型；锁内复核探测前快照，不影响向量模型或已有课程。 */
+    @Transactional(rollbackFor = Exception.class)
+    public UserConfigEntity saveChat(Long userId, UserConfigService.ChatModelUpdate update,
+                                     ChatSnapshot expected) {
+        UserConfigEntity locked = userConfigService.lockForUpdate(userId);
+        if (expected == null || !expected.equals(ChatSnapshot.of(locked))) {
+            throw new BusinessException(ErrorCode.STATE_CONFLICT, "模型配置已在其他会话中变更，请重新探测后再保存。");
+        }
+        return userConfigService.updateChatModelConfig(userId, update);
+    }
+
+    /** 包含配置与密文：即使两个写入落在同一毫秒，也不能覆盖并发更新。 */
+    public record ChatSnapshot(String provider, String baseUrl, String model, String keyCipher, LocalDateTime updatedAt) {
+        public static ChatSnapshot of(UserConfigEntity entity) {
+            return new ChatSnapshot(entity.getChatProvider(), entity.getChatBaseUrl(), entity.getChatModel(),
+                    entity.getChatApiKeyCipher(), entity.getUpdatedAt());
+        }
+    }
+
     private static boolean embeddingTargetChanged(UserConfigEntity locked,
                                                   UserConfigService.ByokModelUpdate update) {
         return !equalsTrimmed(locked.getDefaultEmbeddingProvider(), update.embeddingProvider())

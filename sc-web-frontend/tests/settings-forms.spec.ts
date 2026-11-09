@@ -10,6 +10,7 @@ import {
   ModelFormValidationError,
   embeddingTargetChanged,
   toProbeRequest,
+  toChatSaveRequest,
   toSaveRequest,
   validateModelForm,
   validateProbeSection,
@@ -52,6 +53,15 @@ const CONFIG: UserConfig = {
 }
 
 describe('model config form', () => {
+  it('只保存对话模型无需 Embedding，并省略未填写的密钥', () => {
+    const form = createModelForm(null)
+    form.chatProvider = 'DEEPSEEK'
+    form.chatBaseUrl = ' https://example.com/v1 '
+    form.chatModel = ' vision '
+    expect(() => validateProbeSection(form, 'CHAT')).not.toThrow()
+    expect(toChatSaveRequest(form)).toEqual({ chat_provider: 'DEEPSEEK', chat_base_url: 'https://example.com/v1',
+      chat_model: 'vision', confirm_probe: true })
+  })
   it('从服务端配置初始化表单，但绝不回填明文 Key', () => {
     const form = createModelForm(CONFIG)
 

@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.client.PythonAiEngineClient;
+import com.scholarclaw.common.client.ModelProbeType;
 import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
@@ -116,6 +117,29 @@ class ScheduleImageImportIntegrationTest {
                 .andExpect(status().isOk()).andExpect(content().contentTypeCompatibleWith(MediaType.IMAGE_PNG))
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"));
+    }
+
+    @Test
+    void userCanConfigureChatAndImportImageWithoutEmbedding() throws Exception {
+        UserConfigEntity owner = users.createUserAccount("chat_only_" + System.nanoTime(), "hash", "Asia/Shanghai");
+        long user = owner.getUserId();
+        when(revocations.check(anyLong(), any())).thenReturn(new TokenRevocationService.TokenStatus(false, false));
+        when(python.probeModel(eq(user), eq(ModelProbeType.CHAT), any(), isNull()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(true, false, null, 5));
+        String token = jwt.issue(user, owner.getUsername(), "STUDENT").token();
+        mvc.perform(put("/api/v1/user/model-config/chat").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"chat_provider":"DEEPSEEK","chat_base_url":"https://vision.example.com/v1",
+                                 "chat_model":"vision-model","chat_api_key":"synthetic-key","confirm_probe":true}
+                                """))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.has_byok_config").value(true));
+        UserConfigEntity updated = users.findById(user).orElseThrow();
+        assertThat(updated.getDefaultEmbeddingProvider()).isNull();
+        assertThat(updated.getEmbeddingApiKeyCipher()).isNull();
+        TermView term = term(user);
+        ImportView created = create(user, term, "chat-only");
+        assertThat(created.sourceType()).isEqualTo("IMAGE");
+        verify(python).probeModel(eq(user), eq(ModelProbeType.CHAT), any(), isNull());
     }
 
     @Test

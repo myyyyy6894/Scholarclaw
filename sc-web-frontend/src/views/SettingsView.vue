@@ -13,6 +13,7 @@ import {
   disconnectQqBot,
   getUserConfig,
   probeModel,
+  saveChatModelConfig,
   saveModelConfig,
   updatePreferences,
 } from '@/api/user-config'
@@ -35,6 +36,7 @@ import {
   keyStatusLabel,
   ModelFormValidationError,
   toProbeRequest,
+  toChatSaveRequest,
   toSaveRequest,
   validateModelForm,
   validateProbeSection,
@@ -267,6 +269,30 @@ function onSaveModel(): void {
   void saveModel()
 }
 
+async function saveChatModel(): Promise<void> {
+  if (savingModel.value) return
+  try { validateProbeSection(modelForm.value, 'CHAT') }
+  catch (error) {
+    if (error instanceof ModelFormValidationError) { notifyWarning(error.message); return }
+    throw error
+  }
+  savingModel.value = true
+  try {
+    const request = toChatSaveRequest(modelForm.value)
+    try {
+      await ElMessageBox.confirm('保存前会向所选服务发送一次对话模型连通性测试，服务商可能收取费用。确定继续吗？',
+        '确认测试对话模型', { type: 'warning', confirmButtonText: '测试并保存', cancelButtonText: '取消' })
+    } catch { return }
+    const updated = await saveChatModelConfig(request)
+    applyConfig(updated, { resetSecrets: false })
+    modelForm.value.chatApiKey = ''
+    chatProbe.value = null
+    savedHint.value = '对话模型已保存'
+    notifySuccess('对话模型已保存。')
+  } catch (error) { notifyError(error) }
+  finally { savingModel.value = false }
+}
+
 async function saveModel(): Promise<void> {
   if (savingModel.value) {
     return
@@ -489,7 +515,7 @@ function goToLogin(): void {
           :description="`当前默认向量维度：${config?.default_embedding_dim ?? '未探测'}`"
         />
 
-        <el-form label-position="top" autocomplete="off">
+        <el-form label-position="top" autocomplete="off" :disabled="savingModel">
           <el-divider content-position="left">对话模型</el-divider>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="8">
@@ -543,6 +569,7 @@ function goToLogin(): void {
           </el-row>
           <div class="sc-settings__row">
             <el-button :loading="probingChat" @click="onProbe('CHAT')">测试对话模型</el-button>
+            <el-button :loading="savingModel" @click="saveChatModel">仅保存对话模型</el-button>
             <el-tag v-if="chatProbe !== null" type="success">
               延迟 {{ chatProbe.latency_ms }} ms
             </el-tag>
@@ -550,6 +577,7 @@ function goToLogin(): void {
               当前已保存：{{ keyStatusLabel(modelForm.hasSavedChatKey, modelForm.chatKeyMasked) }}
             </span>
           </div>
+          <p class="sc-settings__hint">只使用课表图片识别时，可单独保存对话模型，无需配置 Embedding。</p>
 
           <el-divider content-position="left">
             {{ platformEmbedding ? '默认 Embedding 模型（平台默认）' : '默认 Embedding 模型' }}

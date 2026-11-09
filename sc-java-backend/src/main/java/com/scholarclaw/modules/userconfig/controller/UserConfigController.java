@@ -10,6 +10,7 @@ import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.common.security.BaseUrlSecurityValidator;
 import com.scholarclaw.common.security.SecurityContextUtils;
 import com.scholarclaw.modules.userconfig.dto.DeactivateAccountRequest;
+import com.scholarclaw.modules.userconfig.dto.ChatModelUpdateRequest;
 import com.scholarclaw.modules.userconfig.dto.ModelConfigUpdateRequest;
 import com.scholarclaw.modules.userconfig.dto.ModelProbeRequest;
 import com.scholarclaw.modules.userconfig.dto.ModelProbeVO;
@@ -177,12 +178,36 @@ public class UserConfigController {
                 reachable, probeType.name(), request.modelName(), outcome.actualDim(), outcome.latencyMs()));
     }
 
-    /**
-     * `API-USER-003`：探测并保存 BYOK 模型配置。
-     *
-     * <p>顺序严格按 {@code 04} §4.2.3：SSRF 校验 → 事务外调 Python 探测 → 加密 → 短事务只更新组 B。
-     * 探测失败时数据库原配置保持完好（任何写操作都发生在探测成功之后）。
-     */
+    /** 明确确认探测费用后，仅保存对话模型；不要求或修改向量模型。 */
+    @PutMapping("/model-config/chat")
+    public Result<UserConfigVO> saveChatModelConfig(@Valid @RequestBody ChatModelUpdateRequest request) {
+        if (!Boolean.TRUE.equals(request.confirmProbe())) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "请先确认模型连通性测试可能产生费用。");
+        }
+        Long userId = SecurityContextUtils.requireCurrentUserId();
+        UserConfigEntity current = currentEntity();
+        var expected = ModelConfigSaveService.ChatSnapshot.of(current);
+        baseUrlSecurityValidator.validate(request.chatBaseUrl());
+        String providedKey = normalizeSecret(request.chatApiKey());
+        String plainKey = providedKey;
+        if (plainKey == null && current.getChatApiKeyCipher() != null) {
+            modelKeyBindingRules.requireSameTarget(current.getChatProvider(), current.getChatBaseUrl(),
+                    current.getChatModel(), request.chatProvider(), request.chatBaseUrl(), request.chatModel());
+            plainKey = cryptoService.decrypt(current.getChatApiKeyCipher());
+        }
+        requireKeyOrWhitelisted(plainKey, request.chatProvider(), request.chatBaseUrl(), "对话模型");
+        if (providedKey != null) cryptoService.requireStorable(providedKey);
+        var outcome = pythonAiEngineClient.probeModel(userId, ModelProbeType.CHAT,
+                new ModelEndpoint(request.chatProvider(), request.chatBaseUrl(), plainKey, request.chatModel()), null);
+        if (!outcome.chatReachable()) throw new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR, PROBE_UPSTREAM_FAILED);
+        String cipher = providedKey == null ? null : cryptoService.encrypt(providedKey);
+        UserConfigEntity updated = modelConfigSaveService.saveChat(userId,
+                new UserConfigService.ChatModelUpdate(request.chatProvider(), request.chatBaseUrl(), request.chatModel(), cipher),
+                expected);
+        return Result.ok("对话模型已保存", vo(updated, userCourseCountProvider.countActiveCourses(userId)));
+    }
+
+    /** 探测并保存对话及向量模型；探测失败时保持原配置。 */
     @PutMapping("/model-config")
     public Result<UserConfigVO> saveModelConfig(@Valid @RequestBody ModelConfigUpdateRequest request) {
         Long userId = SecurityContextUtils.requireCurrentUserId();

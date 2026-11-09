@@ -119,6 +119,47 @@ class UserConfigControllerTest {
         SecurityContextHolder.clearContext();
     }
 
+    @Test
+    void savesChatAloneAfterConfirmedProbeWithoutEmbedding() throws Exception {
+        UserConfigEntity current = entity();
+        current.setDefaultEmbeddingProvider(null); current.setEmbeddingBaseUrl(null);
+        current.setDefaultEmbeddingModel(null); current.setDefaultEmbeddingDim(null);
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(current));
+        when(userConfigService.updateChatModelConfig(anyLong(), any())).thenReturn(current);
+        when(pythonAiEngineClient.probeModel(eq(USER_ID), eq(ModelProbeType.CHAT), any(), isNull()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(true, false, null, 10));
+        var response = mockMvc.perform(put("/api/v1/user/model-config/chat").contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"chat_provider":"DEEPSEEK","chat_base_url":"https://api.deepseek.com/v1",
+                         "chat_model":"deepseek-flash","chat_api_key":"synthetic-key","confirm_probe":true}
+                        """)).andReturn().getResponse();
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getContentAsString(StandardCharsets.UTF_8)).doesNotContain("synthetic-key");
+        ArgumentCaptor<UserConfigService.ChatModelUpdate> update = ArgumentCaptor.forClass(UserConfigService.ChatModelUpdate.class);
+        verify(userConfigService).updateChatModelConfig(eq(USER_ID), update.capture());
+        assertThat(CRYPTO.decrypt(update.getValue().apiKeyCipher())).isEqualTo("synthetic-key");
+        verify(userConfigService, never()).updateByokModelConfig(anyLong(), any());
+        verify(migrationPort, never()).migrateExistingCourses(any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void chatSaveRequiresConsentAndFailedProbeLeavesConfigUntouched() throws Exception {
+        UserConfigEntity current = entity();
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(current));
+        String body = """
+                {"chat_provider":"DEEPSEEK","chat_base_url":"https://api.deepseek.com/v1",
+                 "chat_model":"deepseek-flash","chat_api_key":"synthetic-key","confirm_probe":%s}
+                """;
+        assertThat(mockMvc.perform(put("/api/v1/user/model-config/chat").contentType(MediaType.APPLICATION_JSON)
+                .content(body.formatted("false"))).andReturn().getResponse().getStatus()).isEqualTo(400);
+        verify(pythonAiEngineClient, never()).probeModel(anyLong(), any(), any(), any());
+        when(pythonAiEngineClient.probeModel(eq(USER_ID), eq(ModelProbeType.CHAT), any(), isNull()))
+                .thenReturn(new PythonAiEngineClient.ProbeResult(false, false, null, 10));
+        assertThat(mockMvc.perform(put("/api/v1/user/model-config/chat").contentType(MediaType.APPLICATION_JSON)
+                .content(body.formatted("true"))).andReturn().getResponse().getStatus()).isEqualTo(502);
+        verify(userConfigService, never()).updateChatModelConfig(anyLong(), any());
+    }
+
     private static UserConfigEntity entity() {
         UserConfigEntity entity = new UserConfigEntity();
         entity.setUserId(USER_ID);

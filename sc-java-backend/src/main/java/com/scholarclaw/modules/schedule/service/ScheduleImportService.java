@@ -177,7 +177,7 @@ public class ScheduleImportService {
             throw new BusinessException(ErrorCode.ACCOUNT_DEACTIVATED);
         }
     }
-    private static String requireRequestId(String value) {
+    static String requireRequestId(String value) {
         if (value == null || !value.matches("[A-Za-z0-9_-]{1,64}")) {
             throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED, "请求标识须为1至64位字母、数字、下划线或连字符。");
         }

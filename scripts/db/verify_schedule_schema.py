@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读核对 V1.0.9–V1.0.10 课表结构；必须显式指定目标库，密码使用 MySQL 标准环境变量。"""
+"""只读核对 V1.0.9–V1.0.11 课表结构；必须显式指定目标库，密码使用 MySQL 标准环境变量。"""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,7 @@ COLUMNS = {
         "import_id": "bigint", "user_id": "bigint", "term_id": "bigint",
         "client_request_id": "varchar(64)", "input_fingerprint": "char(64)", "source_type": "varchar(8)",
         "source_text": "mediumtext", "source_path": "varchar(512)", "source_media_type": "varchar(32)",
+        "model_fingerprint": "char(64)", "cleanup_attempt_at": "datetime(3)",
         "status": "varchar(20)", "schedule_version": "bigint", "draft_json": "json", "error_message": "varchar(255)",
         "attempt": "smallint", "lease_token": "char(36)", "lease_until": "datetime(3)", "version": "bigint",
         "expires_at": "datetime(3)", "confirm_request_id": "varchar(64)", "confirm_fingerprint": "char(64)",
@@ -41,7 +42,7 @@ COLUMNS = {
     },
 }
 NULLABLE = {
-    "t_schedule_import": {"source_text", "source_path", "source_media_type", "draft_json", "error_message",
+    "t_schedule_import": {"source_text", "source_path", "source_media_type", "model_fingerprint", "cleanup_attempt_at", "draft_json", "error_message",
                           "lease_token", "lease_until", "confirm_request_id", "confirm_fingerprint", "receipt_json"},
     "t_schedule_term": {"active_user_id"},
     "t_schedule_period": set(),
@@ -54,7 +55,8 @@ INDEXES = {
                          "uk_schedule_import_confirm": (0, "user_id,confirm_request_id"),
                          "idx_schedule_import_user_term": (1, "user_id,term_id,import_id"),
                          "idx_schedule_import_recovery": (1, "status,lease_until,import_id"),
-                         "idx_schedule_import_expiry": (1, "status,expires_at,import_id")},
+                         "idx_schedule_import_expiry": (1, "status,expires_at,import_id"),
+                         "idx_schedule_import_image_cleanup": (1, "source_type,status,cleanup_attempt_at,import_id")},
     "t_schedule_term": {"PRIMARY": (0, "term_id"), "uk_schedule_active_user": (0, "active_user_id"),
                         "idx_schedule_term_user": (1, "user_id,term_id")},
     "t_schedule_period": {"PRIMARY": (0, "term_id,period_no"),

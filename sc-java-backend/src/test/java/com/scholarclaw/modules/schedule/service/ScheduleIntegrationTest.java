@@ -45,13 +45,18 @@ import org.springframework.transaction.support.TransactionTemplate;
         "sc.internal.token=test-internal-token-value",
         "sc.jwt.secret=unit-test-only-jwt-secret-0123456789abcdef",
         "sc.master-key=dW5pdC10ZXN0LW1hc3Rlci1rZXktMzItYnl0ZXMhISE=",
-        "sc.mq.ingest.enabled=false", "sc.notification.outbound.enabled=false",
+        "sc.mq.ingest.enabled=false", "sc.notification.outbound.enabled=false", "sc.schedule.import.worker.enabled=false",
         "sc.ddl.reminder.enabled=false", "sc.deletion-gc.enabled=false",
         "sc.dependencies.mysql.pool-probe=false", "sc.dependencies.redis.pool-probe=false"
 })
 class ScheduleIntegrationTest {
+    private static final String TEST_STORAGE = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"),
+            "scholarclaw-schedule-test-" + java.util.UUID.randomUUID()).toString();
     @DynamicPropertySource
-    static void database(DynamicPropertyRegistry registry) throws Exception { IsolatedMysqlTestSupport.register(registry); }
+    static void database(DynamicPropertyRegistry registry) throws Exception {
+        IsolatedMysqlTestSupport.register(registry);
+        registry.add("sc.storage.root", () -> TEST_STORAGE);
+    }
 
     @Autowired ScheduleService service;
     @Autowired UserConfigService configs;

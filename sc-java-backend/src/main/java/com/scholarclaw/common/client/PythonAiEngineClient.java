@@ -58,6 +58,8 @@ public class PythonAiEngineClient {
     public static final String ROUTE_AND_EXTRACT_PATH = "/internal/ai/v1/agent/route-and-extract";
     /** Stateless schedule text extraction; caller still validates and requests user confirmation. */
     public static final String SCHEDULE_TEXT_PATH = "/internal/ai/v1/schedule/extract-text";
+    /** One explicitly approved vision call; caller must not automatically replay it. */
+    public static final String SCHEDULE_IMAGE_PATH = "/internal/ai/v1/schedule/extract-image";
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
     private static final int MAX_ERROR_BODY_BYTES = 64 * 1024;
 

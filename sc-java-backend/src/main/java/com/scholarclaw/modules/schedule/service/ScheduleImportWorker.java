@@ -99,14 +99,16 @@ public class ScheduleImportWorker {
     String validateSuggestions(JsonNode data, String rawText, int weekCount) {
         if (data == null || !data.isObject() || data.size() != 1 || !data.path("rows").isArray()) throw invalidDraft();
         JsonNode rows = data.path("rows");
-        List<String> lines = rawLines(rawText);
-        if (rows.size() != lines.size() || rows.size() > 200) throw invalidDraft();
+        List<String> lines = rawText == null ? null : rawLines(rawText);
+        if (rows.size() > 200 || (lines != null && rows.size() != lines.size())) throw invalidDraft();
         for (int i = 0; i < rows.size(); i++) {
             JsonNode row = rows.get(i);
             if (!row.isObject() || row.size() != ROW_KEYS.size()) throw invalidDraft();
             var names = row.fieldNames();
             while (names.hasNext()) if (!ROW_KEYS.contains(names.next())) throw invalidDraft();
-            if (!row.path("source_text").isTextual() || !row.path("source_text").textValue().equals(lines.get(i))) {
+            if (!row.path("source_text").isTextual()
+                    || (lines == null && row.path("source_text").textValue().length() > 2000)
+                    || (lines != null && !row.path("source_text").textValue().equals(lines.get(i)))) {
                 throw invalidDraft();
             }
             textOrNull(row, "title", 200); textOrNull(row, "teacher", 100); textOrNull(row, "room", 200);

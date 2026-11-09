@@ -53,8 +53,13 @@ import org.springframework.test.web.servlet.MockMvc;
 })
 class ScheduleImportIntegrationTest {
     private static final String TEXT = "数学 周一 1-2节 1-16周";
+    private static final String TEST_STORAGE = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"),
+            "scholarclaw-schedule-import-test-" + UUID.randomUUID()).toString();
     @DynamicPropertySource
-    static void database(DynamicPropertyRegistry registry) throws Exception { IsolatedMysqlTestSupport.register(registry); }
+    static void database(DynamicPropertyRegistry registry) throws Exception {
+        IsolatedMysqlTestSupport.register(registry);
+        registry.add("sc.storage.root", () -> TEST_STORAGE);
+    }
     @Autowired ScheduleImportService imports;
     @Autowired ScheduleImportWorker worker;
     @Autowired ScheduleImportRepository repository;

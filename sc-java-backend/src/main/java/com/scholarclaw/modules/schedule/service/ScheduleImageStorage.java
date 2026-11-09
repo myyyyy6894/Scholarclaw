@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
@@ -18,10 +19,15 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.Locale;
+import java.util.List;
+import java.util.PriorityQueue;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -116,15 +122,26 @@ public class ScheduleImageStorage {
 
     /** Caller must first check the task's owner, state and expiry. */
     public byte[] read(long userId, String name) {
+        try (InputStream input = open(userId, name)) {
+            byte[] bytes = input.readNBytes(MAX_BYTES + 1);
+            if (bytes.length == 0 || bytes.length > MAX_BYTES) throw new IOException("invalid size");
+            return bytes;
+        } catch (IOException e) {
+            throw invalid(ErrorCode.RESOURCE_NOT_FOUND, "图片不存在或已清理。");
+        }
+    }
+
+    /** Stream preview without buffering every concurrent request in heap; caller closes the stream. */
+    public InputStream open(long userId, String name) {
         Path path = existingPath(userId, name);
         if (path == null) throw invalid(ErrorCode.RESOURCE_NOT_FOUND, "图片不存在或已清理。");
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
             throw invalid(ErrorCode.RESOURCE_NOT_FOUND, "图片不存在或已清理。");
         }
-        try (InputStream input = Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
-            byte[] bytes = input.readNBytes(MAX_BYTES + 1);
-            if (bytes.length == 0 || bytes.length > MAX_BYTES) throw new IOException("invalid size");
-            return bytes;
+        try {
+            long size = Files.size(path);
+            if (size < 1 || size > MAX_BYTES) throw new IOException("invalid size");
+            return Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
         } catch (IOException e) {
             throw invalid(ErrorCode.RESOURCE_NOT_FOUND, "图片不存在或已清理。");
         }
@@ -157,6 +174,45 @@ public class ScheduleImageStorage {
         } catch (IOException e) {
             throw new IllegalStateException("用户课表图片清理失败", e);
         }
+    }
+
+    /** Bounded-memory, lexically paged scan of old files; caller checks DB references before deleting. */
+    public List<OrphanCandidate> orphanCandidates(Instant olderThan, String after, int limit) {
+        if (limit < 1 || limit > 1000) throw new IllegalArgumentException("非法扫描数量");
+        Path raw = root.resolve("raw"), base = raw.resolve("schedule-import");
+        if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isDirectory(raw, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isDirectory(base, LinkOption.NOFOLLOW_LINKS)) return List.of();
+        Comparator<OrphanCandidate> order = Comparator.comparing(OrphanCandidate::key);
+        var smallest = new PriorityQueue<>(limit, order.reversed());
+        String cursor = after == null ? "" : after;
+        try (var paths = Files.walk(base, 2)) {
+            paths.filter(path -> path.getNameCount() == base.getNameCount() + 2)
+                    .filter(path -> Files.isDirectory(path.getParent(), LinkOption.NOFOLLOW_LINKS))
+                    .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                    .forEach(path -> {
+                        String owner = path.getParent().getFileName().toString();
+                        String name = path.getFileName().toString();
+                        if (!owner.matches("[0-9]{1,19}") || !name.matches(NAME_PATTERN)) return;
+                        long userId;
+                        try { userId = Long.parseLong(owner); }
+                        catch (NumberFormatException e) { return; }
+                        if (userId < 1 || !Long.toString(userId).equals(owner)) return;
+                        String key = owner + "/" + name;
+                        if (key.compareTo(cursor) <= 0) return;
+                        try {
+                            if (!Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toInstant().isBefore(olderThan)) return;
+                        } catch (IOException e) { return; }
+                        var candidate = new OrphanCandidate(userId, name, key);
+                        if (smallest.size() < limit) smallest.add(candidate);
+                        else if (order.compare(candidate, smallest.peek()) < 0) { smallest.poll(); smallest.add(candidate); }
+                    });
+        } catch (IOException | UncheckedIOException e) {
+            throw new IllegalStateException("课表图片孤儿扫描失败", e);
+        }
+        var result = new ArrayList<>(smallest);
+        result.sort(order);
+        return List.copyOf(result);
     }
 
     private Path existingPath(long userId, String name) {
@@ -288,6 +344,8 @@ public class ScheduleImageStorage {
             }
         }
     }
+
+    public record OrphanCandidate(long userId, String name, String key) { }
 
     private static final class LimitedOutput extends OutputStream {
         private final OutputStream target;

@@ -16,10 +16,15 @@ import com.scholarclaw.modules.auth.service.TokenRevocationService;
 import com.scholarclaw.modules.ddl.dto.CreateDdlTaskRequest;
 import com.scholarclaw.modules.ddl.service.DdlTaskService;
 import com.scholarclaw.modules.planning.dto.PlanningInputDtos.*;
+import com.scholarclaw.modules.schedule.dto.ScheduleDtos.ExceptionWrite;
+import com.scholarclaw.modules.schedule.dto.ScheduleDtos.RuleWrite;
+import com.scholarclaw.modules.schedule.dto.ScheduleDtos.TermWrite;
+import com.scholarclaw.modules.schedule.service.ScheduleService;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.support.IsolatedMysqlTestSupport;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -59,6 +64,8 @@ class PlanningInputIntegrationTest {
     @Autowired PlanningCleanupService cleanup;
     @Autowired UserConfigService users;
     @Autowired DdlTaskService ddl;
+    @Autowired ScheduleService schedule;
+    @Autowired PlanningSnapshotService snapshots;
     @Autowired MockMvc mvc;
     @Autowired JwtService jwt;
     @MockBean TokenRevocationService revocations;
@@ -136,6 +143,51 @@ class PlanningInputIntegrationTest {
                                  "start_minute":480,"end_minute":540,"hard":true}
                                 """))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.data.event_id").isString());
+    }
+
+    @Test
+    void snapshotCombinesOwnedCalendarEventsAndTasksAndChangesWhenInputsChange() {
+        long owner = user(), other = user();
+        LocalDate today = LocalDate.now(ScTimeZone.zoneId());
+        int weekday = today.getDayOfWeek().getValue();
+        planning.savePreference(owner, new PreferenceWrite("Asia/Shanghai", List.of(new Window(weekday, 540, 1020)),
+                50, 180, 10, null));
+        var hard = planning.createEvent(owner, new EventWrite("会议", "Asia/Shanghai", today, null, null, 720, 780, true, null));
+        planning.createEvent(owner, new EventWrite("可调整", "Asia/Shanghai", today, null, null, 840, 900, false, null));
+        var term = schedule.createTerm(owner, new TermWrite("规划测试", today.minusDays(weekday - 1L), 8,
+                "Asia/Shanghai", true, null, false));
+        var course = schedule.createRule(owner, new RuleWrite(term.termId(), null, "测试课程", null, null, weekday,
+                LocalTime.of(10, 0), LocalTime.of(11, 0), null, null, List.of(1), null, false));
+        var task = task(owner);
+        task(owner); // 未配置工时的任务必须显式报告，而不是猜测。
+        planning.saveProfile(owner, task.taskId(), new ProfileWrite(120, 90, 1, null, true, 30, null));
+        planning.savePreference(other, new PreferenceWrite("Asia/Shanghai", List.of(new Window(weekday, 540, 1020)),
+                50, 180, 0, null));
+
+        var snapshot = snapshots.read(owner, today, today.plusDays(30)); // 课表请求跨31天需安全分片。
+        assertThat(snapshot.hasActiveTerm()).isTrue();
+        assertThat(snapshot.termId()).isEqualTo(term.termId());
+        assertThat(snapshot.occupied()).contains(
+                new PlanningEngine.Interval(today.atTime(9, 50).atZone(ScTimeZone.zoneId()).toInstant(),
+                        today.atTime(11, 10).atZone(ScTimeZone.zoneId()).toInstant()),
+                new PlanningEngine.Interval(today.atTime(11, 50).atZone(ScTimeZone.zoneId()).toInstant(),
+                        today.atTime(13, 10).atZone(ScTimeZone.zoneId()).toInstant()));
+        assertThat(snapshot.softEvents()).singleElement().satisfies(event -> assertThat(event.title()).isEqualTo("可调整"));
+        assertThat(snapshot.tasks()).singleElement().satisfies(value -> assertThat(value.id()).isEqualTo(task.taskId().toString()));
+        assertThat(snapshot.unavailableTasks()).singleElement().satisfies(value -> assertThat(value.reason()).contains("工时"));
+        assertThat(snapshots.read(owner, today, today.plusDays(30)).fingerprint()).isEqualTo(snapshot.fingerprint());
+        var otherSnapshot = snapshots.read(other, today, today.plusDays(30));
+        assertThat(otherSnapshot.tasks()).isEmpty();
+        assertThat(otherSnapshot.occupied()).isEmpty();
+        assertThat(otherSnapshot.hasActiveTerm()).isFalse();
+
+        schedule.saveException(owner, Long.parseLong(course.ruleId()), today, new ExceptionWrite("CANCEL", null, null, null, null, null, false));
+        var afterCancel = snapshots.read(owner, today, today.plusDays(30));
+        assertThat(afterCancel.fingerprint()).isNotEqualTo(snapshot.fingerprint());
+        assertThat(afterCancel.occupied()).hasSize(1);
+        planning.updateEvent(owner, Long.parseLong(hard.eventId()), new EventWrite("会议修改", "Asia/Shanghai", today,
+                null, null, 720, 780, true, hard.version()));
+        assertThat(snapshots.read(owner, today, today.plusDays(30)).fingerprint()).isNotEqualTo(afterCancel.fingerprint());
     }
 
     private String updateProfile(long user, long task, long version, CountDownLatch start) throws InterruptedException {

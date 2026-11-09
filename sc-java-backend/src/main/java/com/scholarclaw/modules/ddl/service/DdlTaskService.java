@@ -59,6 +59,7 @@ public class DdlTaskService {
     private static final DateTimeFormatter DUE_TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final LocalTime DATE_ONLY_SENTINEL = LocalTime.of(23, 59, 59);
     private static final int COMPLETED_LIST_LIMIT = 50;
+    private static final int PLANNING_TASK_LIMIT = 500;
     private static final int FOLLOW_UP_HOURS = 24;
     private static final int REMINDED_T24H = 1;
     private static final int REMINDED_T6H = 2;
@@ -197,6 +198,23 @@ public class DdlTaskService {
                 .map(DdlTaskDraft::toVO)
                 .toList();
         return new DdlTaskBoardVO(pending, drafts, active, completed);
+    }
+
+    /**
+     * 规划只读快照，不读取或清理 Redis 中的变更草案。待确认任务也返回，交由规划提示用户补齐。
+     * 限制单次输入规模，避免一次请求占用无界资源；不静默截断任务列表。
+     */
+    @Transactional(readOnly = true)
+    public List<DdlTaskVO> listForPlanning(Long userId) {
+        UserContext user = resolveUserContext(userId);
+        List<String> statuses = List.of(TaskStatus.PENDING_TIME.name(), TaskStatus.PENDING_CONFIRM.name(),
+                TaskStatus.ACTIVE.name(), TaskStatus.OVERDUE.name());
+        List<DdlTaskVO> tasks = queryTasks(userId, null, statuses, query -> query.orderByAsc(DdlTaskEntity::getTaskId),
+                PLANNING_TASK_LIMIT + 1, user.zoneId());
+        if (tasks.size() > PLANNING_TASK_LIMIT) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "待规划任务超过 500 项，请先处理部分任务。");
+        }
+        return tasks;
     }
 
     /** 草案展示校验：目标任务仍存在、未取消/完成，且 `updated_at` 与草案快照一致。 */

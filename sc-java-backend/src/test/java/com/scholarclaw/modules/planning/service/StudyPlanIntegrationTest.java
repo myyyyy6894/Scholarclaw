@@ -22,6 +22,11 @@ import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import com.scholarclaw.support.IsolatedMysqlTestSupport;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -34,6 +39,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -65,6 +71,7 @@ class StudyPlanIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired JwtService jwt;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired JdbcTemplate jdbc;
     @MockBean TokenRevocationService revocations;
     @MockBean DdlDraftStore draftStore;
 
@@ -197,6 +204,128 @@ class StudyPlanIntegrationTest {
         assertThat(canceled.blocks()).allMatch(block -> block.state().equals("CANCELED"));
     }
 
+    @Test
+    void acceptanceRacingWithTaskCancellationCannotCreateAnOrphanArrangement() throws Exception {
+        long owner = user(); var task = setup(owner);
+        var draft = plans.create(owner, new CreatePlan(tomorrow(), tomorrow(), "cancel-race-plan", true));
+        CountDownLatch canceledInTransaction = new CountDownLatch(1), allowCommit = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var cancel = pool.submit(() -> new TransactionTemplate(transactionManager).execute(status -> {
+                ddl.cancelTask(owner, task.taskId());
+                canceledInTransaction.countDown();
+                try { if (!allowCommit.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("超时"); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                return null;
+            }));
+            assertThat(canceledInTransaction.await(10, TimeUnit.SECONDS)).isTrue();
+            var accept = pool.submit(() -> {
+                try {
+                    plans.accept(owner, Long.parseLong(draft.planId()), new AcceptPlan(draft.revision(), "cancel-race-accept",
+                            draft.blocks().stream().map(BlockView::blockId).toList()));
+                    return "accepted";
+                } catch (BusinessException e) { return e.getErrorCode().name(); }
+            });
+            allowCommit.countDown();
+            cancel.get(10, TimeUnit.SECONDS);
+            assertThat(accept.get(10, TimeUnit.SECONDS)).isEqualTo(ErrorCode.STATE_CONFLICT.name());
+        }
+        var current = plans.get(owner, Long.parseLong(draft.planId()));
+        assertThat(current.stale()).isTrue();
+        assertThat(current.blocks()).noneMatch(block -> block.state().equals("PLANNED"));
+    }
+
+    @Test
+    void movingChecksLocksCollisionsAndWindowsWithoutLosingTheOriginalBlock() {
+        long owner = user(), other = user(); setup(owner);
+        input.createEvent(owner, new EventWrite("可调整会议", "Asia/Shanghai", tomorrow(), null, null, 660, 720, false, null));
+        var draft = plans.create(owner, new CreatePlan(tomorrow(), tomorrow(), "move-plan", true));
+        var accepted = plans.accept(owner, Long.parseLong(draft.planId()), new AcceptPlan(draft.revision(),
+                "move-accept", draft.blocks().stream().map(BlockView::blockId).toList()));
+        long planId = Long.parseLong(accepted.planId()), blockId = Long.parseLong(accepted.blocks().getFirst().blockId());
+        var first = accepted.blocks().getFirst();
+        assertCode(() -> plans.changeBlock(other, planId, blockId, new ChangeBlock(accepted.revision(), first.version(), "LOCK", null, null)),
+                ErrorCode.RESOURCE_NOT_FOUND);
+        var collide = new ChangeBlock(accepted.revision(), first.version(), "MOVE", time(tomorrow(), 10), time(tomorrow(), 11));
+        assertCode(() -> plans.changeBlock(owner, planId, blockId, collide), ErrorCode.STATE_CONFLICT);
+        assertThat(plans.get(owner, planId).blocks().getFirst().startAt()).isEqualTo(first.startAt());
+
+        var locked = plans.changeBlock(owner, planId, blockId, new ChangeBlock(accepted.revision(), first.version(), "LOCK", null, null));
+        var lockedBlock = locked.blocks().stream().filter(b -> b.blockId().equals(first.blockId())).findFirst().orElseThrow();
+        assertThat(lockedBlock.locked()).isTrue();
+        assertCode(() -> plans.changeBlock(owner, planId, blockId, new ChangeBlock(locked.revision(), lockedBlock.version(),
+                "MOVE", time(tomorrow(), 11), time(tomorrow(), 12))), ErrorCode.STATE_CONFLICT);
+        var unlocked = plans.changeBlock(owner, planId, blockId, new ChangeBlock(locked.revision(), lockedBlock.version(), "UNLOCK", null, null));
+        var unlockedBlock = unlocked.blocks().stream().filter(b -> b.blockId().equals(first.blockId())).findFirst().orElseThrow();
+        var moved = plans.changeBlock(owner, planId, blockId, new ChangeBlock(unlocked.revision(), unlockedBlock.version(),
+                "MOVE", time(tomorrow(), 11), time(tomorrow(), 12)));
+        assertThat(moved.warnings()).anyMatch(warning -> warning.contains("可调整会议"));
+        assertThat(moved.blocks().stream().filter(b -> b.blockId().equals(first.blockId())).findFirst().orElseThrow().startAt())
+                .isEqualTo(time(tomorrow(), 11).toString());
+        var movedBlock = moved.blocks().stream().filter(b -> b.blockId().equals(first.blockId())).findFirst().orElseThrow();
+        assertCode(() -> plans.changeBlock(owner, planId, blockId, new ChangeBlock(moved.revision(), movedBlock.version(),
+                "MOVE", time(tomorrow(), 13), time(tomorrow(), 14))), ErrorCode.STATE_CONFLICT);
+        assertThat(plans.get(owner, planId).blocks().stream().filter(b -> b.blockId().equals(first.blockId())).findFirst().orElseThrow().startAt())
+                .isEqualTo(movedBlock.startAt());
+    }
+
+    @Test
+    void movingToAnotherDayCannotExceedDailyCapacityEvenWithoutOverlap() {
+        long owner = user();
+        LocalDate firstDay = tomorrow(), secondDay = firstDay.plusDays(1);
+        input.savePreference(owner, new PreferenceWrite("Asia/Shanghai", List.of(
+                new Window(firstDay.getDayOfWeek().getValue(), 540, 720),
+                new Window(secondDay.getDayOfWeek().getValue(), 540, 720)), 60, 60, 0, null));
+        var task = ddl.createManualTask(owner, new CreateDdlTaskRequest("cap-task-" + UUID.randomUUID(), null, "测试课程", "容量任务",
+                "DATE_ONLY", secondDay.plusDays(2).toString(), null, null, null)).task();
+        input.saveProfile(owner, task.taskId(), new ProfileWrite(120, 120, 2, null, true, 30, null));
+        var draft = plans.create(owner, new CreatePlan(firstDay, secondDay, "cap-plan", true));
+        var accepted = plans.accept(owner, Long.parseLong(draft.planId()), new AcceptPlan(draft.revision(),
+                "cap-accept", draft.blocks().stream().map(BlockView::blockId).toList()));
+        var block = accepted.blocks().getFirst();
+        assertCode(() -> plans.changeBlock(owner, Long.parseLong(accepted.planId()), Long.parseLong(block.blockId()),
+                new ChangeBlock(accepted.revision(), block.version(), "MOVE", time(secondDay, 10), time(secondDay, 11))), ErrorCode.STATE_CONFLICT);
+        assertThat(plans.get(owner, Long.parseLong(accepted.planId())).blocks().getFirst().startAt()).isEqualTo(block.startAt());
+    }
+
+    @Test
+    void completingStartedBlockUpdatesOnlyRemainingEffortAndIsIdempotent() {
+        long owner = user(); var task = setup(owner);
+        var draft = plans.create(owner, new CreatePlan(tomorrow(), tomorrow(), "complete-plan", true));
+        var accepted = plans.accept(owner, Long.parseLong(draft.planId()), new AcceptPlan(draft.revision(),
+                "complete-accept", draft.blocks().stream().map(BlockView::blockId).toList()));
+        long planId = Long.parseLong(draft.planId()), blockId = Long.parseLong(accepted.blocks().getFirst().blockId());
+        var first = accepted.blocks().getFirst();
+        assertCode(() -> plans.changeBlock(owner, planId, blockId, new ChangeBlock(accepted.revision(), first.version(), "COMPLETE", null, null)),
+                ErrorCode.STATE_CONFLICT);
+        // 模拟时间流逝：只调整隔离测试库中这段合成时间块的绝对时间。
+        Instant start = Instant.now().truncatedTo(ChronoUnit.MINUTES).minus(2, ChronoUnit.HOURS);
+        jdbc.update("UPDATE t_study_plan_block SET start_utc=?,end_utc=? WHERE user_id=? AND block_id=?",
+                LocalDateTime.ofInstant(start, ZoneOffset.UTC), LocalDateTime.ofInstant(start.plus(60, ChronoUnit.MINUTES), ZoneOffset.UTC), owner, blockId);
+        var request = new ChangeBlock(accepted.revision(), first.version(), "COMPLETE", null, null);
+        var completed = plans.changeBlock(owner, planId, blockId, request);
+        assertThat(completed.stale()).isFalse();
+        assertThat(completed.blocks().stream().filter(b -> b.blockId().equals(first.blockId())).findFirst().orElseThrow().state()).isEqualTo("DONE");
+        assertThat(input.profiles(owner).getFirst().remainingMinutes()).isEqualTo(60);
+        assertThat(ddl.getTask(owner, task.taskId()).status()).isEqualTo("ACTIVE");
+        assertThat(ddl.getTask(owner, task.taskId()).dueAt()).isEqualTo(task.dueAt());
+        plans.changeBlock(owner, planId, blockId, request);
+        assertThat(input.profiles(owner).getFirst().remainingMinutes()).isEqualTo(60);
+
+        var currentPreference = input.preference(owner);
+        input.savePreference(owner, new PreferenceWrite(currentPreference.timezone(), currentPreference.windows(),
+                currentPreference.focusMinutes(), currentPreference.dailyLimitMinutes(), 5, currentPreference.version()));
+        var stalePlan = plans.get(owner, planId);
+        assertThat(stalePlan.stale()).isTrue();
+        var future = stalePlan.blocks().stream().filter(b -> b.state().equals("PLANNED")).findFirst().orElseThrow();
+        var canceled = plans.changeBlock(owner, planId, Long.parseLong(future.blockId()),
+                new ChangeBlock(stalePlan.revision(), future.version(), "CANCEL", null, null));
+        assertThat(canceled.blocks().stream().filter(b -> b.blockId().equals(future.blockId())).findFirst().orElseThrow().state()).isEqualTo("CANCELED");
+        assertThat(canceled.blocks().stream().filter(b -> b.blockId().equals(first.blockId())).findFirst().orElseThrow().state()).isEqualTo("DONE");
+        ddl.cancelTask(owner, task.taskId());
+        assertThat(plans.get(owner, planId).blocks().stream().filter(b -> b.blockId().equals(first.blockId()))
+                .findFirst().orElseThrow().state()).isEqualTo("DONE");
+    }
+
     private String acceptConcurrent(long user, PlanView plan, String request, CountDownLatch start) throws InterruptedException {
         start.await();
         try {
@@ -219,6 +348,7 @@ class StudyPlanIntegrationTest {
     }
     private long user() { return users.createUserAccount("study_" + UUID.randomUUID().toString().replace("-", ""), "hash", "Asia/Shanghai").getUserId(); }
     private static LocalDate tomorrow() { return LocalDate.now(ScTimeZone.zoneId()).plusDays(1); }
+    private static OffsetDateTime time(LocalDate date, int hour) { return date.atTime(hour, 0).atZone(ScTimeZone.zoneId()).toOffsetDateTime(); }
     private static void assertCode(Runnable operation, ErrorCode code) {
         assertThatThrownBy(operation::run).isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getErrorCode()).isEqualTo(code));

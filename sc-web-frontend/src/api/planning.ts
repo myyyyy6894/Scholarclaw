@@ -97,3 +97,13 @@ export const acceptStudyPlan = (id: BigIntId, revision: number, clientRequestId:
   apiRequest(`${planPath(id)}/accept`, { method: 'POST', body: { revision, client_request_id: clientRequestId, block_ids: blockIds } })
 export const cancelStudyPlan = (id: BigIntId, revision: number): Promise<null> =>
   apiRequest(`${planPath(id)}?revision=${revision}`, { method: 'DELETE' })
+export type StudyBlockAction = 'MOVE' | 'LOCK' | 'UNLOCK' | 'COMPLETE' | 'CANCEL'
+export interface ChangeStudyBlock {
+  revision: number
+  version: number
+  action: StudyBlockAction
+  start_at?: string
+  end_at?: string
+}
+export const changeStudyBlock = (planId: BigIntId, blockId: BigIntId, body: ChangeStudyBlock): Promise<StudyPlan> =>
+  apiRequest(`${planPath(planId)}/blocks/${encodeURIComponent(blockId)}`, { method: 'PATCH', body })

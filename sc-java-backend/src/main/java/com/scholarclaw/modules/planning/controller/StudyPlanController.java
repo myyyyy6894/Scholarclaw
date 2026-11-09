@@ -26,6 +26,10 @@ public class StudyPlanController {
     public Result<PlanView> accept(@PathVariable String planId, @RequestBody AcceptPlan request) {
         return Result.ok("已采纳所选时间块", service.accept(user(), id(planId), request));
     }
+    @PatchMapping("/{planId}/blocks/{blockId}")
+    public Result<PlanView> changeBlock(@PathVariable String planId, @PathVariable String blockId, @RequestBody ChangeBlock request) {
+        return Result.ok("学习时间块已更新", service.changeBlock(user(), id(planId), id(blockId), request));
+    }
     @DeleteMapping("/{planId}")
     public Result<Void> cancel(@PathVariable String planId, @RequestParam Long revision) {
         service.cancelDraft(user(), id(planId), revision); return Result.ok("计划草稿已取消", null);

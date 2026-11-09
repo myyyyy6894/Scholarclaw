@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resetApiClient } from '@/api/client'
-import { acceptStudyPlan, createStudyPlan, deletePersonalEvent, savePlanningPreference, saveTaskProfile } from '@/api/planning'
+import { acceptStudyPlan, changeStudyBlock, createStudyPlan, deletePersonalEvent, savePlanningPreference, saveTaskProfile } from '@/api/planning'
 
 function response(): Response {
   return new Response(JSON.stringify({ code: 'OK', message: 'ok', data: {}, trace_id: 'test', timestamp: '2026-01-01T00:00:00Z' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -44,5 +44,18 @@ describe('时间规划输入 API', () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/planning/plans/9007199254740993/accept')
     const acceptBody = (fetchMock.mock.calls[1]?.[1] as RequestInit).body
     expect(JSON.parse(typeof acceptBody === 'string' ? acceptBody : '{}')).toEqual({ revision: 7, client_request_id: 'accept-1', block_ids: ['9007199254740994'] })
+  })
+
+  it('移动时间块时保留计划和块版本及明确时区偏移', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(response()))
+    vi.stubGlobal('fetch', fetchMock)
+    await changeStudyBlock('9007199254740993', '9007199254740994', {
+      revision: 8, version: 3, action: 'MOVE', start_at: '2026-11-10T10:00+08:00', end_at: '2026-11-10T11:00+08:00',
+    })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/planning/plans/9007199254740993/blocks/9007199254740994')
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(request.method).toBe('PATCH')
+    expect(JSON.parse(typeof request.body === 'string' ? request.body : '{}')).toEqual({ revision: 8, version: 3,
+      action: 'MOVE', start_at: '2026-11-10T10:00+08:00', end_at: '2026-11-10T11:00+08:00' })
   })
 })

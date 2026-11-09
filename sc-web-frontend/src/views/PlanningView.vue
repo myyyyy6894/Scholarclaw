@@ -27,6 +27,10 @@ const events = ref<PersonalEvent[]>([])
 const profiles = ref<TaskProfile[]>([])
 const tasks = ref<DdlTask[]>([])
 const profileMap = computed(() => new Map(profiles.value.map((item) => [item.task_id, item])))
+async function refreshProgress(): Promise<void> {
+  try { profiles.value = await listTaskProfiles(); inputRevision.value++ }
+  catch (error) { notifyError(error) }
+}
 
 function applyPreference(value: PlanningPreference | null, userTimezone: string): void {
   preferenceVersion.value = value?.version ?? null
@@ -186,7 +190,7 @@ function deadline(task: DdlTask): string {
     <p v-if="loading" class="planning-hint">正在读取规划资料…</p>
     <div v-else-if="loadError" role="alert" class="planning-error">{{ loadError }} <el-button @click="load">重试</el-button></div>
     <template v-else>
-      <StudyPlans :timezone="preference.timezone" :input-revision="inputRevision" />
+      <StudyPlans :timezone="preference.timezone" :input-revision="inputRevision" @progress-changed="refreshProgress" />
       <BaseCard title="我的学习时间" subtitle="只在你明确填写的时间内安排学习；免打扰设置不会被当作睡眠。">
         <div class="planning-grid">
           <label>计划时区<el-input v-model="preference.timezone" placeholder="例如 Asia/Shanghai" /></label>

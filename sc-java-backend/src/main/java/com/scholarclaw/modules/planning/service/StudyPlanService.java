@@ -8,6 +8,7 @@ import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.ddl.service.DdlTaskService;
 import com.scholarclaw.modules.planning.dto.StudyPlanDtos.*;
+import com.scholarclaw.modules.planning.dto.PlanningInputDtos.ProfileWrite;
 import com.scholarclaw.modules.planning.repository.StudyPlanRepository;
 import com.scholarclaw.modules.planning.repository.StudyPlanRepository.Block;
 import com.scholarclaw.modules.planning.repository.StudyPlanRepository.Plan;
@@ -20,6 +21,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -42,13 +44,14 @@ public class StudyPlanService {
     private static final Pattern REQUEST_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}");
     private final StudyPlanRepository repository;
     private final PlanningSnapshotService snapshots;
+    private final PlanningInputService inputs;
     private final DdlTaskService ddl;
     private final UserConfigService users;
     private final ObjectMapper mapper;
 
-    public StudyPlanService(StudyPlanRepository repository, PlanningSnapshotService snapshots,
+    public StudyPlanService(StudyPlanRepository repository, PlanningSnapshotService snapshots, PlanningInputService inputs,
                             DdlTaskService ddl, UserConfigService users, ObjectMapper mapper) {
-        this.repository = repository; this.snapshots = snapshots; this.ddl = ddl; this.users = users; this.mapper = mapper;
+        this.repository = repository; this.snapshots = snapshots; this.inputs = inputs; this.ddl = ddl; this.users = users; this.mapper = mapper;
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
@@ -174,11 +177,99 @@ public class StudyPlanService {
         repository.cancelProposals(userId, planId, updated);
     }
 
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
+    public PlanView changeBlock(long userId, long planId, long blockId, ChangeBlock request) {
+        if (request == null || request.revision() == null || request.version() == null || request.action() == null
+                || !Set.of("MOVE", "LOCK", "UNLOCK", "COMPLETE", "CANCEL").contains(request.action())) {
+            throw invalid("请提供计划版本、时间块版本和有效操作。");
+        }
+        lockUser(userId);
+        Plan plan = requirePlan(userId, planId);
+        Block block = repository.block(userId, planId, blockId).orElseThrow(StudyPlanService::notFound);
+        if ("COMPLETE".equals(request.action()) && "DONE".equals(block.state())) return view(userId, plan);
+        if (!"ACCEPTED".equals(plan.state()) || !"PLANNED".equals(block.state())
+                || plan.revision() != request.revision() || block.version() != request.version()) throw stale();
+        LocalDateTime updated = ScTimeZone.now().toLocalDateTime();
+        if ("CANCEL".equals(request.action())) {
+            if (repository.setBlockState(userId, planId, blockId, block.version(), "CANCELED", updated) != 1
+                    || repository.revisePlan(userId, planId, plan.revision(), null, null, updated) != 1) throw stale();
+            return view(userId, requirePlan(userId, planId));
+        }
+        if ("LOCK".equals(request.action()) || "UNLOCK".equals(request.action())) {
+            boolean locked = "LOCK".equals(request.action());
+            if (repository.lockBlock(userId, planId, blockId, block.version(), locked, updated) != 1
+                    || repository.revisePlan(userId, planId, plan.revision(), null, null, updated) != 1) throw stale();
+            return view(userId, requirePlan(userId, planId));
+        }
+
+        // 先持有用户锁、再按 ID 锁所有源任务，避免修改/完成与 DDL 状态变动竞争。
+        var sourceTasks = ddl.listForPlanning(userId);
+        try { ddl.lockForPlanning(userId, sourceTasks.stream().map(task -> task.taskId()).toList()); }
+        catch (BusinessException e) {
+            if (e.getErrorCode() == ErrorCode.RESOURCE_NOT_FOUND) throw stale();
+            throw e;
+        }
+        var snapshot = snapshots.read(userId, plan.from(), plan.to());
+        if (!plan.sourceFingerprint().equals(snapshot.fingerprint())) throw stale();
+        var task = snapshot.tasks().stream().filter(item -> item.id().equals(Long.toString(block.taskId())))
+                .findFirst().orElseThrow(StudyPlanService::stale);
+        Instant now = Instant.now();
+        if ("COMPLETE".equals(request.action())) {
+            if (instant(block.startUtc()).isAfter(now)) throw conflict("时间块尚未开始，不能提前记录为已完成。");
+            int minutes = Math.toIntExact(Duration.between(instant(block.startUtc()), instant(block.endUtc())).toMinutes());
+            var profile = inputs.profiles(userId).stream().filter(item -> item.taskId().equals(task.id()))
+                    .findFirst().orElseThrow(StudyPlanService::stale);
+            if (profile.remainingMinutes() < minutes) throw conflict("剩余工时已不足该时间块，请先核对资料。");
+            inputs.saveProfile(userId, block.taskId(), new ProfileWrite(profile.estimatedMinutes(), profile.remainingMinutes() - minutes,
+                    profile.priority(), profile.earliestStartAt() == null ? null : OffsetDateTime.parse(profile.earliestStartAt()),
+                    profile.splittable(), profile.minBlockMinutes(), profile.version()));
+            if (repository.setBlockState(userId, planId, blockId, block.version(), "DONE", updated) != 1) throw stale();
+            String refreshed = snapshots.read(userId, plan.from(), plan.to()).fingerprint();
+            if (repository.revisePlan(userId, planId, plan.revision(), refreshed, null, updated) != 1) throw stale();
+            return view(userId, requirePlan(userId, planId));
+        }
+
+        if (block.locked()) throw conflict("该时间块已锁定，请先解锁再移动。");
+        if (request.startAt() == null || request.endAt() == null) throw invalid("移动时须填写带时区偏移的起止时间。");
+        Instant start = request.startAt().toInstant(), end = request.endAt().toInstant();
+        if (start.getNano() != 0 || end.getNano() != 0 || start.getEpochSecond() % 60 != 0 || end.getEpochSecond() % 60 != 0
+                || !start.isBefore(end)) throw invalid("时间块须按整分钟填写，结束时间必须晚于开始时间。");
+        if (!Duration.between(start, end).equals(Duration.between(instant(block.startUtc()), instant(block.endUtc())))) {
+            throw invalid("移动时请保持原时长；需要改变工时可取消后重新规划。");
+        }
+        if (!start.isAfter(now)) throw conflict("不能把时间块移动到已经开始或过去的时间。");
+        if (task.earliest() != null && start.isBefore(task.earliest())) throw conflict("新时间早于任务的最早开始时间。");
+        boolean overdue = !task.deadline().isAfter(now);
+        if (!overdue && end.isAfter(task.deadline())) throw conflict("新时间超出任务截止时间。");
+        var target = snapshot.windows().stream().filter(window -> !start.isBefore(window.start()) && !end.isAfter(window.end()))
+                .findFirst().orElseThrow(() -> conflict("新时间须完整位于已设置的可学习时段内。"));
+        Existing other = existing(userId, snapshot, now, blockId);
+        if (snapshot.occupied().stream().anyMatch(value -> overlap(start, end, value.start(), value.end()))
+                || other.planned().stream().anyMatch(value -> overlap(start, end, instant(value.startUtc()), instant(value.endUtc())))) {
+            throw conflict("新时间与课程、固定日程或已采纳安排冲突。");
+        }
+        int minutes = Math.toIntExact(Duration.between(start, end).toMinutes());
+        if (other.dailyUsed().getOrDefault(target.day(), 0) + minutes > snapshot.preference().dailyLimitMinutes()) {
+            throw conflict("新时间会超过每日学习上限。");
+        }
+        if (repository.moveBlock(userId, planId, blockId, block.version(), utc(start), utc(end), target.day(), overdue, updated) != 1) throw stale();
+        List<PlanningEngine.Block> currentBlocks = repository.blocks(userId, planId).stream()
+                .filter(item -> "PLANNED".equals(item.state()))
+                .map(item -> new PlanningEngine.Block(Long.toString(item.taskId()), item.title(), item.localDate(),
+                        instant(item.startUtc()), instant(item.endUtc()), item.overdue())).toList();
+        if (repository.revisePlan(userId, planId, plan.revision(), null, json(warnings(snapshot, currentBlocks)), updated) != 1) throw stale();
+        return view(userId, requirePlan(userId, planId));
+    }
+
     private record Existing(List<Block> planned, Map<LocalDate, Integer> dailyUsed, String fingerprint) { }
     private Existing existing(long userId, PlanningSnapshotService.Snapshot snapshot, Instant now) {
+        return existing(userId, snapshot, now, null);
+    }
+    private Existing existing(long userId, PlanningSnapshotService.Snapshot snapshot, Instant now, Long excludedBlockId) {
         ZoneId zone = ZoneId.of(snapshot.preference().timezone());
         Instant from = PlanningTime.resolve(snapshot.from(), 0, zone), to = PlanningTime.resolve(snapshot.to(), 1440, zone);
-        List<Block> planned = repository.futurePlanned(userId, utc(now));
+        List<Block> planned = repository.futurePlanned(userId, utc(now)).stream()
+                .filter(block -> excludedBlockId == null || block.id() != excludedBlockId).toList();
         if (planned.size() > 5000) throw invalid("已采纳的时间块过多，请先整理计划。");
         List<Block> done = repository.doneBetween(userId, utc(from), utc(to));
         Map<LocalDate, Integer> used = new HashMap<>();
@@ -264,6 +355,9 @@ public class StudyPlanService {
     }
     private static LocalDateTime utc(Instant instant) { return LocalDateTime.ofInstant(instant, ZoneOffset.UTC); }
     private static Instant instant(LocalDateTime utc) { return utc.toInstant(ZoneOffset.UTC); }
+    private static boolean overlap(Instant start, Instant end, Instant otherStart, Instant otherEnd) {
+        return start.isBefore(otherEnd) && end.isAfter(otherStart);
+    }
     private static BusinessException stale() { return conflict("计划或相关资料已变化，请刷新并重新规划。"); }
     private static BusinessException conflict(String message) { return new BusinessException(ErrorCode.STATE_CONFLICT, message); }
     private static BusinessException idempotencyConflict() { return new BusinessException(ErrorCode.IDEMPOTENCY_CONFLICT); }

@@ -15,6 +15,7 @@ import java.util.Map;
  * 作息展开、硬约束缓冲、任务资格和快照一致性由调用方负责。
  */
 public final class PlanningEngine {
+    private static final int MAX_BLOCKS = 2000;
     private PlanningEngine() { }
 
     public record Interval(Instant start, Instant end) {
@@ -95,6 +96,9 @@ public final class PlanningEngine {
                             if (length < task.minBlockMinutes() && length < remaining) break;
                         }
                         Instant end = cursor.plus(length, ChronoUnit.MINUTES);
+                        if (blocks.size() >= MAX_BLOCKS) {
+                            throw new IllegalArgumentException("建议时间块超过 2000 个，请缩短规划范围或增大专注时间。");
+                        }
                         blocks.add(new Block(task.id(), task.title(), window.day(), cursor, end, overdue));
                         busy.add(new Interval(cursor, end));
                         dailyUsed.merge(window.day(), length, Integer::sum);

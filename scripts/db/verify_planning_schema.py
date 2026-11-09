@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读核对 V1.0.12 规划资料结构；必须明确目标库，密码用 MySQL 标准环境变量。"""
+"""只读核对 V1.0.12–V1.0.13 规划结构；必须明确目标库，密码用 MySQL 标准环境变量。"""
 from __future__ import annotations
 
 import argparse
@@ -13,12 +13,25 @@ EXPECTED_COLUMNS = {
                          "start_minute", "end_minute", "hard", "version", "created_at", "updated_at"},
     "t_task_planning_profile": {"user_id", "task_id", "estimated_minutes", "remaining_minutes", "priority",
                                 "earliest_start_utc", "splittable", "min_block_minutes", "version", "updated_at"},
+    "t_study_plan": {"plan_id", "user_id", "client_request_id", "request_fingerprint", "from_date", "to_date",
+                     "timezone", "source_fingerprint", "occupancy_fingerprint", "state", "revision", "warnings_json",
+                     "shortages_json", "unavailable_json", "accept_request_id", "accept_fingerprint", "created_at", "updated_at"},
+    "t_study_plan_block": {"block_id", "plan_id", "user_id", "task_id", "task_title", "start_utc", "end_utc", "local_date",
+                           "state", "locked", "overdue", "version", "created_at", "updated_at"},
 }
 EXPECTED_INDEXES = {("t_planning_preference", "PRIMARY", "user_id"),
                     ("t_personal_event", "PRIMARY", "event_id"),
                     ("t_personal_event", "idx_personal_event_user", "user_id,event_id"),
-                    ("t_task_planning_profile", "PRIMARY", "user_id,task_id")}
-EXPECTED_CHECKS = {"chk_planning_preference", "chk_personal_event", "chk_task_planning_profile"}
+                    ("t_task_planning_profile", "PRIMARY", "user_id,task_id"),
+                    ("t_study_plan", "PRIMARY", "plan_id"),
+                    ("t_study_plan", "uk_study_plan_user_request", "user_id,client_request_id"),
+                    ("t_study_plan", "uk_study_plan_user_accept", "user_id,accept_request_id"),
+                    ("t_study_plan", "idx_study_plan_user_state", "user_id,state,plan_id"),
+                    ("t_study_plan_block", "PRIMARY", "block_id"),
+                    ("t_study_plan_block", "idx_study_block_plan", "user_id,plan_id,start_utc,block_id"),
+                    ("t_study_plan_block", "idx_study_block_state", "user_id,state,start_utc,end_utc"),
+                    ("t_study_plan_block", "idx_study_block_task", "user_id,task_id,state")}
+EXPECTED_CHECKS = {"chk_planning_preference", "chk_personal_event", "chk_task_planning_profile", "chk_study_plan", "chk_study_block"}
 
 
 def main() -> int:

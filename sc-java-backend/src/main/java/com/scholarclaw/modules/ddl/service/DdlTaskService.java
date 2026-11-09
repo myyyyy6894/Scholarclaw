@@ -38,6 +38,7 @@ import java.util.function.Consumer;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 /**
  * DDL 任务领域服务（TASK-703，{@code 04} `API-DDL-002/003/004/006/007`）。
@@ -215,6 +216,20 @@ public class DdlTaskService {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "待规划任务超过 500 项，请先处理部分任务。");
         }
         return tasks;
+    }
+
+    /** 采纳规划时在调用者的事务中按 ID 顺序锁定现有任务，防止截止/状态与采纳并发覆盖。 */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<DdlTaskVO> lockForPlanning(Long userId, List<Long> taskIds) {
+        if (taskIds == null || taskIds.size() > PLANNING_TASK_LIMIT || taskIds.stream().anyMatch(id -> id == null || id <= 0)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "规划任务数量超限。");
+        }
+        UserContext user = resolveUserContext(userId);
+        List<DdlTaskVO> result = new ArrayList<>();
+        for (Long id : taskIds.stream().distinct().sorted().toList()) {
+            result.add(toVO(lockOwnedTask(userId, id), user.zoneId()));
+        }
+        return List.copyOf(result);
     }
 
     /** 草案展示校验：目标任务仍存在、未取消/完成，且 `updated_at` 与草案快照一致。 */

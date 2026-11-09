@@ -100,7 +100,8 @@ public class PlanningInputService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ProfileView saveProfile(long userId, long taskId, ProfileWrite request) {
         lockActiveUser(userId);
-        tasks.getTask(userId, taskId); // Only ddl reads its task; this also rejects other owners and canceled tasks.
+        // 锁定所属任务，避免并发取消后仍写入孤立工时；DDL 仍是任务唯一写入方。
+        tasks.lockForPlanning(userId, List.of(taskId));
         if (request == null || request.estimatedMinutes() == null || request.remainingMinutes() == null
                 || request.priority() == null || request.splittable() == null || request.minBlockMinutes() == null) {
             throw invalid("请填写预计工时、剩余工时、优先级与拆分方式。");

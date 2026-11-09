@@ -176,6 +176,27 @@ class StudyPlanIntegrationTest {
         assertThat(input.profiles(owner).getFirst().remainingMinutes()).isEqualTo(120);
     }
 
+    @Test
+    void cancelingDdlAtomicallyCancelsItsFutureBlocksButRollbackPreservesThem() {
+        long owner = user();
+        var task = setup(owner);
+        var draft = plans.create(owner, new CreatePlan(tomorrow(), tomorrow(), "cancel-ddl-plan", true));
+        var accepted = plans.accept(owner, Long.parseLong(draft.planId()), new AcceptPlan(draft.revision(),
+                "cancel-ddl-accept", draft.blocks().stream().map(BlockView::blockId).toList()));
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            ddl.cancelTask(owner, task.taskId());
+            status.setRollbackOnly();
+        });
+        assertThat(ddl.getTask(owner, task.taskId()).status()).isEqualTo("ACTIVE");
+        assertThat(plans.get(owner, Long.parseLong(draft.planId())).blocks()).allMatch(block -> block.state().equals("PLANNED"));
+
+        ddl.cancelTask(owner, task.taskId());
+        var canceled = plans.get(owner, Long.parseLong(draft.planId()));
+        assertThat(canceled.stale()).isTrue();
+        assertThat(canceled.revision()).isEqualTo(accepted.revision() + 1);
+        assertThat(canceled.blocks()).allMatch(block -> block.state().equals("CANCELED"));
+    }
+
     private String acceptConcurrent(long user, PlanView plan, String request, CountDownLatch start) throws InterruptedException {
         start.await();
         try {

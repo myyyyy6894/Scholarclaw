@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.enums.TaskStatus;
 import com.scholarclaw.common.enums.TimePrecision;
+import com.scholarclaw.common.event.DdlTaskCanceledEvent;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
@@ -24,6 +25,7 @@ import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.math.BigDecimal;
 import java.time.DateTimeException;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -36,6 +38,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
@@ -71,17 +74,19 @@ public class DdlTaskService {
     private final UserConfigService userConfigService;
     private final DdlTimeRuleValidator timeRuleValidator;
     private final DdlDraftStore draftStore;
+    private final ApplicationEventPublisher events;
 
     public DdlTaskService(DdlTaskMapper ddlTaskMapper,
                           CourseService courseService,
                           UserConfigService userConfigService,
                           DdlTimeRuleValidator timeRuleValidator,
-                          DdlDraftStore draftStore) {
+                          DdlDraftStore draftStore, ApplicationEventPublisher events) {
         this.ddlTaskMapper = ddlTaskMapper;
         this.courseService = courseService;
         this.userConfigService = userConfigService;
         this.timeRuleValidator = timeRuleValidator;
         this.draftStore = draftStore;
+        this.events = events;
     }
 
     /**
@@ -820,6 +825,7 @@ public class DdlTaskService {
         if (updated == 0) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        events.publishEvent(new DdlTaskCanceledEvent(userId, taskId, Instant.now()));
         draftStore.deleteDraftAfterCommit(userId, taskId);
         return new DeleteDdlTaskVO(taskId.toString(), TaskStatus.CANCELED.name());
     }
@@ -852,6 +858,7 @@ public class DdlTaskService {
                 if (updated == 0) {
                     throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
                 }
+                events.publishEvent(new DdlTaskCanceledEvent(userId, entity.getTaskId(), Instant.now()));
             }
             draftStore.deleteDraftAfterCommit(userId, entity.getTaskId());
             result.add(new DeleteDdlTaskVO(entity.getTaskId().toString(),

@@ -82,6 +82,31 @@ public class StudyPlanRepository {
         return jdbc.update("UPDATE t_study_plan_block SET state=?,version=version+1,updated_at=? WHERE user_id=? AND plan_id=? AND block_id=? AND version=?",
                 state, now, userId, planId, blockId, version);
     }
+    public int moveBlock(long userId, long planId, long blockId, long version, LocalDateTime startUtc,
+                         LocalDateTime endUtc, LocalDate localDate, boolean overdue, LocalDateTime now) {
+        return jdbc.update("UPDATE t_study_plan_block SET start_utc=?,end_utc=?,local_date=?,overdue=?,version=version+1,updated_at=? WHERE user_id=? AND plan_id=? AND block_id=? AND version=? AND state='PLANNED'",
+                startUtc, endUtc, localDate, overdue, now, userId, planId, blockId, version);
+    }
+    public int lockBlock(long userId, long planId, long blockId, long version, boolean locked, LocalDateTime now) {
+        return jdbc.update("UPDATE t_study_plan_block SET locked=?,version=version+1,updated_at=? WHERE user_id=? AND plan_id=? AND block_id=? AND version=? AND state='PLANNED'",
+                locked, now, userId, planId, blockId, version);
+    }
+    public int revisePlan(long userId, long planId, long revision, String sourceFingerprint, String warningsJson,
+                          LocalDateTime now) {
+        return jdbc.update("UPDATE t_study_plan SET revision=revision+1,source_fingerprint=COALESCE(?,source_fingerprint),warnings_json=COALESCE(?,warnings_json),updated_at=? WHERE user_id=? AND plan_id=? AND revision=? AND state='ACCEPTED'",
+                sourceFingerprint, warningsJson, now, userId, planId, revision);
+    }
+    /** DDL 取消事件在同一事务内调用；取消未来块但不触碰已完成或已经开始的记录。 */
+    public void cancelFutureForTask(long userId, long taskId, LocalDateTime nowUtc, LocalDateTime updated) {
+        List<Long> planIds = jdbc.queryForList("SELECT plan_id FROM t_study_plan_block WHERE user_id=? AND task_id=? AND state='PLANNED' AND start_utc>? FOR UPDATE",
+                Long.class, userId, taskId, nowUtc).stream().distinct().toList();
+        jdbc.update("UPDATE t_study_plan_block SET state='CANCELED',version=version+1,updated_at=? WHERE user_id=? AND task_id=? AND state='PLANNED' AND start_utc>?",
+                updated, userId, taskId, nowUtc);
+        for (long planId : planIds) {
+            jdbc.update("UPDATE t_study_plan SET revision=revision+1,updated_at=? WHERE user_id=? AND plan_id=? AND state='ACCEPTED'",
+                    updated, userId, planId);
+        }
+    }
     public int cancelPlan(long userId, long planId, long revision, LocalDateTime now) {
         return jdbc.update("UPDATE t_study_plan SET state='CANCELED',revision=revision+1,updated_at=? WHERE user_id=? AND plan_id=? AND state='DRAFT' AND revision=?",
                 now, userId, planId, revision);

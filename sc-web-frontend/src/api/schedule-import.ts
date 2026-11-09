@@ -1,4 +1,4 @@
-import { apiRequest } from '@/api/client'
+import { apiImage, apiRequest } from '@/api/client'
 import type { RuleWrite } from '@/api/schedule'
 import type { BigIntId } from '@/api/types'
 
@@ -38,10 +38,29 @@ export interface ConfirmScheduleImport {
   client_request_id: string
   rules: RuleWrite[]
 }
+export interface ScheduleImageModel {
+  provider: string
+  origin: string
+  model_name: string
+  confirmation_token: string
+}
 
 const path = (id: BigIntId): string => `/v1/schedule/imports/${encodeURIComponent(id)}`
 export const createTextScheduleImport = (termId: BigIntId, rawText: string, requestId: string): Promise<ScheduleImport> =>
   apiRequest('/v1/schedule/imports/text', { method: 'POST', body: { term_id: termId, raw_text: rawText, client_request_id: requestId } })
+export const getScheduleImageModel = (): Promise<ScheduleImageModel> => apiRequest('/v1/schedule/imports/image/model')
+export function createImageScheduleImport(termId: BigIntId, image: File, requestId: string, consentToken: string): Promise<ScheduleImport> {
+  const formData = new FormData()
+  formData.append('term_id', termId)
+  formData.append('client_request_id', requestId)
+  formData.append('consent_token', consentToken)
+  formData.append('confirm_external_transfer', 'true')
+  formData.append('image', image)
+  return apiRequest('/v1/schedule/imports/image', { method: 'POST', formData })
+}
+export const getScheduleImportImage = (id: BigIntId, signal?: AbortSignal): Promise<Blob> => apiImage(`${path(id)}/image`, signal)
+export const retryImageScheduleImport = (id: BigIntId, version: number, consentToken: string): Promise<ScheduleImport> =>
+  apiRequest(`${path(id)}/image/retry`, { method: 'POST', body: { version, consent_token: consentToken, confirm_external_transfer: true } })
 export const listScheduleImports = (termId: BigIntId): Promise<ScheduleImport[]> =>
   apiRequest(`/v1/schedule/imports/term/${encodeURIComponent(termId)}`)
 export const getScheduleImport = (id: BigIntId): Promise<ScheduleImport> => apiRequest(path(id))

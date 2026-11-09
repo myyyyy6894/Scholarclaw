@@ -128,6 +128,54 @@ function buildUrl(path: string): string {
   return `${resolveApiBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+/** 读取当前用户的受保护图片；不把令牌放到图片 URL 中。 */
+export async function apiImage(path: string, signal?: AbortSignal): Promise<Blob> {
+  const headers: Record<string, string> = { Accept: 'image/png, image/jpeg' }
+  const token = tokenProvider()
+  if (token) headers.Authorization = `Bearer ${token}`
+  let response: Response
+  try {
+    response = await fetch(buildUrl(path), { headers, signal: signal ?? null, cache: 'no-store' })
+  } catch (error) {
+    throw new ApiError({ code: CLIENT_ERROR_CODES.NETWORK, message: '无法连接到服务端，请检查网络后重试。', cause: error })
+  }
+  if (response.status === 401) unauthorizedHandler()
+  if (!response.ok) {
+    const envelope = await parseEnvelope<unknown>(response)
+    throw new ApiError({ code: envelope.code, message: envelope.message, traceId: envelope.trace_id, httpStatus: response.status })
+  }
+  const type = (response.headers.get('Content-Type') ?? '').split(';', 1)[0].trim().toLowerCase()
+  const limit = 10 * 1024 * 1024
+  const length = Number(response.headers.get('Content-Length') ?? '0')
+  if (!['image/png', 'image/jpeg'].includes(type) || !Number.isFinite(length) || length < 0 || length > limit) {
+    throw new ApiError({ code: CLIENT_ERROR_CODES.MALFORMED_RESPONSE, message: '图片响应格式或大小不正确。', httpStatus: response.status })
+  }
+  if (!response.body) {
+    throw new ApiError({ code: CLIENT_ERROR_CODES.MALFORMED_RESPONSE, message: '图片响应为空。', httpStatus: response.status })
+  }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const result = await reader.read()
+      if (result.done) break
+      total += result.value.byteLength
+      if (total > limit) {
+        await reader.cancel()
+        throw new ApiError({ code: CLIENT_ERROR_CODES.MALFORMED_RESPONSE, message: '图片响应超过大小限制。', httpStatus: response.status })
+      }
+      chunks.push(result.value)
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    throw new ApiError({ code: CLIENT_ERROR_CODES.NETWORK, message: '读取图片失败，请重试。', cause: error })
+  } finally {
+    reader.releaseLock()
+  }
+  return new Blob(chunks, { type })
+}
+
 /**
  * 发起流式请求（SSE），返回原始 `Response` 供调用方逐帧解析。
  *

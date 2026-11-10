@@ -120,7 +120,10 @@ public class ScheduleImportService {
                 || request.rules().size() > 200 || request.rules().stream().anyMatch(rule -> rule == null)) {
             throw invalid("请选择1至200条课程并提供任务版本。");
         }
-        String fingerprint = fingerprint(new ConfirmFingerprint(Long.toString(id), request.version(), request.rules()));
+        String fingerprint = request.reviewedScheduleVersion() == null
+                ? fingerprint(new ConfirmFingerprint(Long.toString(id), request.version(), request.rules()))
+                : fingerprint(new ReviewedConfirmFingerprint(Long.toString(id), request.version(), request.rules(),
+                        request.reviewedScheduleVersion()));
         var prior = imports.byConfirmRequest(userId, requestId);
         if (prior.isPresent()) {
             if (!fingerprint.equals(prior.get().confirmFingerprint())) throw idempotencyConflict();
@@ -132,8 +135,9 @@ public class ScheduleImportService {
             throw conflict("导入任务状态或版本已变化，请刷新后重试。");
         }
         Term term = schedules.termForUpdate(userId, task.termId()).orElseThrow(ScheduleImportService::notFound);
-        if (term.scheduleVersion() != task.scheduleVersion()) {
-            throw conflict("课表或节次已变化，请重新导入并校对。");
+        if ((term.scheduleVersion() != task.scheduleVersion() || request.reviewedScheduleVersion() != null)
+                && !Long.valueOf(term.scheduleVersion()).equals(request.reviewedScheduleVersion())) {
+            throw conflict("课表或节次已变化，请刷新后重新校对当前课表，无需重新识别图片。");
         }
         List<String> ruleIds = new ArrayList<>();
         for (RuleWrite rule : request.rules()) {
@@ -155,7 +159,7 @@ public class ScheduleImportService {
     private ImportView view(ImportRow row) {
         boolean expired = isExpirable(row.status()) && !row.expiresAt().isAfter(now());
         return new ImportView(Long.toString(row.id()), Long.toString(row.termId()), row.sourceType(),
-                expired ? "EXPIRED" : row.status(), row.version(), row.attempt(),
+                expired ? "EXPIRED" : row.status(), row.version(), row.scheduleVersion(), row.attempt(),
                 ScTimeZone.toOffsetDateTime(row.expiresAt()).toString(), expired ? null : row.sourceText(),
                 expired ? null : parseJson(row.draftJson()), expired ? null : row.errorMessage(),
                 row.receiptJson() == null ? null : parseReceipt(row.receiptJson()));
@@ -204,6 +208,8 @@ public class ScheduleImportService {
     }
     private record TextFingerprint(String termId, String rawText) { }
     private record ConfirmFingerprint(String importId, Long version, List<RuleWrite> rules) { }
+    private record ReviewedConfirmFingerprint(String importId, Long version, List<RuleWrite> rules,
+                                              Long reviewedScheduleVersion) { }
     private static LocalDateTime now() { return ScTimeZone.now().toLocalDateTime(); }
     private static BusinessException invalid(String message) { return new BusinessException(ErrorCode.VALIDATION_ERROR, message); }
     private static BusinessException conflict(String message) { return new BusinessException(ErrorCode.STATE_CONFLICT, message); }

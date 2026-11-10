@@ -141,6 +141,32 @@ class ScheduleImportIntegrationTest {
     }
 
     @Test
+    void periodChangesCanBeReviewedAndSavedWithoutRepeatingRecognition() throws Exception {
+        long user = user(); TermView term = term(user);
+        ImportView draft = ready(user, term);
+        long id = Long.parseLong(draft.importId());
+        schedules.savePeriods(user, Long.parseLong(term.termId()), new PeriodsWrite(term.version(), List.of(
+                new Period(1, LocalTime.of(8, 0), LocalTime.of(8, 45)),
+                new Period(2, LocalTime.of(8, 55), LocalTime.of(9, 40))), false));
+        TermView latest = schedules.terms(user).getFirst();
+        RuleWrite byPeriod = new RuleWrite(term.termId(), null, "数学", null, null, 1,
+                null, null, 1, 2, List.of(1, 2), null, false);
+        assertCode(() -> imports.confirm(user, id, new ConfirmRequest(draft.version(), "stale", List.of(byPeriod))),
+                ErrorCode.STATE_CONFLICT);
+        assertCode(() -> imports.confirm(user, id, new ConfirmRequest(draft.version(), "wrong-version",
+                List.of(byPeriod), latest.scheduleVersion() + 1)), ErrorCode.STATE_CONFLICT);
+        ConfirmRequest approved = new ConfirmRequest(draft.version(), "reviewed", List.of(byPeriod), latest.scheduleVersion());
+        Receipt receipt = imports.confirm(user, id, approved);
+        assertThat(imports.confirm(user, id, approved)).isEqualTo(receipt);
+        RuleView saved = schedules.rules(user, Long.parseLong(term.termId())).getFirst();
+        assertThat(saved.startPeriod()).isEqualTo(1);
+        assertThat(saved.startTime()).isEqualTo(LocalTime.of(8, 0));
+        assertThat(saved.endTime()).isEqualTo(LocalTime.of(9, 40));
+        assertCode(() -> imports.confirm(user, id, new ConfirmRequest(draft.version(), "reviewed",
+                List.of(byPeriod), latest.scheduleVersion() + 1)), ErrorCode.IDEMPOTENCY_CONFLICT);
+    }
+
+    @Test
     void leaseRecoveryPreventsLateResultAndCancelRemovesSource() throws Exception {
         long user = user();
         TermView term = term(user);

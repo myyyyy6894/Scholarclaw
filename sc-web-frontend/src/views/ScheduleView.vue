@@ -198,9 +198,21 @@ async function submitTerm(): Promise<void> {
 // 节次表：先展示受影响课程，用户确认后才修改。
 const periodDialog = ref(false)
 const periodDraft = ref<SchedulePeriod[]>([])
+let returnToImportAfterPeriods = false
 function openPeriods(): void {
   periodDraft.value = periods.value.map((item) => ({ ...item }))
   periodDialog.value = true
+}
+function configureImportPeriods(): void {
+  returnToImportAfterPeriods = true
+  importDialog.value = false
+  openPeriods()
+}
+function resumeImportAfterPeriods(): void {
+  if (returnToImportAfterPeriods) {
+    returnToImportAfterPeriods = false
+    importDialog.value = true
+  }
 }
 function addPeriod(): void {
   const next = Math.max(0, ...periodDraft.value.map((item) => item.period_no)) + 1
@@ -224,8 +236,8 @@ async function submitPeriods(): Promise<void> {
       body.confirm_affected = true
     }
     await saveSchedulePeriods(current.term_id, body)
-    periodDialog.value = false
     await refresh(current.term_id)
+    periodDialog.value = false
     notifySuccess('节次已保存。')
   } catch (error) { notifyError(error) } finally { busy.value = false }
 }
@@ -462,7 +474,7 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       </ul>
     </BaseCard>
 
-    <ScheduleImportDialog v-if="term" v-model="importDialog" :term="term" :rules="rules" :periods="periods" :source-type="importSource" @saved="refresh(termId)" />
+    <ScheduleImportDialog v-if="term" v-model="importDialog" :term="term" :rules="rules" :periods="periods" :source-type="importSource" @saved="refresh(termId)" @configure-periods="configureImportPeriods" />
 
     <el-dialog v-model="termDialog" :title="editingTerm ? '编辑学期' : '新建学期'" width="520px" class="schedule-dialog">
       <el-form label-position="top">
@@ -475,7 +487,7 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       <template #footer><el-button @click="termDialog = false">取消</el-button><el-button type="primary" :loading="busy" @click="submitTerm">保存学期</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="periodDialog" title="设置节次时间" width="620px" class="schedule-dialog">
+    <el-dialog v-model="periodDialog" title="设置节次时间" width="620px" class="schedule-dialog" @closed="resumeImportAfterPeriods">
       <p class="schedule-hint">按学校作息填写；修改已使用的节次前会显示受影响课程。</p>
       <div v-for="(period, index) in periodDraft" :key="index" class="period-row">
         <span>第</span><el-input-number v-model="period.period_no" :min="1" :max="30" controls-position="right" /><span>节</span>

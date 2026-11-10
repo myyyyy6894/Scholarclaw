@@ -26,6 +26,7 @@ export interface ScheduleImport {
   source_type: 'TEXT' | 'IMAGE'
   status: 'QUEUED' | 'RUNNING' | 'REVIEW_REQUIRED' | 'FAILED' | 'CONFIRMED' | 'EXPIRED' | 'CANCELED'
   version: number
+  schedule_version: number
   attempt: number
   expires_at: string
   source_text: string | null
@@ -37,6 +38,7 @@ export interface ConfirmScheduleImport {
   version: number
   client_request_id: string
   rules: RuleWrite[]
+  reviewed_schedule_version?: number
 }
 export interface ScheduleImageModel {
   provider: string

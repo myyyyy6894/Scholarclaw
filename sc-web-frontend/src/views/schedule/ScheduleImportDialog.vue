@@ -20,7 +20,7 @@ const props = defineProps<{
   periods: SchedulePeriod[]
   sourceType: 'TEXT' | 'IMAGE'
 }>()
-const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: [] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: []; 'configure-periods': [] }>()
 const visible = computed({ get: () => props.modelValue, set: (value: boolean) => emit('update:modelValue', value) })
 const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const rawText = ref('')
@@ -47,6 +47,13 @@ const deadline = computed(() => task.value
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(task.value.expires_at))
   : '')
 const selectedCount = computed(() => editors.value.filter((item) => item.included).length)
+const missingPeriods = computed(() => {
+  const defined = new Set(props.periods.map((period) => period.period_no))
+  return [...new Set(editors.value.filter((row) => row.included && row.timeMode === 'period')
+    .flatMap((row) => [row.startPeriod, row.endPeriod])
+    .filter((period): period is number => period !== undefined && !defined.has(period)))].sort((a, b) => a - b)
+})
+const scheduleChanged = computed(() => task.value !== null && task.value.schedule_version !== props.term.schedule_version)
 const visibleRecent = computed(() => recent.value.filter((item) => item.source_type === props.sourceType))
 const statuses: Record<ScheduleImport['status'], string> = {
   QUEUED: '等待解析', RUNNING: '正在解析', REVIEW_REQUIRED: '等待校对', FAILED: '解析失败',
@@ -112,7 +119,7 @@ async function pollOnce(current: number): Promise<void> {
       if (current === generation) message.value = error instanceof Error ? error.message : '状态读取失败，请手动刷新。'
     }
 }
-watch(() => [props.modelValue, props.term.term_id, props.sourceType] as const, async ([open, termId, sourceType]) => {
+watch([() => props.modelValue, () => props.term.term_id, () => props.sourceType], async ([open, termId, sourceType]) => {
   if (termId !== lastTermId || sourceType !== lastSourceType) {
     lastTermId = termId; lastSourceType = sourceType; startNew(); recent.value = []
   }
@@ -130,8 +137,8 @@ function clearPreview(): void {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = ''
 }
-watch(() => [visible.value, task.value?.import_id, task.value?.source_type,
-  !!task.value && ['QUEUED', 'RUNNING', 'REVIEW_REQUIRED', 'FAILED'].includes(task.value.status)] as const,
+watch([() => visible.value, () => task.value?.import_id, () => task.value?.source_type,
+  () => !!task.value && ['QUEUED', 'RUNNING', 'REVIEW_REQUIRED', 'FAILED'].includes(task.value.status)],
 async ([open, id, sourceType, live], _previous, onCleanup) => {
   const current = ++previewGeneration
   clearPreview()
@@ -269,22 +276,30 @@ async function confirmRules(): Promise<void> {
   if (!current || busy.value) return
   let rules: RuleWrite[]
   try {
+    if (missingPeriods.value.length) throw new Error(`请先设置第 ${missingPeriods.value.join('、')} 节的时间。`)
     rules = editors.value.filter((item) => item.included).map((item) => editorToRule(item, props.term))
     if (!rules.length) throw new Error('请至少选择一条课程。')
     if (rules.length > 200) throw new Error('每次最多保存 200 条课程。')
   } catch (error) { notifyWarning(error instanceof Error ? error.message : '请检查课程内容。'); return }
   const warnings = importConflicts(rules, props.rules, props.periods)
+  const reviewedScheduleVersion = props.term.schedule_version
+  const changed = current.schedule_version !== reviewedScheduleVersion
   const details = warnings.length ? `\n\n请注意：\n${warnings.slice(0, 10).join('\n')}${warnings.length > 10 ? '\n还有其他重叠，请检查课程。' : ''}` : ''
-  try { await ElMessageBox.confirm(`将追加 ${rules.length} 条已校对课程到「${props.term.name}」。${details}`,
+  const changedNotice = changed ? '\n\n课表或节次已变化，保存时将使用当前节次时间，并重新检查课程冲突。' : ''
+  try { await ElMessageBox.confirm(`将追加 ${rules.length} 条已校对课程到「${props.term.name}」。${changedNotice}${details}`,
     '确认保存课表', { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '继续校对' }) }
   catch { return }
+  if (props.term.schedule_version !== reviewedScheduleVersion) {
+    notifyWarning('课表又发生了变化，请重新检查后保存。')
+    return
+  }
   if (warnings.length) rules = rules.map((rule) => ({ ...rule, confirm_overlap: true }))
   busy.value = true
   const submit = async (items: RuleWrite[]): Promise<ScheduleImportReceipt> => {
-    const fingerprint = JSON.stringify([current.import_id, current.version, items])
+    const fingerprint = JSON.stringify([current.import_id, current.version, reviewedScheduleVersion, items])
     confirmOperation.value = operationFor(confirmOperation.value, fingerprint, requestId)
     return confirmScheduleImport(current.import_id, { version: current.version,
-      client_request_id: confirmOperation.value.requestId, rules: items })
+      client_request_id: confirmOperation.value.requestId, rules: items, reviewed_schedule_version: reviewedScheduleVersion })
   }
   try {
     let receipt: ScheduleImportReceipt
@@ -312,6 +327,10 @@ async function confirmRules(): Promise<void> {
   <el-dialog v-model="visible" :title="sourceType === 'IMAGE' ? '导入图片课表' : '导入文字课表'" width="min(920px, calc(100vw - 24px))" class="import-dialog">
     <p v-if="sourceType === 'TEXT'" class="import-hint">每行一条，例如：高等数学 周一 第1-2节 1-16周 教师：张老师，教室：A101。系统只提供建议，请逐项核对。</p>
     <p v-else class="import-hint">选择 PNG 或 JPEG 课表图片。识别结果仅供参考，请对照原图逐项校对后保存。</p>
+    <p v-if="periods.length === 0" class="import-warning">还没有设置节次时间。设置一次后，按节次识别的课程会共用这些时间。
+      <el-button v-if="!task || !['QUEUED', 'RUNNING'].includes(task.status)" text type="primary" @click="emit('configure-periods')">设置节次时间</el-button>
+      <span v-else>识别完成后即可设置。</span>
+    </p>
     <div v-if="visibleRecent.length" class="import-history">
       <label for="import-history">最近的导入</label>
       <el-select id="import-history" :model-value="task?.import_id ?? ''" placeholder="选择已有任务" @change="openExisting">
@@ -343,9 +362,14 @@ async function confirmRules(): Promise<void> {
       <p v-if="task.status === 'CONFIRMED'" class="import-hint">已保存 {{ task.receipt?.rule_ids.length ?? 0 }} 条课程，临时内容正在清理。</p>
       <p v-if="task.status === 'EXPIRED' || task.status === 'CANCELED'" class="import-hint">临时内容已不可用，可以新建导入。</p>
       <template v-if="task.status === 'REVIEW_REQUIRED'">
+        <p v-if="scheduleChanged" class="import-warning">课表或节次已变化，请按当前时间重新核对；不需要再次识别图片。</p>
+        <p v-if="missingPeriods.length" class="import-warning">第 {{ missingPeriods.join('、') }} 节还没有设置时间。
+          <el-button text type="primary" @click="emit('configure-periods')">设置节次时间</el-button>
+        </p>
         <div v-if="task.error_message" role="alert" class="import-warning">
           {{ task.error_message }}
           <el-button v-if="task.source_type === 'IMAGE'" :disabled="task.attempt >= 3" :loading="busy" @click="retry">重新确认并识别</el-button>
+          <span v-if="task.source_type === 'IMAGE' && task.attempt >= 3">本任务已达到识别次数上限；可对照原图手动填写，或新建导入。</span>
         </div>
         <p class="import-hint">已选 {{ selectedCount }} 条。可修改每一项、取消不需要的行，或添加空白行。修改暂存在当前页面，刷新或离开页面前请确认保存。</p>
         <article v-for="(row, index) in editors" :key="index" class="import-row">

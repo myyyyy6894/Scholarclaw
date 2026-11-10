@@ -54,6 +54,9 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const compact = ref(false)
 const POLL_INTERVAL_MS = 4000
 let pollTimer: number | null = null
+let backgroundCoursesPending = false
+let backgroundDocsPending = false
+const coursesRequests = new LatestRequest()
 
 const compactQuery =
   typeof window === 'undefined' ? null : window.matchMedia('(max-width: 640px)')
@@ -105,8 +108,8 @@ function syncPolling(): void {
   if (hasPendingDocs(docs.value)) {
     if (pollTimer === null) {
       pollTimer = window.setInterval(() => {
-        void loadDocs()
-        void loadCourses()
+        void loadDocs(true)
+        void loadCourses(true)
       }, POLL_INTERVAL_MS)
     }
   } else {
@@ -128,27 +131,34 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-async function loadCourses(): Promise<void> {
-  loadingCourses.value = true
-  loadError.value = ''
+async function loadCourses(background = false): Promise<void> {
+  if (background && (backgroundCoursesPending || loadingCourses.value)) return
+  if (background) backgroundCoursesPending = true
+  else { loadingCourses.value = true; loadError.value = '' }
+  const requestSeq = coursesRequests.start()
   try {
-    courses.value = await listCourses()
+    const result = await listCourses()
+    if (!coursesRequests.isCurrent(requestSeq)) return
+    courses.value = result
     const exists = courses.value.some((item) => item.course_id === selectedCourseId.value)
     if (!exists) {
       selectedCourseId.value = courses.value[0]?.course_id ?? null
     }
     courseStore.select(selectedCourseId.value)
   } catch (error) {
+    if (!coursesRequests.isCurrent(requestSeq) || background) return
     loadError.value = error instanceof Error ? error.message : '课程列表读取失败。'
     notifyError(error)
   } finally {
-    loadingCourses.value = false
+    if (background) backgroundCoursesPending = false
+    else if (coursesRequests.isCurrent(requestSeq)) loadingCourses.value = false
   }
 }
 
 const docsRequests = new LatestRequest()
 
-async function loadDocs(): Promise<void> {
+async function loadDocs(background = false): Promise<void> {
+  if (background && (backgroundDocsPending || loadingDocs.value)) return
   const courseId = selectedCourseId.value
   const requestSeq = docsRequests.start()
   if (courseId === null) {
@@ -156,7 +166,8 @@ async function loadDocs(): Promise<void> {
     stopPolling()
     return
   }
-  loadingDocs.value = true
+  if (background) backgroundDocsPending = true
+  else loadingDocs.value = true
   try {
     const result = await listDocs(
       courseId,
@@ -171,11 +182,14 @@ async function loadDocs(): Promise<void> {
     if (!docsRequests.isCurrent(requestSeq) || courseId !== selectedCourseId.value) {
       return
     }
-    docs.value = []
-    notifyError(error)
-    syncPolling()
+    if (!background) {
+      docs.value = []
+      notifyError(error)
+      syncPolling()
+    }
   } finally {
-    if (docsRequests.isCurrent(requestSeq)) {
+    if (background) backgroundDocsPending = false
+    else if (docsRequests.isCurrent(requestSeq)) {
       loadingDocs.value = false
     }
   }
@@ -377,7 +391,7 @@ function documentTone(doc: KnowledgeDoc): Tone {
 
           <div v-else-if="loadError !== ''" class="module-error">
             <p>{{ loadError }}</p>
-            <el-button size="small" @click="loadCourses">重新加载</el-button>
+            <el-button size="small" @click="loadCourses()">重新加载</el-button>
           </div>
 
           <EmptyState
@@ -447,7 +461,7 @@ function documentTone(doc: KnowledgeDoc): Tone {
                     :value="item.value"
                   />
                 </el-select>
-                <el-button size="small" :disabled="loadingDocs" @click="loadDocs">刷新</el-button>
+                <el-button size="small" :disabled="loadingDocs" @click="loadDocs()">刷新</el-button>
                 <el-button
                   type="primary"
                   size="small"

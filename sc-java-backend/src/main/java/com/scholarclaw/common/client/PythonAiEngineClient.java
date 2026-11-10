@@ -60,6 +60,8 @@ public class PythonAiEngineClient {
     public static final String SCHEDULE_TEXT_PATH = "/internal/ai/v1/schedule/extract-text";
     /** One explicitly approved vision call; caller must not automatically replay it. */
     public static final String SCHEDULE_IMAGE_PATH = "/internal/ai/v1/schedule/extract-image";
+    /** Only this exact internal marker is recognised; arbitrary Python messages remain untrusted. */
+    public static final String SCHEDULE_IMAGE_INVALID_OUTPUT = "SCHEDULE_IMAGE_INVALID_OUTPUT";
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
     private static final int MAX_ERROR_BODY_BYTES = 64 * 1024;
 
@@ -318,8 +320,11 @@ public class PythonAiEngineClient {
                 mapped = ErrorCode.INTERNAL_ERROR;
             }
             log.warn("内部调用失败 path={} code={} status={}", path, code, response.statusCode());
-            // 只用 Java 的脱敏文案：Python 的异常消息可能包含字段级细节或内部上下文
-            throw new BusinessException(mapped, mapped.defaultMessage());
+            // Do not forward Python messages. Recognise one fixed marker only, on the image route.
+            Object detail = SCHEDULE_IMAGE_PATH.equals(path) && mapped == ErrorCode.UPSTREAM_MODEL_ERROR
+                    && "课表图片模型输出格式不可校对。".equals(root.path("message").asText())
+                    ? SCHEDULE_IMAGE_INVALID_OUTPUT : null;
+            throw new BusinessException(mapped, mapped.defaultMessage(), detail);
         }
         JsonNode data = root.path("data");
         return data.isMissingNode() ? objectMapper.nullNode() : data;

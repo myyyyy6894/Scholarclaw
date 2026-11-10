@@ -138,19 +138,34 @@ def test_parent_directory_symlink_is_rejected(tmp_path: Path) -> None:
         image_extractor._read_image(str(root), "10001", NAME)
 
 
-@pytest.mark.parametrize("row", [
-    _row(weekday=True), _row(weekday=8), _row(weeks=[2, 1]), _row(weeks=[1, 1]),
-    _row(weeks=[17]), _row(start_period=3, end_period=2), _row(end_period=None),
-    _row(start_time="09:00:00", end_time=None), _row(start_time="09:00:00", end_time="08:00:00"),
-    _row(start_time="25:00:00", end_time="26:00:00"), _row(extra="not allowed"),
+@pytest.mark.parametrize(("row", "field", "value"), [
+    (_row(weekday=True), "weekday", None), (_row(weekday=8), "weekday", None),
+    (_row(weeks=[17]), "weeks", []), (_row(start_period=3, end_period=2), "start_period", None),
+    (_row(end_period=None), "start_period", None), (_row(start_time="09:00:00", end_time=None), "start_time", None),
+    (_row(start_time="09:00:00", end_time="08:00:00"), "start_time", None),
+    (_row(start_time="25:00:00", end_time="26:00:00"), "start_time", None),
 ])
-def test_untrusted_model_fields_are_rejected(row: dict[str, Any]) -> None:
-    with pytest.raises(UpstreamModelError):
-        image_extractor._parse_suggestions(_response([row]), 16)
+def test_invalid_fields_are_cleared_and_flagged_for_review(row: dict[str, Any], field: str, value: Any) -> None:
+    result = image_extractor._parse_suggestions(_response([row]), 16).rows[0].model_dump()
+    assert result[field] == value
+    assert result["issues"]
+
+
+def test_common_model_format_variations_are_normalised_without_guessing() -> None:
+    row = _row(weekday="1", start_period="1", end_period="2", start_time="8:00", end_time="09:40",
+               weeks=[3, "1", 1, 2], extra="ignored")
+    response = _response([row, {"title": "物理"}])
+    response["choices"][0]["message"]["content"] = "```json\n" + response["choices"][0]["message"]["content"] + "\n```"
+    rows = image_extractor._parse_suggestions(response, 16).model_dump()["rows"]
+    assert rows[0]["weekday"] == 1 and rows[0]["weeks"] == [1, 2, 3]
+    assert rows[0]["start_time"] == "08:00:00" and rows[0]["end_time"] == "09:40:00"
+    assert "extra" not in rows[0]
+    assert rows[1]["title"] == "物理" and rows[1]["weekday"] is None and rows[1]["weeks"] == []
+    assert rows[1]["issues"]
 
 
 @pytest.mark.parametrize("content", [
-    '{"rows":[],"rows":[]}', '```json\n{"rows":[]}\n```', '{"rows":[],"extra":1}',
+    '{"rows":[],"rows":[]}', '{"rows":[{"title":"a","title":"b"}]}',
     "x" * (image_extractor.MAX_MODEL_CONTENT + 1),
 ])
 def test_malformed_or_duplicate_json_rejected_without_echo(content: str) -> None:
@@ -159,24 +174,35 @@ def test_malformed_or_duplicate_json_rejected_without_echo(content: str) -> None
     assert content not in str(error.value)
 
 
-def test_truncated_or_failed_model_is_never_retried(
+def test_truncated_model_recovers_complete_rows_with_visible_warning_without_retry(
     authorized_remote_client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _file()
-    truncated = _response()
-    truncated["choices"][0]["finish_reason"] = "length"
+    truncated = {"choices": [{"finish_reason": "length", "message": {"content":
+        '{"rows":[' + json.dumps(_row(), ensure_ascii=False) + ',{"title":"unfinished'
+    }}]}
     gateway = FakeGateway(truncated)
     monkeypatch.setattr(image_extractor, "SsrfSafeModelGateway", lambda _settings: gateway)
     result = authorized_remote_client.post(PATH, json=_body())
-    assert result.status_code == 502
+    assert result.status_code == 200
+    assert len(result.json()["data"]["rows"]) == 1
+    assert "可能遗漏课程" in result.json()["data"]["rows"][0]["issues"][0]
     assert len(gateway.calls) == 1
     assert TEST_KEY not in result.text
+
+
+def test_truncated_markdown_recovers_only_complete_rows_and_marks_omissions() -> None:
+    response = {"choices": [{"finish_reason": "length", "message": {"content":
+        '```json\n{"rows":[' + json.dumps(_row(), ensure_ascii=False) + ',{"title":"未完成'
+    }}]}
+    rows = image_extractor._parse_suggestions(response, 16).model_dump()["rows"]
+    assert len(rows) == 1 and "可能遗漏课程" in rows[0]["issues"][0]
 
 
 def test_validation_traceback_does_not_leak_model_output() -> None:
     sensitive = "private-model-output-" + "x" * 200
     with pytest.raises(UpstreamModelError) as error:
-        image_extractor._parse_suggestions(_response([_row(title=sensitive)]), 16)
+        image_extractor._parse_suggestions({"choices": [{"message": {"content": sensitive}}]}, 16)
     assert sensitive not in "".join(traceback.format_exception(error.value))
 
 

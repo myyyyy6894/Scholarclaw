@@ -231,6 +231,22 @@ class ScheduleImageImportIntegrationTest {
     }
 
     @Test
+    void invalidModelOutputShowsSpecificSafeReasonWithoutRetry() throws Exception {
+        long user = user().getUserId(); TermView term = term(user);
+        long id = Long.parseLong(create(user, term, "invalid-output").importId());
+        String lease = claim(id);
+        when(python.postJson(eq(PythonAiEngineClient.SCHEDULE_IMAGE_PATH), any(), eq(user), any(Duration.class)))
+                .thenThrow(new BusinessException(ErrorCode.UPSTREAM_MODEL_ERROR, "private upstream detail",
+                        PythonAiEngineClient.SCHEDULE_IMAGE_INVALID_OUTPUT));
+        worker.processClaim(id, lease);
+        ImportView review = imports.get(user, id);
+        assertThat(review.errorMessage()).contains("课表格式无法校对", "可能已产生费用")
+                .doesNotContain("private upstream detail");
+        assertThat(repository.imageCandidates(now(), 100)).doesNotContain(id);
+        verify(python, times(1)).postJson(eq(PythonAiEngineClient.SCHEDULE_IMAGE_PATH), any(), eq(user), any(Duration.class));
+    }
+
+    @Test
     void lateModelResponseCannotRestoreCanceledTask() throws Exception {
         long user = user().getUserId(); TermView term = term(user);
         long id = Long.parseLong(create(user, term, "late-response").importId());

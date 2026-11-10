@@ -98,11 +98,28 @@ public class ScheduleImageImportWorker {
         } catch (RuntimeException e) {
             // Never log image bytes, extracted text, model responses, endpoint or exception messages.
             log.warn("课表图片建议失败 importId={} type={}", id, e.getClass().getSimpleName());
-            String message = e instanceof BusinessException business && business.getErrorCode() == ErrorCode.STATE_CONFLICT
-                    ? "模型配置已变化，图片未按旧确认发送；可重新确认或手动填写。"
-                    : "图片识别未完成，可能已产生费用；可对照原图手动填写，或重新确认后再次识别。";
+            String message = failureMessage(e);
             imports.imageNeedsManualReview(id, lease, message, now());
         }
+    }
+
+    static String failureMessage(RuntimeException error) {
+        if (error instanceof BusinessException business) {
+            if (business.getErrorCode() == ErrorCode.STATE_CONFLICT) {
+                return "模型配置已变化，图片未按旧确认发送；可重新确认或手动填写。";
+            }
+            String reason = switch (business.getErrorCode()) {
+                case UPSTREAM_TIMEOUT -> "模型响应超时";
+                case UPSTREAM_MODEL_AUTH_ERROR -> "模型服务鉴权失败，请检查模型名称和密钥";
+                case UPSTREAM_MODEL_RATE_LIMITED -> "模型服务限流或额度不足";
+                case E_SYS_02 -> "模型服务地址未通过安全校验";
+                case UPSTREAM_MODEL_ERROR -> PythonAiEngineClient.SCHEDULE_IMAGE_INVALID_OUTPUT.equals(business.getData())
+                        ? "模型返回的课表格式无法校对" : "模型服务或识别流程暂不可用";
+                default -> "图片识别未完成";
+            };
+            return reason + "，可能已产生费用；可对照原图手动填写，或重新确认后再次识别。";
+        }
+        return "图片识别未完成，可能已产生费用；可对照原图手动填写，或重新确认后再次识别。";
     }
 
     void cleanupTerminalImages(LocalDateTime now) {

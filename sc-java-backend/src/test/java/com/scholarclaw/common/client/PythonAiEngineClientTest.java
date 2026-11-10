@@ -173,6 +173,24 @@ class PythonAiEngineClientTest {
     }
 
     @Test
+    void recognisesOnlyTheFixedImageOutputMarkerWithoutForwardingOtherMessages() {
+        responseStatus.set(502);
+        responseBody.set("{\"code\":\"UPSTREAM_MODEL_ERROR\",\"message\":\"课表图片模型输出格式不可校对。\"}");
+        assertThatThrownBy(() -> client(baseUrl).postJson(PythonAiEngineClient.SCHEDULE_IMAGE_PATH, Map.of(), 1L))
+                .satisfies(ex -> assertThat(((BusinessException) ex).getData())
+                        .isEqualTo(PythonAiEngineClient.SCHEDULE_IMAGE_INVALID_OUTPUT));
+        assertThatThrownBy(() -> client(baseUrl).postJson(PythonAiEngineClient.SCHEDULE_TEXT_PATH, Map.of(), 1L))
+                .satisfies(ex -> assertThat(((BusinessException) ex).getData()).isNull());
+        responseBody.set("{\"code\":\"UPSTREAM_MODEL_ERROR\",\"message\":\"private model output\"}");
+        assertThatThrownBy(() -> client(baseUrl).postJson(PythonAiEngineClient.SCHEDULE_IMAGE_PATH, Map.of(), 1L))
+                .satisfies(ex -> {
+                    BusinessException business = (BusinessException) ex;
+                    assertThat(business.getData()).isNull();
+                    assertThat(business.getMessage()).doesNotContain("private model output");
+                });
+    }
+
+    @Test
     @DisplayName("内部令牌不匹配（Python AUTH_FORBIDDEN）映射为服务端配置错误，不暴露为前端 403")
     void mapsInternalAuthFailureToInternalError() {
         responseStatus.set(403);

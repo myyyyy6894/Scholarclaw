@@ -419,7 +419,7 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       </div>
       <div class="schedule-actions">
         <el-button @click="openTermEditor()">新建学期</el-button>
-        <el-button @click="term ? (importSource = 'FILE', importDialog = true) : configureImportTerm(0)">上传学校导出</el-button>
+        <el-button :disabled="loading" @click="term ? (importSource = 'FILE', importDialog = true) : configureImportTerm(0)">上传学校导出</el-button>
         <el-button v-if="term" @click="importSource = 'TEXT'; importDialog = true">导入文字</el-button>
         <el-button v-if="term" @click="importSource = 'IMAGE'; importDialog = true">导入图片</el-button>
         <el-button v-if="term" type="primary" @click="openRuleEditor()"><Plus :size="16" /> 添加课程</el-button>

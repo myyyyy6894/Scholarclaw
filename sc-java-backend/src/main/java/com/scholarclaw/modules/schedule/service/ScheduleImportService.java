@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.modules.schedule.dto.ScheduleDtos.RuleWrite;
 import com.scholarclaw.modules.schedule.dto.ScheduleImportDtos.*;
 import com.scholarclaw.modules.schedule.repository.ScheduleImportRepository;
@@ -18,6 +19,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,16 +37,18 @@ public class ScheduleImportService {
     private final ScheduleService scheduleService;
     private final UserConfigService users;
     private final ObjectMapper mapper;
+    private final AesGcmCryptoService crypto;
     private final int retentionHours;
 
     public ScheduleImportService(ScheduleImportRepository imports, ScheduleRepository schedules,
-                                 ScheduleService scheduleService, UserConfigService users, ObjectMapper mapper,
+                                 ScheduleService scheduleService, UserConfigService users, ObjectMapper mapper, AesGcmCryptoService crypto,
                                  @Value("${sc.schedule.import.retention-hours:24}") int retentionHours) {
         this.imports = imports;
         this.schedules = schedules;
         this.scheduleService = scheduleService;
         this.users = users;
         this.mapper = mapper;
+        this.crypto = crypto;
         if (retentionHours < 1 || retentionHours > 168) {
             throw new IllegalArgumentException("课表导入任务有效期须为1至168小时");
         }
@@ -121,9 +126,11 @@ public class ScheduleImportService {
             throw conflict("导入草稿已变化，请刷新后重新校对。");
         }
         validateRules(task, request.rules());
+        selectedSources(task, request.rules().size(), request.sourceSegments());
         Term term = schedules.termForUpdate(userId, task.termId()).orElseThrow(ScheduleImportService::notFound);
         var batch = scheduleService.analyzeImport(userId, term, request.rules());
-        return new ConflictPreview(term.scheduleVersion(), batch.conflicts(), previewToken(task, term, request.rules()));
+        String token = crypto.encrypt(previewFingerprint(task, term, request.rules(), request.sourceSegments()));
+        return new ConflictPreview(term.scheduleVersion(), batch.conflicts(), token);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -135,7 +142,10 @@ public class ScheduleImportService {
                 || request.rules().size() > 200 || request.rules().stream().anyMatch(rule -> rule == null)) {
             throw invalid("请选择1至200条课程并提供任务版本。");
         }
-        String fingerprint = request.conflictToken() != null ? fingerprint(request) : request.reviewedScheduleVersion() == null
+        String fingerprint = request.conflictToken() != null
+                ? fingerprint(new FileConfirmFingerprint(Long.toString(id), request.version(), request.rules(),
+                        request.reviewedScheduleVersion(), request.sourceSegments()))
+                : request.reviewedScheduleVersion() == null
                 ? fingerprint(new ConfirmFingerprint(Long.toString(id), request.version(), request.rules()))
                 : fingerprint(new ReviewedConfirmFingerprint(Long.toString(id), request.version(), request.rules(),
                         request.reviewedScheduleVersion()));
@@ -152,24 +162,32 @@ public class ScheduleImportService {
         Term term = schedules.termForUpdate(userId, task.termId()).orElseThrow(ScheduleImportService::notFound);
         if ((term.scheduleVersion() != task.scheduleVersion() || request.reviewedScheduleVersion() != null)
                 && !Long.valueOf(term.scheduleVersion()).equals(request.reviewedScheduleVersion())) {
-            throw conflict("课表或节次已变化，请刷新后重新校对当前课表，无需重新识别图片。");
+            throw conflict("课表或节次已变化，请刷新后在当前草稿重新校对。");
         }
         validateRules(task, request.rules());
         List<String> ruleIds;
+        List<RuleOrigin> origins = new ArrayList<>();
         if ("FILE".equals(task.sourceType())) {
-            var batch = scheduleService.analyzeImport(userId, term, request.rules());
             if (!Long.valueOf(term.scheduleVersion()).equals(request.reviewedScheduleVersion())
-                    || !previewToken(task, term, request.rules()).equals(request.conflictToken())) {
+                    || !matchesPreview(request.conflictToken(), previewFingerprint(task, term, request.rules(), request.sourceSegments()))) {
                 throw conflict("请按当前课表预览并确认所选安排。");
             }
+            var selected = selectedSources(task, request.rules().size(), request.sourceSegments());
+            var batch = scheduleService.analyzeImport(userId, term, request.rules());
             ruleIds = scheduleService.insertImport(userId, term, batch);
+            for (int i = 0; i < ruleIds.size(); i++) {
+                JsonNode row = selected.get(i);
+                origins.add(new RuleOrigin(ruleIds.get(i), row == null ? null : row.path("segment_id").textValue(),
+                        row == null ? null : row.path("source_ref").textValue(),
+                        row == null ? null : row.path("section_code").textValue()));
+            }
         } else {
             ruleIds = new ArrayList<>();
             for (RuleWrite rule : request.rules()) ruleIds.add(scheduleService.createRule(userId, rule).ruleId());
         }
         long finalVersion = schedules.term(userId, task.termId()).orElseThrow(ScheduleImportService::notFound)
                 .scheduleVersion();
-        Receipt receipt = new Receipt(Long.toString(task.termId()), List.copyOf(ruleIds), finalVersion);
+        Receipt receipt = new Receipt(Long.toString(task.termId()), List.copyOf(ruleIds), finalVersion, origins);
         if (imports.confirm(userId, id, task.version(), requestId, fingerprint, write(receipt), now()) != 1) {
             throw conflict("导入任务已变化，请刷新后重试。");
         }
@@ -185,9 +203,34 @@ public class ScheduleImportService {
             }
         }
     }
-    private String previewToken(ImportRow task, Term term, List<RuleWrite> rules) {
-        return fingerprint(new ReviewedConfirmFingerprint(Long.toString(task.id()), task.version(), rules,
-                term.scheduleVersion()));
+    private String previewFingerprint(ImportRow task, Term term, List<RuleWrite> rules, List<String> segments) {
+        return fingerprint(new FileConfirmFingerprint(Long.toString(task.id()), task.version(), rules,
+                term.scheduleVersion(), segments));
+    }
+    private boolean matchesPreview(String token, String expected) {
+        if (token == null || token.length() > 256) return false;
+        try {
+            String actual = crypto.decrypt(token);
+            return MessageDigest.isEqual(expected.getBytes(StandardCharsets.US_ASCII), actual.getBytes(StandardCharsets.US_ASCII));
+        } catch (BusinessException e) { return false; }
+    }
+    private List<JsonNode> selectedSources(ImportRow task, int ruleCount, List<String> segments) {
+        if (segments == null || segments.size() != ruleCount) throw invalid("请一并提交所选课程的来源标识。");
+        var draft = parseJson(task.draftJson());
+        var sources = new HashMap<String, JsonNode>();
+        for (JsonNode row : draft.path("rows")) sources.put(row.path("segment_id").textValue(), row);
+        var used = new HashSet<String>();
+        List<JsonNode> resolved = new ArrayList<>(ruleCount);
+        for (String id : segments) {
+            if (id == null) {
+                resolved.add(null); // A manually added row has no original file fragment.
+            } else {
+                JsonNode source = sources.get(id);
+                if (source == null || !used.add(id)) throw invalid("课程来源已变化、重复或不属于当前草稿。");
+                resolved.add(source);
+            }
+        }
+        return resolved;
     }
     private ImportView view(ImportRow row) {
         boolean expired = isExpirable(row.status()) && !row.expiresAt().isAfter(now());
@@ -239,6 +282,8 @@ public class ScheduleImportService {
                     .digest(write(value).getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
+    private record FileConfirmFingerprint(String importId, Long version, List<RuleWrite> rules,
+                                          Long reviewedScheduleVersion, List<String> sourceSegments) { }
     private record TextFingerprint(String termId, String rawText) { }
     private record ConfirmFingerprint(String importId, Long version, List<RuleWrite> rules) { }
     private record ReviewedConfirmFingerprint(String importId, Long version, List<RuleWrite> rules,

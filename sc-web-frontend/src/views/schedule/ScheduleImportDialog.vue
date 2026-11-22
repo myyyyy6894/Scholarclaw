@@ -365,7 +365,8 @@ async function confirmRules(): Promise<void> {
   if (current.source_type === 'FILE') {
     busy.value = true
     try {
-      const preview = await previewScheduleImport(current.import_id, current.version, rules)
+      const sourceSegments = editors.value.filter((item) => item.included).map((item) => item.segmentId ?? null)
+      const preview = await previewScheduleImport(current.import_id, current.version, rules, sourceSegments)
       const details = preview.conflicts.map((item) =>
         `第 ${item.row} 条「${item.title}」${item.duplicate ? '可能重复。' : ''}${item.dates.length ? `撞课日期 ${item.dates.join('、')}` : ''}`)
       await ElMessageBox.confirm(`将追加 ${rules.length} 条课程到「${props.term.name}」。${details.length ? `\n\n${details.join('\n')}` : ''}`,
@@ -374,7 +375,7 @@ async function confirmRules(): Promise<void> {
       confirmOperation.value = operationFor(confirmOperation.value, fingerprint, requestId)
       const receipt = await confirmScheduleImport(current.import_id, { version: current.version,
         client_request_id: confirmOperation.value.requestId, rules, reviewed_schedule_version: preview.schedule_version,
-        conflict_token: preview.conflict_token })
+        conflict_token: preview.conflict_token, source_segments: sourceSegments })
       await saved(current, receipt)
     } catch (error) { if (error !== 'cancel' && error !== 'close') notifyError(error) }
     finally { busy.value = false }
@@ -467,7 +468,17 @@ async function saved(current: ScheduleImport, receipt: ScheduleImportReceipt): P
         {{ task.error_message || '无法生成建议。' }} 可重试，或关闭窗口手动添加课程。
         <el-button :disabled="task.attempt >= 3" :loading="busy" @click="retry">重试解析</el-button>
       </div>
-      <p v-if="task.status === 'CONFIRMED'" class="import-hint">已保存 {{ task.receipt?.rule_ids.length ?? 0 }} 条课程，临时内容正在清理。</p>
+      <template v-if="task.status === 'CONFIRMED'">
+        <p class="import-hint">已保存 {{ task.receipt?.rule_ids.length ?? 0 }} 条课程。</p>
+        <details v-if="task.receipt?.origins?.length" class="import-hint">
+          <summary>查看已保存课程的来源</summary>
+          <ul>
+            <li v-for="origin in task.receipt.origins" :key="origin.rule_id">
+              课程 #{{ origin.rule_id }} · {{ origin.segment_id || '校对时手动添加' }}<template v-if="origin.section_code"> · 教学班 {{ origin.section_code }}</template>
+            </li>
+          </ul>
+        </details>
+      </template>
       <p v-if="task.status === 'EXPIRED' || task.status === 'CANCELED'" class="import-hint">临时内容已不可用，可以新建导入。</p>
       <template v-if="task.status === 'REVIEW_REQUIRED'">
         <template v-if="task.source_type === 'FILE'">

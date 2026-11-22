@@ -6,6 +6,7 @@ export interface ImportEditor {
   included: boolean
   sourceText: string
   sourceRef?: string
+  segmentId?: string
   sectionCode?: string
   state?: ScheduleSuggestion['state']
   issues: string[]
@@ -25,7 +26,7 @@ export function suggestionToEditor(row: ScheduleSuggestion): ImportEditor {
   return {
     included: !row.state || row.state === 'COURSE' && !!row.title && !!row.weekday && row.weeks.length > 0
       && (row.start_period !== null || row.start_time !== null),
-    sourceText: row.source_text, sourceRef: row.source_ref, sectionCode: row.section_code ?? undefined,
+    sourceText: row.source_text, sourceRef: row.source_ref, segmentId: row.segment_id, sectionCode: row.section_code ?? undefined,
     state: row.state, issues: row.issues,
     title: row.title ?? '', teacher: row.teacher ?? '', room: row.room ?? '', weekday: row.weekday ?? undefined,
     weekText: row.weeks.join(','), timeMode: row.start_period !== null ? 'period' : 'time',

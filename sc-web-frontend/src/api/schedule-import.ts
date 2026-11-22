@@ -19,9 +19,16 @@ export interface ScheduleSuggestion {
   weeks: number[]
   issues: string[]
 }
+export interface ScheduleRuleOrigin {
+  rule_id: BigIntId
+  segment_id: string | null
+  source_ref: string | null
+  section_code: string | null
+}
 export interface ScheduleImportReceipt {
   term_id: BigIntId
   rule_ids: BigIntId[]
+  origins?: ScheduleRuleOrigin[]
   schedule_version: number
 }
 export interface ScheduleImport {
@@ -46,6 +53,7 @@ export interface ConfirmScheduleImport {
   rules: RuleWrite[]
   reviewed_schedule_version?: number
   conflict_token?: string
+  source_segments?: Array<string | null>
 }
 export interface ScheduleImageModel {
   provider: string
@@ -115,5 +123,6 @@ export const assistScheduleFile = (id: BigIntId, version: number, consentToken: 
   apiRequest(`${path(id)}/file/assist`, {
     method: 'POST', body: { version, consent_token: consentToken, confirm_external_transfer: true },
   })
-export const previewScheduleImport = (id: BigIntId, version: number, rules: RuleWrite[]): Promise<ScheduleImportPreview> =>
-  apiRequest(`${path(id)}/preview`, { method: 'POST', body: { version, rules } })
+export const previewScheduleImport = (id: BigIntId, version: number, rules: RuleWrite[],
+  sourceSegments: Array<string | null>): Promise<ScheduleImportPreview> =>
+  apiRequest(`${path(id)}/preview`, { method: 'POST', body: { version, rules, source_segments: sourceSegments } })

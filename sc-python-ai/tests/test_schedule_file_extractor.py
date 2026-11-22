@@ -188,3 +188,24 @@ def test_assist_sends_one_whitelisted_batch(authorized_remote_client, monkeypatc
     assert calls[0][1] == "chat/completions"
     assert "source_text" not in calls[0][2]["messages"][1]["content"]
     assert json.loads(calls[0][2]["messages"][1]["content"])["rows"] == fragments
+
+
+def test_xlsx_cached_formula_clock_and_formatted_section_code():
+    main = "xl/workbook.xml"
+    labels = ["课程", "星期", "周次", "开始时间", "结束时间", "教学班号"]
+    headers = "".join(f'<c r="{letter}1" t="inlineStr"><is><t>{value}</t></is></c>'
+                      for letter, value in zip("ABCDEF", labels))
+    content = _zip({
+        main: f'<workbook xmlns="{X}" xmlns:r="{R}"><sheets><sheet r:id="rId1"/></sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": f'<Relationships><Relationship Id="rId1" Type="{R}/worksheet" '
+        'Target="worksheets/sheet1.xml"/></Relationships>',
+        "xl/styles.xml": f'<styleSheet xmlns="{X}"><numFmts><numFmt numFmtId="164" formatCode="000"/></numFmts>'
+        '<cellXfs><xf numFmtId="0"/><xf numFmtId="20"/><xf numFmtId="164"/></cellXfs></styleSheet>',
+        "xl/worksheets/sheet1.xml": f'<worksheet xmlns="{X}"><sheetData><row>{headers}</row><row>'
+        '<c r="A2" t="inlineStr"><is><t>测试课程</t></is></c><c r="B2"><v>2</v></c><c r="C2"><v>1</v></c>'
+        '<c r="D2" s="1"><f>TIME(8,0,0)</f><v>0.333333333333</v></c>'
+        '<c r="E2" s="1"><v>0.375</v></c><c r="F2" s="2"><v>3</v></c>'
+        '</row></sheetData></worksheet>',
+    }, main, "spreadsheetml.sheet")
+    [row] = extract_file("XLSX", content)["rows"]
+    assert (row["start_time"], row["end_time"], row["section_code"]) == ("08:00:00", "09:00:00", "003")

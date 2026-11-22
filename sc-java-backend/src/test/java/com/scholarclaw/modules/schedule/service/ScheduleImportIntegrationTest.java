@@ -299,7 +299,8 @@ class ScheduleImportIntegrationTest {
         var longCourse = new RuleWrite(term.termId(), null, "数据结构", null, "B101", 2, null, null, 1, 2,
                 java.util.stream.IntStream.rangeClosed(2, 17).boxed().toList(), null, false);
         var writes = List.of(early, longCourse);
-        var previewRequest = new PreviewRequest(draft.version(), writes);
+        var segments = List.of("CSV R2#1", "CSV R2#2");
+        var previewRequest = new PreviewRequest(draft.version(), writes, segments);
         assertCode(() -> imports.preview(user, id, previewRequest), ErrorCode.VALIDATION_ERROR);
         var extended = schedules.updateTerm(user, termId, new TermWrite(term.name(), term.firstMonday(), 17,
                 term.timezone(), true, term.version(), false));
@@ -312,9 +313,15 @@ class ScheduleImportIntegrationTest {
                         .mapToObj(week -> term.firstMonday().plusWeeks(week - 1L).plusDays(1)).toList()));
         assertCode(() -> imports.confirm(user, id, new ConfirmRequest(draft.version(), "no-preview", writes,
                 preview.scheduleVersion())), ErrorCode.STATE_CONFLICT);
-        var approved = new ConfirmRequest(draft.version(), "approved", writes, preview.scheduleVersion(), preview.conflictToken());
+        assertCode(() -> imports.preview(user, id, new PreviewRequest(draft.version(), writes, List.of("missing", "CSV R2#2"))),
+                ErrorCode.VALIDATION_ERROR);
+        assertCode(() -> imports.confirm(user, id, new ConfirmRequest(draft.version(), "sources-swapped", writes,
+                preview.scheduleVersion(), preview.conflictToken(), segments.reversed())), ErrorCode.STATE_CONFLICT);
+        var approved = new ConfirmRequest(draft.version(), "approved", writes, preview.scheduleVersion(), preview.conflictToken(), segments);
         Receipt saved = imports.confirm(user, id, approved);
         assertThat(imports.confirm(user, id, approved)).isEqualTo(saved);
+        assertThat(saved.origins()).extracting(RuleOrigin::segmentId).containsExactlyElementsOf(segments);
+        assertThat(saved.origins()).extracting(RuleOrigin::ruleId).containsExactlyElementsOf(saved.ruleIds());
         assertThat(schedules.rules(user, termId)).hasSize(2);
         assertThat(imports.get(user, id).draft()).isNull();
         var last = term.firstMonday().plusWeeks(16).plusDays(1);
@@ -359,6 +366,7 @@ class ScheduleImportIntegrationTest {
         var row = (com.fasterxml.jackson.databind.node.ObjectNode) root.path("rows").get(0);
         row.put("source_ref", "CSV R2").put("segment_id", "CSV R2#1").put("state", "COURSE").put("section_code", "003");
         row.putArray("weeks").add(17);
+        root.withArray("rows").add(row.deepCopy().put("segment_id", "CSV R2#2").put("section_code", "004"));
         root.putArray("tables").addObject().put("index", 1).put("label", "CSV").put("layout", "DETAIL");
         root.put("minimum_weeks", 17);
         return root;

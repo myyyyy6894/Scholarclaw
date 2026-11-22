@@ -12,6 +12,8 @@ MAX_ROWS = 400
 MAX_COLUMNS = 64
 MAX_BYTES = 2 * 1024 * 1024
 MAX_XML_BYTES = 12 * 1024 * 1024
+# OOXML built-in clock display formats are referenced by ID, without numFmt entries.
+BUILTIN_CLOCKS = {str(number): "h:mm" for number in (18, 19, 20, 21, 22)}
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 X = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -128,7 +130,9 @@ def _xlsx(archive: ZipFile) -> list[Table]:
     padded_formats = {}
     if "xl/styles.xml" in archive.namelist():
         styles = _xml(archive, "xl/styles.xml")
-        formats = {fmt.get("numFmtId"): fmt.get("formatCode", "") for fmt in styles.findall(X + "numFmts/" + X + "numFmt")}
+        formats = BUILTIN_CLOCKS | {
+            fmt.get("numFmtId"): fmt.get("formatCode", "") for fmt in styles.findall(X + "numFmts/" + X + "numFmt")
+        }
         padded_formats = {i: formats.get(fmt.get("numFmtId"), "")
                           for i, fmt in enumerate(styles.findall(X + "cellXfs/" + X + "xf"))}
     tables = []

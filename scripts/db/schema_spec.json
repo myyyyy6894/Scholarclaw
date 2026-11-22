@@ -1,0 +1,2966 @@
+{
+  "schema_version": "V1.0.13",
+  "migration_table": "sc_schema_migration",
+  "forbidden_tables": [
+    "t_ddl_subtask",
+    "t_exam_wrong_book"
+  ],
+  "require_zero_foreign_keys": true,
+  "scopes": {
+    "mvp": {
+      "t_user_config": {
+        "columns": [
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "username",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "password_hash",
+            "type": "varchar(100)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "account_status",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": "ACTIVE",
+            "extra": ""
+          },
+          {
+            "name": "chat_provider",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "chat_base_url",
+            "type": "varchar(512)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "chat_api_key_cipher",
+            "type": "varchar(1024)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "chat_model",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "fast_chat_model",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "slow_reasoning_model",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "default_embedding_provider",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "embedding_base_url",
+            "type": "varchar(512)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "embedding_api_key_cipher",
+            "type": "varchar(1024)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "default_embedding_model",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "default_embedding_dim",
+            "type": "int",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "key_version",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": "v1",
+            "extra": ""
+          },
+          {
+            "name": "timezone",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": "Asia/Shanghai",
+            "extra": ""
+          },
+          {
+            "name": "dnd_start_time",
+            "type": "time",
+            "nullable": false,
+            "default": "23:30:00",
+            "extra": ""
+          },
+          {
+            "name": "dnd_end_time",
+            "type": "time",
+            "nullable": false,
+            "default": "07:30:00",
+            "extra": ""
+          },
+          {
+            "name": "bound_im_platform",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "bound_im_uid",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+          },
+          {
+            "name": "qqbot_app_id",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "qqbot_secret_cipher",
+            "type": "varchar(1024)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "qqbot_openid",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "qqbot_status",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": "DISCONNECTED",
+            "extra": ""
+          },
+          {
+            "name": "qqbot_last_error",
+            "type": "varchar(255)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "qqbot_connected_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "qqbot_binding_verified",
+            "type": "tinyint",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "qqbot_binding_version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "qqbot_challenge_hash",
+            "type": "char(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "qqbot_challenge_expires_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "user_id"
+            ]
+          },
+          {
+            "name": "idx_user_account_status",
+            "unique": false,
+            "columns": [
+              "account_status",
+              "updated_at"
+            ]
+          },
+          {
+            "name": "idx_user_config_qqbot_status",
+            "unique": false,
+            "columns": [
+              "qqbot_status"
+            ]
+          },
+          {
+            "name": "uk_user_bound_im",
+            "unique": true,
+            "columns": [
+              "bound_im_platform",
+              "bound_im_uid"
+            ]
+          },
+          {
+            "name": "uk_user_config_qqbot_app",
+            "unique": true,
+            "columns": [
+              "qqbot_app_id"
+            ]
+          },
+          {
+            "name": "uk_user_username",
+            "unique": true,
+            "columns": [
+              "username"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_user_account_status",
+          "chk_user_emb_dim",
+          "chk_user_im_pair"
+        ]
+      },
+      "t_course_namespace": {
+        "columns": [
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_name",
+            "type": "varchar(128)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "description",
+            "type": "varchar(500)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "is_default",
+            "type": "tinyint(1)",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "embedding_provider",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "embedding_model",
+            "type": "varchar(128)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "embedding_dim",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "index_version",
+            "type": "int",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "index_status",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": "ACTIVE",
+            "extra": ""
+          },
+          {
+            "name": "is_deleting",
+            "type": "tinyint(1)",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "active_course_name_key",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": "STORED GENERATED"
+          },
+          {
+            "name": "default_course_uk",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": "STORED GENERATED"
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "course_id"
+            ]
+          },
+          {
+            "name": "idx_course_user_deleting",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "is_deleting",
+              "created_at"
+            ]
+          },
+          {
+            "name": "idx_course_user_name",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "course_name"
+            ]
+          },
+          {
+            "name": "uk_course_user_active_name",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "active_course_name_key"
+            ]
+          },
+          {
+            "name": "uk_course_user_default",
+            "unique": true,
+            "columns": [
+              "default_course_uk"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_course_dim_ver",
+          "chk_course_index_status",
+          "chk_course_reserved_name"
+        ]
+      },
+      "t_knowledge_doc": {
+        "columns": [
+          {
+            "name": "doc_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "doc_name",
+            "type": "varchar(255)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "file_ext",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "file_size_bytes",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "file_sha256",
+            "type": "char(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "storage_rel_path",
+            "type": "varchar(512)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "status",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": "UPLOADED",
+            "extra": ""
+          },
+          {
+            "name": "active_file_sha256",
+            "type": "char(64)",
+            "nullable": true,
+            "default": null,
+            "extra": "STORED GENERATED"
+          },
+          {
+            "name": "parse_version",
+            "type": "int",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "course_index_version",
+            "type": "int",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "indexed_embedding_provider",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "indexed_embedding_model",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "indexed_embedding_dim",
+            "type": "int",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "page_count",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "chunk_count",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "ocr_used",
+            "type": "tinyint(1)",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "last_ingest_job_id",
+            "type": "varchar(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "retry_count",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "error_code",
+            "type": "varchar(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "error_msg",
+            "type": "varchar(512)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "enqueued_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "ready_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "doc_id"
+            ]
+          },
+          {
+            "name": "idx_doc_status_updated",
+            "unique": false,
+            "columns": [
+              "status",
+              "updated_at"
+            ]
+          },
+          {
+            "name": "idx_doc_user_course_sha256",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "course_id",
+              "file_sha256"
+            ]
+          },
+          {
+            "name": "idx_doc_user_course_status",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "course_id",
+              "status",
+              "course_index_version"
+            ]
+          },
+          {
+            "name": "uk_doc_user_course_active_sha",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "course_id",
+              "active_file_sha256"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_doc_metrics",
+          "chk_doc_status"
+        ]
+      },
+      "t_knowledge_parent_chunk": {
+        "columns": [
+          {
+            "name": "parent_chunk_id",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "doc_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "parse_version",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "chunk_seq",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "page_start",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "page_end",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "section_title",
+            "type": "varchar(255)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "content",
+            "type": "mediumtext",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "char_length",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "parent_chunk_id"
+            ]
+          },
+          {
+            "name": "idx_pchunk_doc_id",
+            "unique": false,
+            "columns": [
+              "doc_id",
+              "chunk_seq"
+            ]
+          },
+          {
+            "name": "idx_pchunk_user_course",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "course_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_pchunk_pages"
+        ]
+      },
+      "t_ddl_task": {
+        "columns": [
+          {
+            "name": "task_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_name",
+            "type": "varchar(128)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "task_title",
+            "type": "varchar(255)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "deliverable_format",
+            "type": "varchar(255)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "submission_channel",
+            "type": "varchar(255)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "raw_source_text",
+            "type": "text",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "raw_time_text",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "time_precision",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": "EXACT_DATETIME",
+            "extra": ""
+          },
+          {
+            "name": "is_relative_time",
+            "type": "tinyint(1)",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "due_date",
+            "type": "date",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "due_time",
+            "type": "time",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "due_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "time_inferred",
+            "type": "tinyint(1)",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "time_ambiguity_reason",
+            "type": "varchar(512)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "user_timezone",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": "Asia/Shanghai",
+            "extra": ""
+          },
+          {
+            "name": "confidence",
+            "type": "decimal(4,3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "status",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": "ACTIVE",
+            "extra": ""
+          },
+          {
+            "name": "status_before_completion",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "follow_up_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "follow_up_count",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "reminded_flags",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "has_subtasks",
+            "type": "tinyint(1)",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "source_platform",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": "WEB",
+            "extra": ""
+          },
+          {
+            "name": "source_msg_id",
+            "type": "varchar(128)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "request_operation",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "request_fingerprint",
+            "type": "char(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "idempotency_key",
+            "type": "char(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "content_hash",
+            "type": "char(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "completed_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "task_id"
+            ]
+          },
+          {
+            "name": "idx_ddl_course_id",
+            "unique": false,
+            "columns": [
+              "course_id"
+            ]
+          },
+          {
+            "name": "idx_ddl_status_due",
+            "unique": false,
+            "columns": [
+              "status",
+              "due_at"
+            ]
+          },
+          {
+            "name": "idx_ddl_status_followup",
+            "unique": false,
+            "columns": [
+              "status",
+              "follow_up_at"
+            ]
+          },
+          {
+            "name": "idx_ddl_user_hash_created",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "content_hash",
+              "created_at"
+            ]
+          },
+          {
+            "name": "idx_ddl_user_status_due",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "status",
+              "due_at"
+            ]
+          },
+          {
+            "name": "uk_ddl_idempotency_key",
+            "unique": true,
+            "columns": [
+              "idempotency_key"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_ddl_enums",
+          "chk_ddl_ranges",
+          "chk_ddl_time_invariants"
+        ]
+      },
+      "t_ddl_decision_receipt": {
+        "columns": [
+          {
+            "name": "receipt_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "client_request_id",
+            "type": "varchar(128)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "request_fingerprint",
+            "type": "varchar(160)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "decision",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "target_task_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "result_task_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "expires_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "receipt_id"
+            ]
+          },
+          {
+            "name": "idx_ddl_decision_expires",
+            "unique": false,
+            "columns": [
+              "expires_at"
+            ]
+          },
+          {
+            "name": "uk_ddl_decision_receipt",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "client_request_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_ddl_decision_enums"
+        ]
+      },
+      "t_chat_message": {
+        "columns": [
+          {
+            "name": "message_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "platform",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": "WEB",
+            "extra": ""
+          },
+          {
+            "name": "platform_msg_id",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "role",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "intent_type",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "content",
+            "type": "mediumtext",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "citations_json",
+            "type": "json",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "is_rejected",
+            "type": "tinyint(1)",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "trace_id",
+            "type": "varchar(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "retrieval_cost_ms",
+            "type": "int",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "llm_first_token_ms",
+            "type": "int",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "message_id"
+            ]
+          },
+          {
+            "name": "idx_chat_trace_id",
+            "unique": false,
+            "columns": [
+              "trace_id"
+            ]
+          },
+          {
+            "name": "idx_chat_user_course_id",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "course_id",
+              "message_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_chat_role_platform"
+        ]
+      },
+      "t_notification_log": {
+        "columns": [
+          {
+            "name": "notification_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "biz_type",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "biz_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "title",
+            "type": "varchar(255)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "content",
+            "type": "text",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "read_status",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": "UNREAD",
+            "extra": ""
+          },
+          {
+            "name": "outbound_status",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "target_im_platform",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "target_im_uid",
+            "type": "varchar(128)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "im_retry_count",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "im_error_msg",
+            "type": "varchar(512)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "scheduled_push_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "sent_im_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "read_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "trace_id",
+            "type": "varchar(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "notification_id"
+            ]
+          },
+          {
+            "name": "idx_notif_outbound_sched",
+            "unique": false,
+            "columns": [
+              "outbound_status",
+              "scheduled_push_at"
+            ]
+          },
+          {
+            "name": "idx_notif_user_read_created",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "read_status",
+              "created_at"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_notif_enums"
+        ]
+      },
+      "t_vector_cleanup_outbox": {
+        "columns": [
+          {
+            "name": "cleanup_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "dedup_key",
+            "type": "varchar(191)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "scope",
+            "type": "varchar(32)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "doc_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_index_version",
+            "type": "int",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "stale_parse_version",
+            "type": "int",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "status",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": "PENDING",
+            "extra": ""
+          },
+          {
+            "name": "retry_count",
+            "type": "int",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "next_retry_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          },
+          {
+            "name": "last_error",
+            "type": "varchar(255)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "trace_id",
+            "type": "varchar(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "cleanup_id"
+            ]
+          },
+          {
+            "name": "idx_vector_cleanup_retry",
+            "unique": false,
+            "columns": [
+              "status",
+              "next_retry_at"
+            ]
+          },
+          {
+            "name": "idx_vector_cleanup_user",
+            "unique": false,
+            "columns": [
+              "user_id"
+            ]
+          },
+          {
+            "name": "uk_vector_cleanup_dedup",
+            "unique": true,
+            "columns": [
+              "dedup_key"
+            ]
+          }
+        ],
+        "checks": []
+      },
+      "t_course_deletion_receipt": {
+        "columns": [
+          {
+            "name": "receipt_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "result_status",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": "DELETED",
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": "CURRENT_TIMESTAMP(3)",
+            "extra": "DEFAULT_GENERATED"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "receipt_id"
+            ]
+          },
+          {
+            "name": "idx_course_deletion_receipt_created",
+            "unique": false,
+            "columns": [
+              "created_at"
+            ]
+          },
+          {
+            "name": "uk_course_deletion_receipt",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "course_id"
+            ]
+          }
+        ],
+        "checks": []
+      }
+    },
+    "schedule": {
+      "t_schedule_term": {
+        "columns": [
+          {
+            "name": "term_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "name",
+            "type": "varchar(100)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "first_monday",
+            "type": "date",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "week_count",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "timezone",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "is_active",
+            "type": "tinyint",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "active_user_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": "STORED GENERATED"
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "schedule_version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "term_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_term_user",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "term_id"
+            ]
+          },
+          {
+            "name": "uk_schedule_active_user",
+            "unique": true,
+            "columns": [
+              "active_user_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_term"
+        ]
+      },
+      "t_schedule_period": {
+        "columns": [
+          {
+            "name": "term_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "period_no",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_time",
+            "type": "time",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "end_time",
+            "type": "time",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "term_id",
+              "period_no"
+            ]
+          },
+          {
+            "name": "idx_schedule_period_user",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "term_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_period"
+        ]
+      },
+      "t_schedule_rule": {
+        "columns": [
+          {
+            "name": "rule_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "term_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "course_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "title",
+            "type": "varchar(200)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "teacher",
+            "type": "varchar(100)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "room",
+            "type": "varchar(200)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "weekday",
+            "type": "tinyint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_time",
+            "type": "time",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "end_time",
+            "type": "time",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_period",
+            "type": "smallint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "end_period",
+            "type": "smallint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "weeks_json",
+            "type": "json",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "rule_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_rule_course",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "course_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_rule_term",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "term_id",
+              "weekday"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_rule"
+        ]
+      },
+      "t_schedule_exception": {
+        "columns": [
+          {
+            "name": "exception_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "term_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "rule_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "original_date",
+            "type": "date",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "kind",
+            "type": "varchar(8)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "target_date",
+            "type": "date",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "target_start_time",
+            "type": "time",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "target_end_time",
+            "type": "time",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "target_room",
+            "type": "varchar(200)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "exception_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_exception_user_term",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "term_id",
+              "target_date"
+            ]
+          },
+          {
+            "name": "uk_schedule_exception_occurrence",
+            "unique": true,
+            "columns": [
+              "rule_id",
+              "original_date"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_exception"
+        ]
+      },
+      "t_schedule_import": {
+        "columns": [
+          {
+            "name": "import_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "term_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "client_request_id",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "input_fingerprint",
+            "type": "char(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "source_type",
+            "type": "varchar(8)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "source_text",
+            "type": "mediumtext",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "source_path",
+            "type": "varchar(512)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "source_media_type",
+            "type": "varchar(32)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "model_fingerprint",
+            "type": "char(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "cleanup_attempt_at",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "status",
+            "type": "varchar(20)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "schedule_version",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "draft_json",
+            "type": "json",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "error_message",
+            "type": "varchar(255)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "attempt",
+            "type": "smallint",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "lease_token",
+            "type": "char(36)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "lease_until",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "expires_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "confirm_request_id",
+            "type": "varchar(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "confirm_fingerprint",
+            "type": "char(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "receipt_json",
+            "type": "json",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "import_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_import_expiry",
+            "unique": false,
+            "columns": [
+              "status",
+              "expires_at",
+              "import_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_import_image_cleanup",
+            "unique": false,
+            "columns": [
+              "source_type",
+              "status",
+              "cleanup_attempt_at",
+              "import_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_import_recovery",
+            "unique": false,
+            "columns": [
+              "status",
+              "lease_until",
+              "import_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_import_user_term",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "term_id",
+              "import_id"
+            ]
+          },
+          {
+            "name": "uk_schedule_import_confirm",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "confirm_request_id"
+            ]
+          },
+          {
+            "name": "uk_schedule_import_request",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "client_request_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_import"
+        ]
+      }
+    },
+    "planning": {
+      "t_planning_preference": {
+        "columns": [
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "timezone",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "windows_json",
+            "type": "json",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "focus_minutes",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "daily_limit_minutes",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "buffer_minutes",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "user_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_planning_preference"
+        ]
+      },
+      "t_personal_event": {
+        "columns": [
+          {
+            "name": "event_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "title",
+            "type": "varchar(200)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "timezone",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_date",
+            "type": "date",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "end_date",
+            "type": "date",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "weekday",
+            "type": "tinyint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_minute",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "end_minute",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "hard",
+            "type": "tinyint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "event_id"
+            ]
+          },
+          {
+            "name": "idx_personal_event_user",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "event_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_personal_event"
+        ]
+      },
+      "t_task_planning_profile": {
+        "columns": [
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "task_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "estimated_minutes",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "remaining_minutes",
+            "type": "int",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "priority",
+            "type": "tinyint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "earliest_start_utc",
+            "type": "datetime(3)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "splittable",
+            "type": "tinyint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "min_block_minutes",
+            "type": "smallint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "task_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_task_planning_profile"
+        ]
+      },
+      "t_study_plan": {
+        "columns": [
+          {
+            "name": "plan_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "client_request_id",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "request_fingerprint",
+            "type": "char(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "from_date",
+            "type": "date",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "to_date",
+            "type": "date",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "timezone",
+            "type": "varchar(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "source_fingerprint",
+            "type": "char(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "occupancy_fingerprint",
+            "type": "char(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "state",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "revision",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "warnings_json",
+            "type": "json",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "shortages_json",
+            "type": "json",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "unavailable_json",
+            "type": "json",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "accept_request_id",
+            "type": "varchar(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "accept_fingerprint",
+            "type": "char(64)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "plan_id"
+            ]
+          },
+          {
+            "name": "idx_study_plan_user_state",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "state",
+              "plan_id"
+            ]
+          },
+          {
+            "name": "uk_study_plan_user_accept",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "accept_request_id"
+            ]
+          },
+          {
+            "name": "uk_study_plan_user_request",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "client_request_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_study_plan"
+        ]
+      },
+      "t_study_plan_block": {
+        "columns": [
+          {
+            "name": "block_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "plan_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "task_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "task_title",
+            "type": "varchar(255)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_utc",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "end_utc",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "local_date",
+            "type": "date",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "state",
+            "type": "varchar(16)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "locked",
+            "type": "tinyint",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "overdue",
+            "type": "tinyint",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "created_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime(3)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "block_id"
+            ]
+          },
+          {
+            "name": "idx_study_block_plan",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "plan_id",
+              "start_utc",
+              "block_id"
+            ]
+          },
+          {
+            "name": "idx_study_block_state",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "state",
+              "start_utc",
+              "end_utc"
+            ]
+          },
+          {
+            "name": "idx_study_block_task",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "task_id",
+              "state"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_study_block"
+        ]
+      }
+    }
+  }
+}

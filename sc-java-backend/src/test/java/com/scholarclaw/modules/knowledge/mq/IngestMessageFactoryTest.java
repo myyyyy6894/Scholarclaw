@@ -6,12 +6,27 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.modules.knowledge.entity.KnowledgeDocEntity;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class IngestMessageFactoryTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @Test
+    @DisplayName("IngestJobType 三值取值锁定并能正确序列化")
+    void ingestJobTypeVocabularyAndSerializationAreLocked() throws Exception {
+        assertThat(Arrays.stream(IngestJobType.values()).map(Enum::name).toList())
+                .containsExactly("INITIAL_INGEST", "RETRY_FAILED", "REINDEX");
+
+        for (IngestJobType type : IngestJobType.values()) {
+            IngestMessage message = IngestMessageFactory.from(
+                    doc(), type, "job_20261022_120000123_abcdef");
+            JsonNode node = MAPPER.readTree(MAPPER.writeValueAsString(message));
+            assertThat(node.get("job_type").asText()).isEqualTo(type.name());
+        }
+    }
 
     @Test
     @DisplayName("消息字段为 snake_case、BIGINT 为字符串且不含 api_key")

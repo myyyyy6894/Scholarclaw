@@ -456,9 +456,6 @@ public class DdlTaskService {
                                         LocalTime dueTime) {
         UserContext user = resolveUserContext(userId);
         List<Long> ids = requireDistinctTaskIds(taskIds);
-        if (ids.isEmpty()) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "至少需要一个任务编号。");
-        }
         if (dueDate == null || dueTime == null) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "批量确认需要提供日期与时刻。");
@@ -509,9 +506,6 @@ public class DdlTaskService {
     public List<DdlTaskVO> updateBatch(Long userId, List<Long> taskIds, LocalDate dueDate,
                                        LocalTime dueTime) {
         List<Long> ids = requireDistinctTaskIds(taskIds);
-        if (ids.isEmpty()) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "至少需要一个任务编号。");
-        }
         if (dueDate == null || dueTime == null) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
                     "批量修改需要提供日期与时刻。");
@@ -641,30 +635,17 @@ public class DdlTaskService {
      */
     @Transactional(rollbackFor = Exception.class)
     public DdlTaskVO setCompletion(Long userId, Long taskId, boolean completed) {
-        if (!completed) lockActiveUserForPlanningMutation(userId);
+        if (!completed) {
+            lockActiveUserForPlanningMutation(userId);
+        }
         UserContext user = resolveUserContext(userId);
         DdlTaskEntity entity = lockOwnedTask(userId, taskId);
-        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
-
-        if (completed) {
-            if (TaskStatus.COMPLETED.name().equals(entity.getStatus())) {
-                return toVO(entity, user.zoneId());
-            }
-            markCompleted(entity, now);
-        } else if (!TaskStatus.COMPLETED.name().equals(entity.getStatus())) {
+        if (!completed && !TaskStatus.COMPLETED.name().equals(entity.getStatus())) {
             throw new BusinessException(ErrorCode.STATE_CONFLICT,
                     "只有已完成任务才能取消完成；当前状态为 " + entity.getStatus() + "。");
-        } else {
-            restoreFromCompletion(entity, now);
         }
-        entity.setUpdatedAt(now);
-
-        int updated = ddlTaskMapper.update(null, completionUpdateWrapper(entity));
-        if (updated == 0) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
-        }
-        draftStore.deleteDraftAfterCommit(userId, taskId);
-        return toVO(entity, user.zoneId());
+        return applyCompletion(userId, entity, completed,
+                ScTimeZone.now().toLocalDateTime(), user.zoneId());
     }
 
     /**
@@ -675,12 +656,11 @@ public class DdlTaskService {
      */
     @Transactional(rollbackFor = Exception.class)
     public List<DdlTaskVO> setCompletionBatch(Long userId, List<Long> taskIds, boolean completed) {
-        if (!completed) lockActiveUserForPlanningMutation(userId);
+        if (!completed) {
+            lockActiveUserForPlanningMutation(userId);
+        }
         UserContext user = resolveUserContext(userId);
         List<Long> ids = requireDistinctTaskIds(taskIds);
-        if (ids.isEmpty()) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "至少需要一个任务编号。");
-        }
         List<DdlTaskEntity> entities = new ArrayList<>(ids.size());
         for (Long taskId : ids) {
             DdlTaskEntity entity = lockOwnedTask(userId, taskId);
@@ -694,25 +674,29 @@ public class DdlTaskService {
         LocalDateTime now = ScTimeZone.now().toLocalDateTime();
         List<DdlTaskVO> result = new ArrayList<>(entities.size());
         for (DdlTaskEntity entity : entities) {
-            if (completed && TaskStatus.COMPLETED.name().equals(entity.getStatus())) {
-                // 重复完成不重复写库：直接返回原 VO，避免无意义的 UPDATE 与 updated_at 漂移。
-                result.add(toVO(entity, user.zoneId()));
-                continue;
-            }
-            if (completed) {
-                markCompleted(entity, now);
-            } else {
-                restoreFromCompletion(entity, now);
-            }
-            entity.setUpdatedAt(now);
-            int updated = ddlTaskMapper.update(null, completionUpdateWrapper(entity));
-            if (updated == 0) {
-                throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
-            }
-            draftStore.deleteDraftAfterCommit(userId, entity.getTaskId());
-            result.add(toVO(entity, user.zoneId()));
+            result.add(applyCompletion(userId, entity, completed, now, user.zoneId()));
         }
         return result;
+    }
+
+    private DdlTaskVO applyCompletion(Long userId, DdlTaskEntity entity, boolean completed,
+                                      LocalDateTime now, ZoneId zoneId) {
+        if (completed) {
+            if (TaskStatus.COMPLETED.name().equals(entity.getStatus())) {
+                // 重复完成不重复写库：直接返回原 VO，避免无意义的 UPDATE 与 updated_at 漂移。
+                return toVO(entity, zoneId);
+            }
+            markCompleted(entity, now);
+        } else {
+            restoreFromCompletion(entity, now);
+        }
+        entity.setUpdatedAt(now);
+        int updated = ddlTaskMapper.update(null, completionUpdateWrapper(entity));
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        draftStore.deleteDraftAfterCommit(userId, entity.getTaskId());
+        return toVO(entity, zoneId);
     }
 
     private static void markCompleted(DdlTaskEntity entity, LocalDateTime now) {
@@ -804,6 +788,9 @@ public class DdlTaskService {
             }
             distinct.add(taskId);
         }
+        if (distinct.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "至少需要一个任务编号。");
+        }
         return List.copyOf(distinct);
     }
 
@@ -815,22 +802,7 @@ public class DdlTaskService {
         if (entity == null) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        if (TaskStatus.CANCELED.name().equals(entity.getStatus())) {
-            draftStore.deleteDraft(userId, taskId);
-            return new DeleteDdlTaskVO(taskId.toString(), TaskStatus.CANCELED.name());
-        }
-        LocalDateTime now = ScTimeZone.now().toLocalDateTime();
-        entity.setStatus(TaskStatus.CANCELED.name());
-        entity.setStatusBeforeCompletion(null);
-        entity.setFollowUpAt(null);
-        entity.setUpdatedAt(now);
-        int updated = ddlTaskMapper.update(null, cancelUpdateWrapper(entity));
-        if (updated == 0) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
-        }
-        events.publishEvent(new DdlTaskCanceledEvent(userId, taskId, Instant.now()));
-        draftStore.deleteDraftAfterCommit(userId, taskId);
-        return new DeleteDdlTaskVO(taskId.toString(), TaskStatus.CANCELED.name());
+        return applyCancel(userId, entity, ScTimeZone.now().toLocalDateTime(), false);
     }
 
     /** 批量取消；整批同一事务，任一任务不属于当前用户则整批回滚（零执行）。 */
@@ -838,9 +810,6 @@ public class DdlTaskService {
     public List<DeleteDdlTaskVO> cancelBatch(Long userId, List<Long> taskIds) {
         resolveUserContext(userId);
         List<Long> ids = requireDistinctTaskIds(taskIds);
-        if (ids.isEmpty()) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "至少需要一个任务编号。");
-        }
         List<DdlTaskEntity> entities = new ArrayList<>(ids.size());
         for (Long taskId : ids) {
             DdlTaskEntity entity = ddlTaskMapper.selectByIdForUpdate(taskId, userId);
@@ -852,22 +821,33 @@ public class DdlTaskService {
         LocalDateTime now = ScTimeZone.now().toLocalDateTime();
         List<DeleteDdlTaskVO> result = new ArrayList<>(entities.size());
         for (DdlTaskEntity entity : entities) {
-            if (!TaskStatus.CANCELED.name().equals(entity.getStatus())) {
-                entity.setStatus(TaskStatus.CANCELED.name());
-                entity.setStatusBeforeCompletion(null);
-                entity.setFollowUpAt(null);
-                entity.setUpdatedAt(now);
-                int updated = ddlTaskMapper.update(null, cancelUpdateWrapper(entity));
-                if (updated == 0) {
-                    throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
-                }
-                events.publishEvent(new DdlTaskCanceledEvent(userId, entity.getTaskId(), Instant.now()));
-            }
-            draftStore.deleteDraftAfterCommit(userId, entity.getTaskId());
-            result.add(new DeleteDdlTaskVO(entity.getTaskId().toString(),
-                    TaskStatus.CANCELED.name()));
+            result.add(applyCancel(userId, entity, now, true));
         }
         return result;
+    }
+
+    private DeleteDdlTaskVO applyCancel(Long userId, DdlTaskEntity entity, LocalDateTime now,
+                                        boolean deleteAlreadyCanceledAfterCommit) {
+        Long taskId = entity.getTaskId();
+        if (TaskStatus.CANCELED.name().equals(entity.getStatus())) {
+            if (deleteAlreadyCanceledAfterCommit) {
+                draftStore.deleteDraftAfterCommit(userId, taskId);
+            } else {
+                draftStore.deleteDraft(userId, taskId);
+            }
+            return new DeleteDdlTaskVO(taskId.toString(), TaskStatus.CANCELED.name());
+        }
+        entity.setStatus(TaskStatus.CANCELED.name());
+        entity.setStatusBeforeCompletion(null);
+        entity.setFollowUpAt(null);
+        entity.setUpdatedAt(now);
+        int updated = ddlTaskMapper.update(null, cancelUpdateWrapper(entity));
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        events.publishEvent(new DdlTaskCanceledEvent(userId, taskId, Instant.now()));
+        draftStore.deleteDraftAfterCommit(userId, taskId);
+        return new DeleteDdlTaskVO(taskId.toString(), TaskStatus.CANCELED.name());
     }
 
     /**

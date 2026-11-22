@@ -7,7 +7,6 @@ import {
   ClipboardList,
   Code2,
   FileText,
-  Globe,
   MessageSquare,
   Sparkles,
   Trash2,
@@ -666,13 +665,6 @@ function relativeTime(value: string): string {
                 <Upload :size="14" :stroke-width="1.7" />
                 上传文件
               </router-link>
-              <el-tooltip content="联网搜索暂未开发" placement="top">
-                <span class="rag-tool rag-tool--disabled">
-                  <Globe :size="14" :stroke-width="1.7" />
-                  联网搜索
-                  <ComingSoonBadge compact />
-                </span>
-              </el-tooltip>
             </div>
 
             <div class="rag-composer__send">
@@ -1181,11 +1173,6 @@ function relativeTime(value: string): string {
   color: var(--sc-text-secondary);
   font-size: var(--sc-font-hint);
   text-decoration: none;
-}
-
-.rag-tool--disabled {
-  color: var(--sc-text-placeholder);
-  cursor: not-allowed;
 }
 
 .rag-composer__send {

@@ -5,8 +5,6 @@
  * 1. 颜色、字号、圆角、阴影、间距只在本文件定义；页面与组件一律引用变量，
  *    不写字面色值，深色模式才能只靠 `[data-theme="dark"]` 整体切换。
  * 2. 主色与语义色在深色模式下保持不变，仅替换底色、表面、文字、边框。
- * 3. 文件末尾保留旧变量别名：P1 只改造外壳，尚未重构的页面仍引用
- *    `--sc-brand` / `--sc-muted` / `--sc-radius` 等旧名，不能在这之前断掉。
  */
 
 :root {
@@ -102,24 +100,6 @@
 
   --sc-shadow: 0 8px 24px rgba(2, 6, 23, 0.32);
   --sc-shadow-hover: 0 12px 30px rgba(2, 6, 23, 0.44);
-}
-
-/* ---------- 旧变量别名（P2~P5 逐页移除） ---------- */
-:root {
-  --sc-brand: var(--sc-primary);
-  --sc-brand-strong: var(--sc-primary-strong);
-  --sc-brand-soft: var(--sc-primary-soft);
-  --sc-accent-legacy: var(--sc-accent);
-  --sc-muted: var(--sc-text-secondary);
-  --sc-radius: var(--sc-radius-card);
-  --sc-radius-sm: var(--sc-radius-button);
-  --sc-shadow-soft: var(--sc-shadow);
-  --sc-page-gap: var(--sc-card-gap);
-  --sc-text-title: var(--sc-font-title);
-  --sc-text-heading: var(--sc-font-heading);
-  --sc-text-body: var(--sc-font-body);
-  --sc-text-caption: var(--sc-font-caption);
-  --sc-font: var(--sc-font-sans);
 }
 
 @media (max-width: 900px) {

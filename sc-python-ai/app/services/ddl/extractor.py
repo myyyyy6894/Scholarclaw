@@ -44,6 +44,11 @@ from app.schemas.ddl_extract import (
     DdlPayload,
     TimePrecision,
 )
+from app.services.gateway.chat_response import (
+    ChatResponseError,
+    extract_chat_content,
+    strip_code_fence,
+)
 from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.gateway.ssrf_safe_model_gateway import RetryPolicy, SsrfSafeModelGateway
 from app.services.ddl.time_keywords import (
@@ -332,8 +337,11 @@ class DdlExtractor:
 
 
 def _parse_model_response(response: dict[str, Any]) -> _ModelExtractionOutput:
-    content = _extract_message_content(response)
-    text = _strip_code_fence(content)
+    try:
+        content = extract_chat_content(response)
+    except ChatResponseError as exc:
+        raise _InvalidModelOutput(str(exc)) from exc
+    text = strip_code_fence(content)
     try:
         decoded = json.loads(text)
     except ValueError as exc:
@@ -349,35 +357,6 @@ def _parse_model_response(response: dict[str, Any]) -> _ModelExtractionOutput:
             for error in exc.errors()[:5]
         )
         raise _InvalidModelOutput(f"模型输出字段不符合契约: {missing}") from exc
-
-
-def _extract_message_content(response: dict[str, Any]) -> str:
-    choices = response.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise _InvalidModelOutput("模型响应缺少 choices")
-    first = choices[0]
-    if not isinstance(first, dict):
-        raise _InvalidModelOutput("模型响应 choices 结构不可识别")
-    message = first.get("message")
-    if not isinstance(message, dict):
-        raise _InvalidModelOutput("模型响应缺少 message")
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise _InvalidModelOutput("模型响应缺少文本内容")
-    return content
-
-
-def _strip_code_fence(text: str) -> str:
-    """容忍模型把 JSON 包在 ```json ... ``` 中；其余情况保持原样交给 JSON 解析。"""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
 
 
 def _normalize_output(

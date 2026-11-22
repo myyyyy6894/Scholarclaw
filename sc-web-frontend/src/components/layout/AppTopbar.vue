@@ -4,7 +4,6 @@ import { computed } from 'vue'
 import { Bell, ChevronDown, Menu } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 
-import GlobalSearch from '@/components/search/GlobalSearch.vue'
 import ThemeToggle from '@/components/layout/ThemeToggle.vue'
 import UserAvatar from '@/components/ui/UserAvatar.vue'
 import { logout } from '@/api/auth'
@@ -16,7 +15,7 @@ import { unreadBadge } from '@/views/notifications/notification-center'
 /**
  * 工作台顶栏（P1）。
  *
- * 左：移动端菜单按钮 + 页面标题/副标题；中：全局搜索；右：主题、通知、用户菜单。
+ * 左：移动端菜单按钮 + 页面标题/副标题；右：主题、通知、用户菜单。
  * 通知未读数来自 `ui` store（由通知中心写入），不在顶栏重复请求。
  */
 defineProps<{ title: string; subtitle?: string }>()
@@ -71,10 +70,6 @@ async function doLogout(): Promise<void> {
       </div>
     </div>
 
-    <div class="app-topbar__search">
-      <GlobalSearch />
-    </div>
-
     <div class="app-topbar__actions">
       <ThemeToggle />
 
@@ -125,6 +120,7 @@ async function doLogout(): Promise<void> {
   display: flex;
   flex: none;
   align-items: center;
+  justify-content: space-between;
   gap: 20px;
   min-height: var(--sc-topbar-height);
   padding: 10px max(var(--sc-page-pad), calc((100% - var(--sc-content-max-width)) / 2));
@@ -162,13 +158,6 @@ async function doLogout(): Promise<void> {
   font-size: var(--sc-font-hint);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.app-topbar__search {
-  display: flex;
-  flex: 1;
-  justify-content: center;
-  min-width: 0;
 }
 
 .app-topbar__actions {
@@ -244,12 +233,6 @@ async function doLogout(): Promise<void> {
   text-decoration: none;
 }
 
-@media (max-width: 1023px) {
-  .app-topbar__search {
-    justify-content: flex-end;
-  }
-}
-
 @media (max-width: 760px) {
   .app-topbar {
     gap: 12px;
@@ -257,10 +240,6 @@ async function doLogout(): Promise<void> {
 
   .app-topbar__titles p {
     display: none;
-  }
-
-  .app-topbar__search {
-    flex: 1;
   }
 }
 

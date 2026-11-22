@@ -13,6 +13,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.scholarclaw.common.event.DdlTaskCanceledEvent;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.course.entity.CourseNamespaceEntity;
@@ -39,6 +40,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 
 /** TASK-703 DDL 持久化、状态机、所有权与并发控制。 */
@@ -52,6 +54,7 @@ class DdlTaskServiceTest {
     private CourseService courseService;
     private UserConfigService userConfigService;
     private DdlDraftStore draftStore;
+    private ApplicationEventPublisher events;
     private DdlTaskService service;
 
     @BeforeAll
@@ -65,8 +68,9 @@ class DdlTaskServiceTest {
         courseService = mock(CourseService.class);
         userConfigService = mock(UserConfigService.class);
         draftStore = mock(DdlDraftStore.class);
+        events = mock(ApplicationEventPublisher.class);
         service = new DdlTaskService(mapper, courseService, userConfigService,
-                new DdlTimeRuleValidator(), draftStore, mock(org.springframework.context.ApplicationEventPublisher.class));
+                new DdlTimeRuleValidator(), draftStore, events);
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(userConfig("Asia/Shanghai")));
         when(userConfigService.lockForUpdate(USER_ID)).thenReturn(userConfig("Asia/Shanghai"));
         when(draftStore.listDrafts(USER_ID)).thenReturn(List.of());
@@ -1399,6 +1403,93 @@ class DdlTaskServiceTest {
 
         assertThat(result).hasSize(2);
         verify(mapper, never()).update(any(), any());
+    }
+
+    @Test
+    @DisplayName("批量完成混合态：仅写未完成项并清理对应草稿")
+    void batchCompletionUpdatesOnlyNonCompletedTasks() {
+        DdlTaskEntity active = task("ACTIVE", LocalDate.of(2099, 12, 31),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 31, 22, 0));
+        DdlTaskEntity completed = task("COMPLETED", LocalDate.of(2099, 12, 30),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 30, 22, 0));
+        completed.setTaskId(104L);
+        when(mapper.selectByIdForUpdate(TASK_ID, USER_ID)).thenReturn(active);
+        when(mapper.selectByIdForUpdate(104L, USER_ID)).thenReturn(completed);
+        when(mapper.update(isNull(), any())).thenReturn(1);
+
+        List<DdlTaskVO> result = service.setCompletionBatch(USER_ID,
+                List.of(TASK_ID, 104L, TASK_ID), true);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(DdlTaskVO::status).containsExactly("COMPLETED", "COMPLETED");
+        verify(mapper, times(1)).update(isNull(), any());
+        verify(draftStore).deleteDraftAfterCommit(USER_ID, TASK_ID);
+        verify(draftStore, never()).deleteDraftAfterCommit(USER_ID, 104L);
+    }
+
+    @Test
+    @DisplayName("批量取消完成先锁用户并恢复状态、清理草稿")
+    void batchUncompleteLocksUserAndRestoresAllTasks() {
+        DdlTaskEntity first = task("COMPLETED", LocalDate.of(2099, 12, 31),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 31, 22, 0));
+        first.setStatusBeforeCompletion("ACTIVE");
+        DdlTaskEntity second = task("COMPLETED", LocalDate.of(2099, 12, 30),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 30, 22, 0));
+        second.setTaskId(104L);
+        second.setStatusBeforeCompletion("PENDING_CONFIRM");
+        when(mapper.selectByIdForUpdate(TASK_ID, USER_ID)).thenReturn(first);
+        when(mapper.selectByIdForUpdate(104L, USER_ID)).thenReturn(second);
+        when(mapper.update(isNull(), any())).thenReturn(1);
+
+        List<DdlTaskVO> result = service.setCompletionBatch(USER_ID,
+                List.of(TASK_ID, 104L), false);
+
+        assertThat(result).extracting(DdlTaskVO::status)
+                .containsExactly("ACTIVE", "PENDING_CONFIRM");
+        verify(userConfigService).lockForUpdate(USER_ID);
+        verify(mapper, times(2)).update(isNull(), any());
+        verify(draftStore).deleteDraftAfterCommit(USER_ID, TASK_ID);
+        verify(draftStore).deleteDraftAfterCommit(USER_ID, 104L);
+    }
+
+    @Test
+    @DisplayName("批量取消：未取消项写库并发布事件，已取消项幂等跳过写库与事件")
+    void cancelBatchUpdatesActiveAndSkipsAlreadyCanceled() {
+        DdlTaskEntity active = task("ACTIVE", LocalDate.of(2099, 12, 31),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 31, 22, 0));
+        DdlTaskEntity canceled = task("CANCELED", null, null, null);
+        canceled.setTaskId(104L);
+        when(mapper.selectByIdForUpdate(TASK_ID, USER_ID)).thenReturn(active);
+        when(mapper.selectByIdForUpdate(104L, USER_ID)).thenReturn(canceled);
+        when(mapper.update(isNull(), any())).thenReturn(1);
+
+        List<DeleteDdlTaskVO> result = service.cancelBatch(USER_ID,
+                List.of(TASK_ID, 104L, TASK_ID));
+
+        assertThat(result).extracting(DeleteDdlTaskVO::deletedTaskId)
+                .containsExactly("103", "104");
+        assertThat(result).extracting(DeleteDdlTaskVO::status)
+                .containsExactly("CANCELED", "CANCELED");
+        verify(mapper, times(1)).update(isNull(), any());
+        verify(events, times(1)).publishEvent(any(DdlTaskCanceledEvent.class));
+        verify(draftStore).deleteDraftAfterCommit(USER_ID, TASK_ID);
+        verify(draftStore).deleteDraftAfterCommit(USER_ID, 104L);
+    }
+
+    @Test
+    @DisplayName("批量取消遇到无归属或不存在任务时整批零写库")
+    void cancelBatchRollsBackAllWhenAnyTaskMissing() {
+        DdlTaskEntity active = task("ACTIVE", LocalDate.of(2099, 12, 31),
+                LocalTime.of(22, 0), LocalDateTime.of(2099, 12, 31, 22, 0));
+        when(mapper.selectByIdForUpdate(TASK_ID, USER_ID)).thenReturn(active);
+        when(mapper.selectByIdForUpdate(104L, USER_ID)).thenReturn(null);
+
+        assertError(ErrorCode.RESOURCE_NOT_FOUND,
+                () -> service.cancelBatch(USER_ID, List.of(TASK_ID, 104L)));
+
+        verify(mapper, never()).update(any(), any());
+        verify(events, never()).publishEvent(any());
+        verify(draftStore, never()).deleteDraftAfterCommit(any(), any());
     }
 
     private DdlTaskEntity capturedInsert() {

@@ -35,6 +35,11 @@ from app.services.agent.intents import (
     match_slash_command,
 )
 from app.services.ddl.extractor import DdlExtractionRequest, DdlExtractor
+from app.services.gateway.chat_response import (
+    ChatResponseError,
+    extract_chat_content,
+    strip_code_fence,
+)
 from app.services.gateway.model_endpoint import ModelEndpoint
 from app.services.gateway.ssrf_safe_model_gateway import RetryPolicy, SsrfSafeModelGateway
 
@@ -283,14 +288,14 @@ def _build_messages(request: DdlExtractRequest) -> list[dict[str, str]]:
 
 def _parse_model_response(response: dict[str, Any]) -> _ModelIntentOutput:
     try:
-        content = response["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
+        content = extract_chat_content(response)
+    except ChatResponseError as exc:
+        if exc.code == "empty_content":
+            raw = exc.raw_content
+            detail = _snippet(raw) if isinstance(raw, str) else type(raw).__name__
+            raise _InvalidIntentOutput(f"模型响应内容为空（raw={detail}）") from exc
         raise _InvalidIntentOutput("模型响应缺少 choices[0].message.content") from exc
-    if not isinstance(content, str) or not content.strip():
-        raise _InvalidIntentOutput(
-            f"模型响应内容为空（raw={_snippet(content) if isinstance(content, str) else type(content).__name__}）"
-        )
-    text = _strip_code_fence(content)
+    text = strip_code_fence(content)
     try:
         decoded = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -307,15 +312,3 @@ def _snippet(value: str, limit: int = 200) -> str:
     """把模型原始输出压成一行短片段，便于日志定位（不含任何密钥）。"""
     text = " ".join(str(value).split())
     return text[:limit] + ("…" if len(text) > limit else "")
-
-
-def _strip_code_fence(content: str) -> str:
-    text = content.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-    return text

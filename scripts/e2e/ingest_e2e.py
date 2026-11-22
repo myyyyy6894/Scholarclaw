@@ -17,14 +17,20 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import json
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
+
+E2E_DIR = Path(__file__).resolve().parent
+if str(E2E_DIR) not in sys.path:
+    sys.path.insert(0, str(E2E_DIR))
+
+import e2e_http  # noqa: E402
+from e2e_http import call, check, register_or_login  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FAKE_KEY = "sk-ingest-not-a-real-key"
@@ -32,26 +38,9 @@ MOCK_CONTAINER = "sc-e2e-mock-model"
 PYTHON_SERVICE = "sc-python-ai"
 EXCHANGE = "rag.ingest.exchange"
 QUEUE = "rag.ingest.queue"
-
-
-def call(base_url: str, method: str, path: str, *, token: str | None = None,
-         body: dict | None = None) -> tuple[int, dict]:
-    data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(base_url + path, method=method, data=data)
-    if body is not None:
-        request.add_header("Content-Type", "application/json")
-    if token is not None:
-        request.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return response.status, json.loads(response.read().decode())
-    except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read().decode("utf-8", "replace"))
-
-
-def check(name: str, ok: bool, detail: str = "") -> bool:
-    print(f"[{'PASS' if ok else 'FAIL'}] {name}" + ("" if ok else f"（{detail}）"))
-    return ok
+upload_file = functools.partial(
+    e2e_http.upload_file, boundary="----scholarclaw-ingest-e2e", timeout=120
+)
 
 
 def docker(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
@@ -68,18 +57,6 @@ def mysql_query(sql: str) -> str:
     if completed.returncode != 0:
         raise SystemExit(f"MySQL 读取失败：{completed.stderr.strip()}")
     return completed.stdout.strip()
-
-
-def register_or_login(base_url: str, username: str, password: str) -> tuple[str, str]:
-    status, payload = call(base_url, "POST", "/api/v1/auth/register", body={
-        "username": username, "password": password, "timezone": "Asia/Shanghai"})
-    if status == 201:
-        return payload["data"]["access_token"], payload["data"]["user_id"]
-    status, payload = call(base_url, "POST", "/api/v1/auth/login", body={
-        "username": username, "password": password})
-    if status != 200:
-        raise SystemExit(f"登录失败：{status} {payload}")
-    return payload["data"]["access_token"], payload["data"]["user_id"]
 
 
 def save_models(base_url: str, token: str, mock_base_url: str,
@@ -107,25 +84,6 @@ def mysql_session():
         cwd=REPO_ROOT, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, text=True,
     )
-
-
-def upload_file(base_url: str, token: str, course_id: str, filename: str,
-                content: bytes, content_type: str = "application/pdf") -> tuple[int, dict]:
-    boundary = "----scholarclaw-ingest-e2e"
-    body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: {content_type}\r\n\r\n"
-    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
-    request = urllib.request.Request(
-        f"{base_url}/api/v1/courses/{course_id}/docs/upload", data=body, method="POST")
-    request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    request.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            return response.status, json.loads(response.read().decode())
-    except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read().decode("utf-8", "replace"))
 
 
 def build_pdf(pages: list[str]) -> bytes:

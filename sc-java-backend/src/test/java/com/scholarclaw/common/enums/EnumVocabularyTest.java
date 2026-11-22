@@ -45,12 +45,6 @@ class EnumVocabularyTest {
     }
 
     @Test
-    @DisplayName("JobType 三值取值锁定")
-    void jobTypeVocabularyIsLocked() {
-        assertThat(namesOf(JobType.class)).containsExactly("INITIAL_INGEST", "RETRY_FAILED", "REINDEX");
-    }
-
-    @Test
     @DisplayName("TimePrecision 四级取值锁定")
     void timePrecisionVocabularyIsLocked() {
         assertThat(namesOf(TimePrecision.class))

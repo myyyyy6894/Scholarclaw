@@ -58,7 +58,7 @@ docker compose down -v                       # ⚠️ 连数据卷删除，会�
 
 ```bash
 docker compose up -d sc-java-backend   # 平台向量模型
-docker compose up -d sc-web-nginx      # 联系 QQ / NapCat WebUI 地址
+docker compose up -d sc-web-nginx      # 联系 QQ 和项目主页地址
 ```
 
 ## 3.1 小内存机器（≤4 GiB）不要在本机构建前端镜像
@@ -79,79 +79,11 @@ ssh root@<服务器> 'cd /opt/ScholarClaw && docker compose up -d sc-web-nginx'
 镜像压缩后约 50 MB，传输几秒。Java 侧 `mvn package`（约 100 秒、占用较小）仍可在服务器执行；
 `sc-python-ai` 的 `pip install` 占用也比 npm 小，一般没问题。
 
-## 4. 可选：QQ 机器人（NapCat）
+## 4. 可选：QQ 官方机器人
 
-NapCat 是可选 `onebot` profile，默认不启动：
+每个用户在 QQ 开放平台创建自己的机器人，在「设置 → QQ 提醒」填写 AppID 和 AppSecret 并连接。随后在同一页面生成绑定码，通过 QQ 私聊发送给机器人，完成身份验证。
 
-```bash
-docker compose --profile onebot up -d sc-napcat-onebot
-```
-
-| 项 | 值 |
-|---|---|
-| 容器名 | `sc-napcat-onebot` |
-| 网络 | 仅 `scholarclaw-internal`，与 Java 同网 |
-| WebUI | `http://127.0.0.1:${SC_NAPCAT_WEBUI_PORT:-6099}`，首次扫码登录 |
-| Action API | `http://127.0.0.1:${SC_NAPCAT_HTTP_PORT:-3000}`，默认只绑回环 |
-| 持久化卷 | `vol_napcat_qq`（登录态）、`vol_napcat_config` |
-| 快速登录 | `.env` 填 `SC_NAPCAT_ACCOUNT=<QQ号>`，重启后复用登录态，失效自动回落二维码 |
-| WebUI 令牌 | 首次用 `SC_NAPCAT_WEBUI_TOKEN` 固定；已部署用 `scripts/napcat/webui.sh` 读取或重置 |
-
-⚠️ 两点：
-
-1. 镜像是 `mlikiowa/napcat-docker:latest`，**生产前请 pin 具体版本**；
-2. WebUI 令牌等于机器人 QQ 的控制权，只给运维，不要通过业务前端或 API 下发给普通用户。
-
-远程访问 WebUI 推荐 SSH 隧道（`ssh -L 6099:127.0.0.1:6099 <host>`）。确实要直连时改
-`SC_NAPCAT_WEBUI_BIND=0.0.0.0`，并加防火墙或只放行可信内网。
-
-### 4.1 掉线与自动恢复
-
-QQ 会话过期或触发风控时，NapCat 会一直重试快速登录并失败（日志 `Login Error, ErrType: 1 ErrCode: 3`），
-容器仍是 `Up`，Docker 的 restart 策略救不回来。用看门狗脚本兜底：
-
-```bash
-# 每 2 分钟检查一次登录态，掉线就重启容器（重启会重新尝试快速登录）
-*/2 * * * * cd /opt/ScholarClaw && bash scripts/napcat/watchdog.sh >> /var/log/sc-napcat-watchdog.log 2>&1
-```
-
-脚本只能缓解"会话失效但账号还能快速登录"的情况。**如果连续失败 3 次，说明 QQ 要求重新扫码**，
-日志会提示用 `bash scripts/napcat/webui.sh url` 取带令牌的 WebUI 地址人工扫码。
-
-另外两条保护：容器启动 3 分钟内不干预（避免打断扫码）；**系统负载超过核数 2 倍时只记日志、
-不动容器**——被流量打满时接口无响应是机器卡，不是账号掉线，此时重启反而拖长恢复时间。
-
-降低掉线概率的已知做法：绑定手机号、不要频繁改头像/昵称、不要频繁重登同一账号、
-不要在另一台设备同时登录同一个 QQ。
-
-**不用 QQ 也完全没问题**：不启这个 profile、`SC_IM_PUSH_ENABLED=false`，Web 端功能不受影响，
-只是用户收不到 QQ 提醒。
-
-### 4.2 QQ 官方机器人（推荐，替代 NapCat）
-
-NapCat 走的是"一个部署一个机器人小号"，实测受 QQ 风控影响大（频繁掉线、反复扫码、
-账号可能被风控）。官方机器人走 WebSocket 长连接，**没有风控问题，也不需要域名和回调地址**。
-
-但个人主体在 QQ 开放平台**不允许公开服务**，所以本项目采用"用户自带机器人"模式：
-
-1. 每个用户在 `bot.q.qq.com/open` 用自己的 QQ 创建机器人（机器人管理员就是他本人）
-2. 在机器人「开发设置」里拿到 AppID / AppSecret
-3. 在本站「设置 → QQ 提醒」填入并点「连接」
-4. 用 QQ 私聊该机器人一次，自动绑定 openid
-
-服务端行为：
-
-| 项 | 说明 |
-|---|---|
-| 连接 | 每用户一条 WebSocket，启动时按库里的配置自动恢复 |
-| 凭据 | AppSecret 用 AES-GCM 加密存 `t_user_config`，接口只回布尔值 |
-| 入站 | `C2C_MESSAGE_CREATE`（单聊）、`GROUP_AT_MESSAGE_CREATE`（群 @）|
-| 出站 | 被动回复带 `msg_id`（60 分钟内 4 次）；提醒走主动消息（1000 条/用户/天）|
-| 绑定 | 首次私聊记录 openid，之后只接受同一 openid —— 别人给他的机器人发消息会被忽略 |
-| 重连 | 5→15→30→60→120 秒退避；op=9 会话失效时刷新 token |
-
-> 主动提醒要求用户**先私聊过机器人**（否则拿不到 openid），没有 openid 时自动降级为站内信。
-> 两条通道可以并存，NapCat 保留给想"一个机器人服务全站"的部署方。
+服务端通过 WebSocket 接收私聊消息，并自动尝试恢复已配置的连接。AppSecret 加密存储。主动提醒需要设置 `SC_IM_PUSH_ENABLED=true`，并受用户绑定、免打扰和平台配额约束。站内通知独立送达。
 
 ## 5. 与聊天模型 / 向量模型的关系
 
@@ -244,10 +176,21 @@ docker compose logs sc-java-backend | grep 平台默认向量模型   # 应显�
 | 备份 | ✅ 已提供 `scripts/backup/backup.sh` | 需自行加定时任务，并把备份复制到另一台机器（§10） |
 | 注册限流 | ✅ 已内置（Nginx 按 IP） | 数值在 `sc-web-frontend/nginx.conf` 顶部；TLS 在上游终止时需配 `real_ip` |
 | 日志轮转 | 未配置 | 给容器加 `logging.options.max-size` |
-| NapCat 版本 | `latest` | pin 具体版本 |
 | 依赖漏洞 | ChromaDB / 部分 Java 依赖无修复版本 | 已做网络隔离与访问收敛，公网部署请自行评估 |
 
 ## 8. 升级
+
+**升级前先备份数据库**（见 §10）。迁移脚本只向前执行，回滚脚本覆盖部分版本。
+
+从使用过 NapCat／OneBot 的版本升级时，先在部署主机确认是否还有 `sc-napcat-onebot` 容器：
+
+```bash
+docker ps -a --filter 'name=^/sc-napcat-onebot$' --format '{{.Names}} {{.Status}}'
+```
+
+旧容器仍在运行时，先执行 `docker stop sc-napcat-onebot`。容器停止后，执行 `docker rm sc-napcat-onebot`。旧数据卷可用于回滚时恢复登录态。检查 `.env` 并清理 `SC_NAPCAT_*`、`SC_ONEBOT_*` 和 `COMPOSE_PROFILES` 中的 `onebot`，保留其他仍在使用的 profile。
+
+需要官方 QQ 主动提醒时，升级前在 `.env` 设置 `SC_IM_PUSH_ENABLED=true`，并按 §4 确认用户已完成官方机器人绑定验证。开关为 `false` 时，提醒通过站内信送达，绑定验证和私聊指令仍可使用。
 
 ```bash
 git pull
@@ -256,7 +199,13 @@ docker compose build
 docker compose up -d
 ```
 
-新增迁移会在 Java 启动时自动执行。**升级前先备份数据库**：迁移脚本只有正向执行，回滚脚本不保证覆盖每个版本。
+新增迁移会在 Java 启动时自动执行（若禁用自动迁移 `SC_DB_MIGRATION_ENABLED=false`，升级前可执行 `bash scripts/db/manual_migrate.sh`）。升级后可运行只读结构校验确认 `V1.0.0`–`V1.0.13` 全部表/列/索引/CHECK 一致（不依赖被 gitignore 的 `docs/`）：
+
+```bash
+python3 scripts/db/verify_schema.py
+```
+
+Compose 模式默认查询 `sc-mysql` 服务的 `scholarclaw` 库。若自定义了 `SC_DB_NAME`，请传入对应的 `--database`。通过 TCP 查询时需同时提供 `--host`、`--port`、`--database` 和 `--user`，密码通过环境变量 `MYSQL_PWD` 提供。校验结论会显示实际使用的连接目标。
 
 ## 9. 配置 HTTPS（宿主机 Nginx + Let's Encrypt）
 

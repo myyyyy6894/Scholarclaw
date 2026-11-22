@@ -1,6 +1,16 @@
-# E2E 脚本
+# 测试与 E2E 入口
 
-这些脚本用于**可重复**验证认证、BYOK 与前端页面，不写入真实密钥，也不修改生产 `.env`。
+## 0. 自动化测试与结构校验入口总览
+
+| 验证域 | 命令（在仓库根目录执行） | 说明 |
+|---|---|---|
+| **Java 单元与集成测试** | `mvn -o -f sc-java-backend/pom.xml -B test` | 含 `IsolatedMysqlTestSupport` 用例时需本机 `127.0.0.1:13306` 隔离测试库与 `-Dsc.test.mysql.datadir=...` |
+| **Python AI 服务回归** | `(cd sc-python-ai && SC_INGEST_CONSUMER_ENABLED=false .venv/bin/python -m pytest)` | 禁用真实 MQ 消费者以离线隔离运行 |
+| **Web 类型/Lint/单测/构建** | `npm --prefix sc-web-frontend run check && npm --prefix sc-web-frontend run build` | Node 22 环境（`vue-tsc` + `eslint --max-warnings 0` + `vitest` + `vite build`） |
+| **数据库结构只读校验** | `python3 scripts/db/verify_schema.py` | 读随仓交付的 `scripts/db/schema_spec.json`（不依赖 `docs/`）；支持 `--scope all|mvp|schedule|planning`，旧 `verify_*_schema.py` 为薄兼容入口 |
+| **实时栈 E2E 脚本** | 见下 §1–§8；`course_smoke.py` / `ingest_e2e.py` 共用 `scripts/e2e/e2e_http.py` | 需先启动整栈且遵守 `.env` 隔离约定 |
+
+以下 E2E 脚本用于**可重复**验证认证、BYOK 与前端页面，不写入真实密钥，也不修改生产 `.env`。
 
 前置：整栈已启动（`docker compose up -d`），Nginx 入口可达（默认 `http://127.0.0.1`）。
 
@@ -17,7 +27,7 @@ python3 scripts/e2e/auth_byok_smoke.py --base-url http://127.0.0.1
 ```
 
 覆盖：注册、重复注册、错误密码、未认证访问、伪造 `X-User-Id`、登录、
-公共探测拒绝 `BOTH`、SSRF 拦截（元数据/内部服务名/内部端口）、偏好成对与非法时区校验、
+公共探测拒绝 `BOTH`、SSRF 拦截（元数据/内部服务名/内部端口）、时区与免打扰偏好校验、
 Key 销毁幂等、登出后旧 token `AUTH_TOKEN_REVOKED`。
 
 脚本只创建临时账号并打印用户名；**不会自动删除账号**。清理方式见 §6（需维护者授权）。
@@ -143,7 +153,7 @@ mock 服务故障导致 `FAILED` 后手动重试恢复；PARSING 僵尸巡检补
 
 注意：脚本会停止/启动 `sc-python-ai` 与 `sc-e2e-mock-model` 两个容器，运行期间页面暂不可用。
 巡检用例需要临时 env 设置 `SC_ZOMBIE_SCAN_STALE_MINUTES=1` 与
-`SC_ZOMBIE_SCAN_INTERVAL_MS=5000`（见脚本文件头与 TASK_TRACKER 记录）。
+`SC_ZOMBIE_SCAN_INTERVAL_MS=5000`（见脚本文件头说明）。
 
 ### 4.3 P6 RAG Web 工作台（TASK-605，无需后端）
 
@@ -232,7 +242,7 @@ docker compose --env-file /tmp/sc-p7-e2e-restore.env up -d --force-recreate sc-j
 ```
 
 已知限制：会积累 `p7r3v_*` / `p7r3ui_*` 账号与任务；清理前先 SELECT 确认，禁止在生产库执行。
-真实供应商模型、OneBot 入站与 P8 提醒不在本脚本范围内。
+真实模型与官方 QQ 机器人投递需另外验证。
 
 旧版本 Redis 草案（缺少 `schema_version` / `target_task_updated_at`）可在部署后清理：
 
@@ -241,100 +251,17 @@ python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380  
 python3 scripts/maintenance/cleanup_ddl_drafts.py --host 127.0.0.1 --port 6380 --apply
 ```
 
-## 7. P8 Web + QQ（OneBot 协议替身）联调（TASK-805）
+## 7. 浏览器站内通知验证
 
-**边界：** 本脚本使用 `p8_mock_onebot.py` 模拟 NapCat Action API，**不是真实 QQ 账号**，
-本节的自动化结果**不得**当作真实 QQ 证据。NapCat 已作为可选 `onebot` Compose profile
-（`docker compose --profile onebot up -d sc-napcat-onebot`，见 `DEPLOYMENT.md` §3.1），
-本节仍刻意使用协议替身，以保证可重复、无需登录态。真实 QQ 的证据单独记录（见
-`TASK_TRACKER.md` §1 TASK-805 与 `.agent-handoff/validation.md`）。
-
-前置：最新 Java/Python/Web 镜像已构建（`mvn -DskipTests package`、`npm run build`、
-`docker compose build sc-java-backend sc-python-ai sc-web-nginx`）。
-Python 也会校验模型 Base URL 白名单；只重建 Java/Web 会让 Python 保留旧白名单并返回
-`E-SYS-02`，因此启动与恢复都必须重建 `sc-python-ai`。
+用未配置 QQ 机器人的账号验证站内通知、已读操作和设置页面。在启用短周期提醒的隔离栈执行：
 
 ```bash
-# 1) 模型替身 + OneBot Action 替身（内部网络；OneBot 额外映射 127.0.0.1:19090 供测试读取调用记录）
-docker run -d --name sc-p7-mock --network scholarclaw-internal \
-  -v "$PWD/scripts/e2e/p7_mock_model.py:/mock.py:ro" \
-  scholarclaw/sc-python-ai:1.0.0 python /mock.py --port 11434
-docker run -d --name sc-p8-mock-onebot --network scholarclaw-internal \
-  -p 127.0.0.1:19090:19090 \
-  -v "$PWD/scripts/e2e/p8_mock_onebot.py:/onebot.py:ro" \
-  scholarclaw/sc-python-ai:1.0.0 python /onebot.py --port 19090
-MOCK_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' sc-p7-mock)
-ONEBOT_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' sc-p8-mock-onebot)
-
-# 2) 临时 env：开启模型白名单、IM 推送、OneBot Action，并缩短调度/抖动（仅测试）
-cp .env /tmp/sc-p8-e2e.env
-chmod 600 /tmp/sc-p8-e2e.env
-cat >> /tmp/sc-p8-e2e.env <<EOF
-SC_ALLOW_LOCAL_MODEL_BASE_URL=true
-SC_LOCAL_MODEL_ALLOWED_ORIGINS=http://$MOCK_IP:11434
-SC_IM_PUSH_ENABLED=true
-SC_ONEBOT_ACCESS_TOKEN=p8-e2e-token
-SC_ONEBOT_BASE_URL=http://$ONEBOT_IP:19090
-SC_NOTIFICATION_OUTBOUND_INITIAL_DELAY_MS=2000
-SC_NOTIFICATION_OUTBOUND_INTERVAL_MS=2000
-SC_NOTIFICATION_OUTBOUND_RETRY_DELAY_SECONDS=1
-SC_IM_JITTER_MIN_MS=0
-SC_IM_JITTER_MAX_MS=0
-SC_IM_RATE_DELAY_MIN_MS=1000
-SC_IM_RATE_DELAY_MAX_MS=1000
-SC_DDL_REMINDER_INITIAL_DELAY_MS=2000
-SC_DDL_REMINDER_INTERVAL_MS=3000
-EOF
-
-docker compose --env-file /tmp/sc-p8-e2e.env up -d --force-recreate \
-  sc-java-backend sc-python-ai sc-web-nginx
-
-# 2b) 必须确认 Python 已使用当前 mock IP 的白名单，否则模型调用会先报 E-SYS-02
-docker compose exec -T sc-python-ai printenv SC_LOCAL_MODEL_ALLOWED_ORIGINS
-# 期望输出：http://$MOCK_IP:11434
-
-# 3) P8 API：Webhook/白名单/去重/转发/文件/通知/IM 出站/fallback
-sc-python-ai/.venv/bin/python scripts/e2e/p8_api_e2e.py \
-  --base-url http://127.0.0.1 \
-  --model-base-url "http://$MOCK_IP:11434/v1" \
-  --onebot-admin-url http://127.0.0.1:19090 \
-  --onebot-token p8-e2e-token
-
-# 4) 停止 OneBot 替身，验证 QQ 离线时 Web 仍可用（通知中心/DDL）
-docker stop sc-p8-mock-onebot
 /tmp/sc-e2e-venv/bin/python scripts/e2e/p8_browser_e2e.py --base-url http://127.0.0.1
 ```
 
-P8 API 覆盖：错误令牌 401、未绑定发送者静默丢弃、meta ACK、私聊/群 @ 文本（精确断言
-`send_group_msg` 与 `group_id`，且不私聊发送者）、单层转发、嵌套转发 `E-IM-03`、重复消息
-`DUPLICATE_IGNORED` 且不产生第二个 DDL 任务、无 Embedding 文件下载前拦截、只有 `data.file`
-的文件段、合法文件默认课程入库、文件 URL SSRF（云元数据/回环）拦截、T-6h 提醒→站内通知→IM
-`SENT_IM`、未绑定用户 `FALLBACK_WEB_ONLY`、协议端失败 3 次后 `FALLBACK_WEB_ONLY`。
-浏览器覆盖：通知角标/标题/全部已读、未读归零、QQ 离线时通知最终 `FALLBACK_WEB_ONLY`、
-DDL 页面在 QQ 离线时正常加载、设置页「打开 NapCat 登录页」入口存在且 `href` 与
-`VITE_NAPCAT_WEBUI_URL` 一致、无 console error。截图：`/tmp/sc_p8_notifications.png`、
-`/tmp/sc_p8_notifications-settings.png`。
-
-清理（恢复原 `.env`、删除替身并确认整栈健康）：
-
-```bash
-docker stop sc-p8-mock-onebot sc-p7-mock
-docker rm sc-p8-mock-onebot sc-p7-mock
-cp .env /tmp/sc-p8-e2e-restore.env
-# 必须同时恢复 Java、Python 与 Web：Python 的模型白名单、Web 的反代配置都可能被临时 env 影响
-docker compose --env-file /tmp/sc-p8-e2e-restore.env up -d --force-recreate \
-  sc-java-backend sc-python-ai sc-web-nginx
-rm -f /tmp/sc-p8-e2e.env /tmp/sc-p8-e2e-restore.env
-docker compose ps
-# 期望：7 个服务均为 running/healthy
-```
-
-**诚实边界：** 真实 NapCat/真实 QQ、真实供应商模型、真实平台风控与限流行为仍未验证；
-限流/重试/降级在单测与真实 Redis Lua/MySQL 上有证据，但本脚本不会对真实 QQ 产生消息。
-
 ## 8. TASK-901/902 清理、GC 与 DDL 梯度提醒（真实栈）
 
-这三个脚本都要求真实栈 + 临时 mock 模型/OneBot 替身；**替身只验证协议与链路，不是真实 QQ 或真实供应商质量证据**。
+这三个脚本都要求真实栈，清理与 GC 脚本需要临时模型替身；**替身只验证协议与链路，不是真实 QQ 或真实供应商质量证据**。
 所有临时 env 必须放在 `/tmp` 文件里通过 `--env-file` 注入，验证后恢复默认 `.env` 并删除 mock。
 
 ### 8.1 `cleanup_e2e.py`（TASK-901 级联清理，28 项）
@@ -374,22 +301,13 @@ sc-python-ai/.venv/bin/python scripts/e2e/gc_e2e.py \
 
 ### 8.3 `ddl_reminder_e2e.py`（DDL 梯度提醒，P9 复核第 3 项）
 
-需要短周期提醒 + `SC_IM_PUSH_ENABLED=true`（验证 DND 初始状态）+ OneBot 协议替身（只接收 Action，不校验真实 QQ）：
+在隔离栈缩短 DDL 提醒周期后运行：
 
 ```bash
-cp .env /tmp/sc-ddl.env && chmod 600 /tmp/sc-ddl.env
-printf '\nSC_DDL_REMINDER_INITIAL_DELAY_MS=1000\nSC_DDL_REMINDER_INTERVAL_MS=3000\nSC_IM_PUSH_ENABLED=true\nSC_ONEBOT_BASE_URL=http://<mock-ip>:18080\n' >> /tmp/sc-ddl.env
-docker run -d --name sc-e2e-onebot --network scholarclaw-internal \
-  -v "$PWD/scripts/e2e/p8_mock_onebot.py:/mock.py:ro" \
-  python:3.11-slim python3 /mock.py --host 0.0.0.0 --port 18080
-docker compose --env-file /tmp/sc-ddl.env up -d --force-recreate sc-java-backend
 sc-python-ai/.venv/bin/python scripts/e2e/ddl_reminder_e2e.py --base-url http://127.0.0.1
 ```
 
-覆盖：T-24h、T-6h、逾期 `OVERDUE`、两次跟进（第二次后 `follow_up_at=NULL`）、DND 内非紧急通知
-`RATE_LIMITED_DELAYED`、DND 内 T-6h 仍按紧急处理、重复扫描不重复通知。恢复：重新 `up -d --force-recreate`
-`sc-java-backend` 回到默认 `.env`（特别是 `SC_IM_PUSH_ENABLED=false`），`docker rm -f sc-e2e-onebot`，
-删除 `/tmp/sc-ddl.env`。
+覆盖 T-24h、T-6h、逾期、两次跟进、重复扫描防重和站内信降级。官方 QQ 投递的免打扰语义由 Java 全量套件中的通知策略和 DDL 联动测试覆盖。
 
 ## 9. 安全约束
 

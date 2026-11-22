@@ -15,7 +15,6 @@ import { listDdlTasks } from '@/api/ddl'
 import type { EmbeddingProvider } from '@/api/user-config'
 import CourseCard from '@/components/course/CourseCard.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
-import ComingSoonBadge from '@/components/ui/ComingSoonBadge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import { filterCourses } from '@/views/course/course-list'
@@ -30,7 +29,6 @@ import { groupDdlCountByCourse } from '@/views/home/dashboard-data'
  * 我的课程（P3，参考图 `docs/ui_picture/我的课程.png`）。
  *
  * 只展示后端真实返回的课程、Embedding 绑定、索引状态与文档计数；
- * 「本学期 / 已归档」与学期下拉后端没有字段，只做禁用占位并标注「暂未开发」；
  * 课程搜索只过滤已加载的课程名称/备注，不伪造后端搜索能力。
  */
 const EMBEDDING_PROVIDERS: Array<{ value: EmbeddingProvider; label: string }> = [
@@ -226,12 +224,6 @@ function toneFor(index: number): (typeof TONES)[number] {
           <button type="button" class="course-tab course-tab--active">
             全部课程 <span class="course-tab__count">{{ courses.length }}</span>
           </button>
-          <button type="button" class="course-tab" disabled title="后端暂无学期字段">
-            本学期 <ComingSoonBadge compact />
-          </button>
-          <button type="button" class="course-tab" disabled title="后端暂无归档字段">
-            已归档 <ComingSoonBadge compact />
-          </button>
         </div>
 
         <div class="courses-tools">
@@ -239,7 +231,6 @@ function toneFor(index: number): (typeof TONES)[number] {
             <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
             <input v-model="searchQuery" type="search" placeholder="搜索课程…" aria-label="搜索课程" />
           </label>
-          <el-select class="courses-term" disabled placeholder="学期（暂未开发）" />
         </div>
       </div>
 
@@ -563,11 +554,6 @@ function toneFor(index: number): (typeof TONES)[number] {
   font-weight: 600;
 }
 
-.course-tab:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
-}
-
 .course-tab__count {
   min-width: 18px;
   padding: 0 5px;
@@ -614,10 +600,6 @@ function toneFor(index: number): (typeof TONES)[number] {
 
 .courses-search input::-webkit-search-cancel-button {
   display: none;
-}
-
-.courses-term {
-  width: 168px;
 }
 
 .courses-grid {
@@ -848,11 +830,6 @@ function toneFor(index: number): (typeof TONES)[number] {
 
   .courses-search input {
     width: 100%;
-  }
-
-  .courses-term {
-    flex: none;
-    width: 120px;
   }
 }
 </style>

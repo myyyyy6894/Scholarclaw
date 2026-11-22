@@ -250,8 +250,7 @@ const FAQ = [
         </div>
       </template>
       <p class="guide-note">
-        构建模式 <code>{{ buildMode }}</code>。当前版本已实现：课程空间、知识库解析、溯源问答、DDL 提取与看板、站内通知、BYOK 模型配置。
-        课程表、全局搜索、公开系统状态接口尚未实现，界面上对应位置会标注「暂未开发」。
+        构建模式 <code>{{ buildMode }}</code>。当前版本已实现：课程空间、知识库解析、溯源问答、DDL 提取与看板、我的课表、时间规划、站内通知与 BYOK 模型配置。
       </p>
     </BaseCard>
   </div>

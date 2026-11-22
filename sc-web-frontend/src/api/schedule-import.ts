@@ -4,6 +4,10 @@ import type { BigIntId } from '@/api/types'
 
 export interface ScheduleSuggestion {
   source_text: string
+  source_ref?: string
+  segment_id?: string
+  section_code?: string | null
+  state?: 'COURSE' | 'UNPARSED' | 'UNSCHEDULED'
   title: string | null
   teacher: string | null
   room: string | null
@@ -23,14 +27,16 @@ export interface ScheduleImportReceipt {
 export interface ScheduleImport {
   import_id: BigIntId
   term_id: BigIntId
-  source_type: 'TEXT' | 'IMAGE'
+  source_type: 'TEXT' | 'IMAGE' | 'FILE'
+  source_format?: 'XLSX' | 'CSV' | 'DOCX' | null
+  file_assist_used?: boolean
   status: 'QUEUED' | 'RUNNING' | 'REVIEW_REQUIRED' | 'FAILED' | 'CONFIRMED' | 'EXPIRED' | 'CANCELED'
   version: number
   schedule_version: number
   attempt: number
   expires_at: string
   source_text: string | null
-  draft: { rows: ScheduleSuggestion[] } | null
+  draft: { rows: ScheduleSuggestion[]; tables?: ScheduleImportTable[]; minimum_weeks?: number } | null
   error_message: string | null
   receipt: ScheduleImportReceipt | null
 }
@@ -39,6 +45,7 @@ export interface ConfirmScheduleImport {
   client_request_id: string
   rules: RuleWrite[]
   reviewed_schedule_version?: number
+  conflict_token?: string
 }
 export interface ScheduleImageModel {
   provider: string
@@ -72,3 +79,41 @@ export const cancelScheduleImport = (id: BigIntId, version: number): Promise<Sch
   apiRequest(path(id), { method: 'DELETE', body: { version } })
 export const confirmScheduleImport = (id: BigIntId, body: ConfirmScheduleImport): Promise<ScheduleImportReceipt> =>
   apiRequest(`${path(id)}/confirm`, { method: 'POST', body })
+
+export interface ScheduleImportTable {
+  index: number
+  label: string
+  layout: 'GRID' | 'DETAIL' | 'UNKNOWN'
+}
+export interface ScheduleImportLayout {
+  table_index: number
+  header_row?: number
+  mapping?: Record<string, number>
+}
+export interface ScheduleImportPreview {
+  schedule_version: number
+  conflict_token: string
+  conflicts: { row: number; title: string; dates: string[]; duplicate: boolean }[]
+}
+export function createFileScheduleImport(termId: BigIntId, file: File, requestId: string): Promise<ScheduleImport> {
+  const formData = new FormData()
+  formData.append('term_id', termId)
+  formData.append('client_request_id', requestId)
+  formData.append('file', file)
+  return apiRequest('/v1/schedule/imports/file', { method: 'POST', formData })
+}
+export function changeScheduleImportLayout(id: BigIntId, version: number, file: File,
+  layout: ScheduleImportLayout): Promise<ScheduleImport> {
+  const formData = new FormData()
+  formData.append('version', String(version))
+  formData.append('layout', new Blob([JSON.stringify(layout)], { type: 'application/json' }))
+  formData.append('file', file)
+  return apiRequest(`${path(id)}/file/layout`, { method: 'POST', formData })
+}
+export const getScheduleFileModel = (): Promise<ScheduleImageModel> => apiRequest('/v1/schedule/imports/file/model')
+export const assistScheduleFile = (id: BigIntId, version: number, consentToken: string): Promise<ScheduleImport> =>
+  apiRequest(`${path(id)}/file/assist`, {
+    method: 'POST', body: { version, consent_token: consentToken, confirm_external_transfer: true },
+  })
+export const previewScheduleImport = (id: BigIntId, version: number, rules: RuleWrite[]): Promise<ScheduleImportPreview> =>
+  apiRequest(`${path(id)}/preview`, { method: 'POST', body: { version, rules } })

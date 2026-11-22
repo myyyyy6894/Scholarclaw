@@ -89,7 +89,8 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
                      "/internal/ai/v1/rag/vectors", "/internal/ai/v1/rag/collections",
                      "/internal/ai/v1/rag/qa-stream",
                      "/internal/ai/v1/agent/route-and-extract",
-                     "/internal/ai/v1/schedule/extract-text", "/internal/ai/v1/schedule/extract-image"}
+                     "/internal/ai/v1/schedule/extract-text", "/internal/ai/v1/schedule/extract-image",
+                     "/internal/ai/v1/schedule/extract-file", "/internal/ai/v1/schedule/assist-file"}
 
 
 def test_user_id_header_is_ignored_when_token_invalid(remote_client: TestClient) -> None:

@@ -4,6 +4,7 @@ import com.scholarclaw.common.response.Result;
 import com.scholarclaw.common.security.SecurityContextUtils;
 import com.scholarclaw.modules.schedule.dto.ScheduleImportDtos.*;
 import com.scholarclaw.modules.schedule.service.ScheduleImportService;
+import com.scholarclaw.modules.schedule.service.ScheduleFileImportService;
 import com.scholarclaw.modules.schedule.service.ScheduleImageImportService;
 import com.scholarclaw.modules.schedule.service.ScheduleImageModelResolver;
 import com.scholarclaw.modules.schedule.service.ScheduleService;
@@ -22,8 +23,39 @@ import org.springframework.web.multipart.MultipartFile;
 public class ScheduleImportController {
     private final ScheduleImportService service;
     private final ScheduleImageImportService images;
-    public ScheduleImportController(ScheduleImportService service, ScheduleImageImportService images) {
-        this.service = service; this.images = images;
+    private final ScheduleFileImportService files;
+    public ScheduleImportController(ScheduleImportService service, ScheduleImageImportService images,
+                                    ScheduleFileImportService files) {
+        this.service = service; this.images = images; this.files = files;
+    }
+
+    @PostMapping(value = "/file", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Result<ImportView>> createFile(@RequestParam("term_id") String termId,
+            @RequestParam("client_request_id") String requestId, @RequestPart("file") MultipartFile file) {
+        return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore())
+                .body(Result.ok(files.create(user(), termId, requestId, file)));
+    }
+    @PostMapping(value = "/{importId}/file/layout", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Result<ImportView>> fileLayout(@PathVariable String importId,
+            @RequestParam("version") long version, @RequestPart("layout") ScheduleFileImportService.Layout layout,
+            @RequestPart("file") MultipartFile file) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(Result.ok(files.remap(user(), ScheduleService.parseId(importId), version, layout, file)));
+    }
+    @GetMapping("/file/model")
+    public ResponseEntity<Result<ScheduleImageModelResolver.ModelSelection>> fileModel() {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Result.ok(files.model(user())));
+    }
+    @PostMapping("/{importId}/file/assist")
+    public ResponseEntity<Result<ImportView>> fileAssist(@PathVariable String importId,
+                                                         @RequestBody ImageRetryRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(Result.ok(files.assist(user(), ScheduleService.parseId(importId), request)));
+    }
+    @PostMapping("/{importId}/preview")
+    public ResponseEntity<Result<ConflictPreview>> preview(@PathVariable String importId, @RequestBody PreviewRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(Result.ok(service.preview(user(), ScheduleService.parseId(importId), request)));
     }
 
     @PostMapping("/text")

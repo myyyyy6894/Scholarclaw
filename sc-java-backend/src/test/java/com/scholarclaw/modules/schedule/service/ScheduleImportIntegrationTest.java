@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scholarclaw.common.client.PythonAiEngineClient;
+import com.scholarclaw.common.client.ModelEndpoint;
 import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
@@ -36,6 +37,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -61,6 +63,7 @@ class ScheduleImportIntegrationTest {
         registry.add("sc.storage.root", () -> TEST_STORAGE);
     }
     @Autowired ScheduleImportService imports;
+    @Autowired ScheduleFileImportService files;
     @Autowired ScheduleImportWorker worker;
     @Autowired ScheduleImportRepository repository;
     @Autowired ScheduleService schedules;
@@ -71,6 +74,7 @@ class ScheduleImportIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired JwtService jwt;
     @MockBean PythonAiEngineClient python;
+    @MockBean ScheduleImageModelResolver models;
     @MockBean TokenRevocationService revocations;
 
     @Test
@@ -267,6 +271,97 @@ class ScheduleImportIntegrationTest {
         assertThatThrownBy(() -> worker.validateSuggestions(forged, TEXT, 16))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(worker.validateSuggestions(suggestion(TEXT), TEXT, 16)).contains("source_text");
+    }
+
+    @Test
+    void filePreviewReportsActualConflictDatesAndSaveIsIdempotent() throws Exception {
+        var account = users.createUserAccount("file_" + System.nanoTime(), "hash", "Asia/Shanghai");
+        long user = account.getUserId();
+        TermView term = term(user);
+        long termId = Long.parseLong(term.termId());
+        var file = schoolFile();
+        String endpoint = "/api/v1/schedule/imports/file";
+        when(python.postJson(eq(PythonAiEngineClient.SCHEDULE_FILE_PATH), any(), eq(user), any(Duration.class)))
+                .thenReturn(fileDraft());
+        when(revocations.check(anyLong(), any())).thenReturn(new TokenRevocationService.TokenStatus(false, false));
+        String token = jwt.issue(user, account.getUsername(), "STUDENT").token();
+        mvc.perform(multipart(endpoint).file(file).param("term_id", term.termId()).param("client_request_id", "file-1")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isCreated()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.data.source_format").value("CSV"))
+                .andExpect(jsonPath("$.data.draft.minimum_weeks").value(17));
+        ImportView draft = files.create(user, term.termId(), "file-1", file);
+        long id = Long.parseLong(draft.importId());
+        verify(python, times(1)).postJson(eq(PythonAiEngineClient.SCHEDULE_FILE_PATH), any(), eq(user), any(Duration.class));
+        assertCode(() -> imports.get(user(), id), ErrorCode.RESOURCE_NOT_FOUND);
+        var early = new RuleWrite(term.termId(), null, "线性代数", null, "A101", 2, null, null, 1, 2,
+                java.util.stream.IntStream.rangeClosed(6, 12).boxed().toList(), null, false);
+        var longCourse = new RuleWrite(term.termId(), null, "数据结构", null, "B101", 2, null, null, 1, 2,
+                java.util.stream.IntStream.rangeClosed(2, 17).boxed().toList(), null, false);
+        var writes = List.of(early, longCourse);
+        var previewRequest = new PreviewRequest(draft.version(), writes);
+        assertCode(() -> imports.preview(user, id, previewRequest), ErrorCode.VALIDATION_ERROR);
+        var extended = schedules.updateTerm(user, termId, new TermWrite(term.name(), term.firstMonday(), 17,
+                term.timezone(), true, term.version(), false));
+        schedules.savePeriods(user, termId, new PeriodsWrite(extended.version(), List.of(
+                new Period(1, LocalTime.of(8, 0), LocalTime.of(8, 45)),
+                new Period(2, LocalTime.of(8, 55), LocalTime.of(9, 40))), false));
+        var preview = imports.preview(user, id, previewRequest);
+        assertThat(preview.conflicts()).hasSize(2).allSatisfy(conflict ->
+                assertThat(conflict.dates()).containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(6, 12)
+                        .mapToObj(week -> term.firstMonday().plusWeeks(week - 1L).plusDays(1)).toList()));
+        assertCode(() -> imports.confirm(user, id, new ConfirmRequest(draft.version(), "no-preview", writes,
+                preview.scheduleVersion())), ErrorCode.STATE_CONFLICT);
+        var approved = new ConfirmRequest(draft.version(), "approved", writes, preview.scheduleVersion(), preview.conflictToken());
+        Receipt saved = imports.confirm(user, id, approved);
+        assertThat(imports.confirm(user, id, approved)).isEqualTo(saved);
+        assertThat(schedules.rules(user, termId)).hasSize(2);
+        assertThat(imports.get(user, id).draft()).isNull();
+        var last = term.firstMonday().plusWeeks(16).plusDays(1);
+        assertThat(schedules.occurrences(user, termId, last, last).occurrences()).singleElement()
+                .satisfies(row -> assertThat(row.title()).isEqualTo("数据结构"));
+    }
+
+    @Test
+    void fileAssistSpendsOneConsentAndKeepsLocalDraftOnFailure() {
+        long user = user();
+        TermView term = term(user);
+        when(python.postJson(eq(PythonAiEngineClient.SCHEDULE_FILE_PATH), any(), eq(user), any(Duration.class)))
+                .thenReturn(fileDraft());
+        when(models.endpoint(any(com.scholarclaw.modules.userconfig.entity.UserConfigEntity.class), eq("token")))
+                .thenReturn(new ModelEndpoint("OLLAMA", "http://localhost:11434", null, "fixture"));
+        when(python.postJson(eq(PythonAiEngineClient.SCHEDULE_FILE_ASSIST_PATH), any(), eq(user), any(Duration.class)))
+                .thenAnswer(call -> {
+                    assertThat(call.getArgument(1, Object.class).toString()).doesNotContain("source_text", "身份资料");
+                    throw new BusinessException(ErrorCode.UPSTREAM_TIMEOUT);
+                });
+        var draft = files.create(user, term.termId(), "file-assist", schoolFile());
+        long id = Long.parseLong(draft.importId());
+        var consent = new ImageRetryRequest(draft.version(), "token", true);
+        assertCode(() -> files.assist(user, id, new ImageRetryRequest(draft.version(), "token", false)),
+                ErrorCode.VALIDATION_ERROR);
+        var result = files.assist(user, id, consent);
+        assertThat(result.fileAssistUsed()).isTrue();
+        assertThat(result.draft()).isEqualTo(draft.draft());
+        assertThat(result.errorMessage()).isNotBlank();
+        assertCode(() -> files.assist(user, id, consent), ErrorCode.STATE_CONFLICT);
+        assertCode(() -> files.assist(user, id, new ImageRetryRequest(result.version(), "token", true)), ErrorCode.STATE_CONFLICT);
+        verify(python, times(1)).postJson(eq(PythonAiEngineClient.SCHEDULE_FILE_ASSIST_PATH), any(), eq(user), any(Duration.class));
+    }
+
+    private MockMultipartFile schoolFile() {
+        return new MockMultipartFile("file", "school.csv", "text/csv",
+                "课程,星期,节次,周次\n数据结构,周二,1-2,2-17".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private JsonNode fileDraft() {
+        var root = (com.fasterxml.jackson.databind.node.ObjectNode) suggestion("身份资料");
+        var row = (com.fasterxml.jackson.databind.node.ObjectNode) root.path("rows").get(0);
+        row.put("source_ref", "CSV R2").put("segment_id", "CSV R2#1").put("state", "COURSE").put("section_code", "003");
+        row.putArray("weeks").add(17);
+        root.putArray("tables").addObject().put("index", 1).put("label", "CSV").put("layout", "DETAIL");
+        root.put("minimum_weeks", 17);
+        return root;
     }
 
     private ImportView ready(long user, TermView term) throws Exception {

@@ -36,7 +36,7 @@ const loading = ref(true)
 const errorMessage = ref('')
 const busy = ref(false)
 const importDialog = ref(false)
-const importSource = ref<'TEXT' | 'IMAGE'>('TEXT')
+const importSource = ref<'TEXT' | 'IMAGE' | 'FILE'>('FILE')
 const weekNo = ref<number | null>(null)
 const nowMs = ref(Date.now())
 let generation = 0
@@ -153,6 +153,7 @@ function showNowBefore(date: string, index: number): boolean {
 
 // 学期
 const termDialog = ref(false)
+let returnToImportAfterTerm = false
 const editingTerm = ref<ScheduleTerm | null>(null)
 const termForm = reactive<TermWrite>({ name: '', first_monday: '', week_count: 16, timezone: 'Asia/Shanghai', active: true })
 async function openTermEditor(value?: ScheduleTerm): Promise<void> {
@@ -169,6 +170,18 @@ async function openTermEditor(value?: ScheduleTerm): Promise<void> {
     version: undefined, confirm_schedule_change: false,
   })
   termDialog.value = true
+}
+async function configureImportTerm(minimumWeeks: number): Promise<void> {
+  returnToImportAfterTerm = true
+  importDialog.value = false
+  await openTermEditor(term.value ?? undefined)
+  termForm.week_count = Math.max(termForm.week_count, minimumWeeks)
+}
+function resumeImportAfterTerm(): void {
+  if (!returnToImportAfterTerm) return
+  returnToImportAfterTerm = false
+  importSource.value = 'FILE'
+  importDialog.value = Boolean(term.value)
 }
 async function submitTerm(): Promise<void> {
   if (busy.value) return
@@ -188,9 +201,9 @@ async function submitTerm(): Promise<void> {
     const saved = editingTerm.value
       ? await updateScheduleTerm(editingTerm.value.term_id, { ...termForm })
       : await createScheduleTerm({ ...termForm })
-    termDialog.value = false
     selectedDate.value = ''
     await refresh(saved.term_id)
+    termDialog.value = false
     notifySuccess('学期已保存。')
   } catch (error) { notifyError(error) } finally { busy.value = false }
 }
@@ -406,6 +419,7 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       </div>
       <div class="schedule-actions">
         <el-button @click="openTermEditor()">新建学期</el-button>
+        <el-button @click="term ? (importSource = 'FILE', importDialog = true) : configureImportTerm(0)">上传学校导出</el-button>
         <el-button v-if="term" @click="importSource = 'TEXT'; importDialog = true">导入文字</el-button>
         <el-button v-if="term" @click="importSource = 'IMAGE'; importDialog = true">导入图片</el-button>
         <el-button v-if="term" type="primary" @click="openRuleEditor()"><Plus :size="16" /> 添加课程</el-button>
@@ -474,9 +488,9 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       </ul>
     </BaseCard>
 
-    <ScheduleImportDialog v-if="term" v-model="importDialog" :term="term" :rules="rules" :periods="periods" :source-type="importSource" @saved="refresh(termId)" @configure-periods="configureImportPeriods" />
+    <ScheduleImportDialog v-if="term" v-model="importDialog" :term="term" :rules="rules" :periods="periods" :source-type="importSource" @saved="refresh(termId)" @configure-periods="configureImportPeriods" @configure-term="configureImportTerm" />
 
-    <el-dialog v-model="termDialog" :title="editingTerm ? '编辑学期' : '新建学期'" width="520px" class="schedule-dialog">
+    <el-dialog v-model="termDialog" :title="editingTerm ? '编辑学期' : '新建学期'" width="520px" class="schedule-dialog" @closed="resumeImportAfterTerm">
       <el-form label-position="top">
         <el-form-item label="学期名称"><el-input v-model="termForm.name" maxlength="100" placeholder="例如 2026–2027 学年秋季" /></el-form-item>
         <el-form-item label="第一教学周的周一"><el-date-picker v-model="termForm.first_monday" type="date" value-format="YYYY-MM-DD" placeholder="选择周一" /></el-form-item>

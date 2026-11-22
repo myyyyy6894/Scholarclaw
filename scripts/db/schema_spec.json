@@ -1,5 +1,5 @@
 {
-  "schema_version": "V1.0.13",
+  "schema_version": "V1.0.14",
   "migration_table": "sc_schema_migration",
   "forbidden_tables": [
     "t_ddl_subtask",
@@ -2306,6 +2306,20 @@
             "type": "datetime(3)",
             "nullable": false,
             "default": null,
+            "extra": ""
+          },
+          {
+            "name": "source_format",
+            "type": "varchar(8)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "file_assist_used",
+            "type": "tinyint",
+            "nullable": false,
+            "default": "0",
             "extra": ""
           }
         ],

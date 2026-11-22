@@ -112,6 +112,21 @@ public class ScheduleImportService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ConflictPreview preview(long userId, long id, PreviewRequest request) {
+        lockUser(userId);
+        ImportRow task = requireForUpdate(userId, id);
+        ensureLive(task);
+        if (request == null || request.version() == null || request.version() != task.version()
+                || !"REVIEW_REQUIRED".equals(task.status()) || !"FILE".equals(task.sourceType())) {
+            throw conflict("导入草稿已变化，请刷新后重新校对。");
+        }
+        validateRules(task, request.rules());
+        Term term = schedules.termForUpdate(userId, task.termId()).orElseThrow(ScheduleImportService::notFound);
+        var batch = scheduleService.analyzeImport(userId, term, request.rules());
+        return new ConflictPreview(term.scheduleVersion(), batch.conflicts(), previewToken(task, term, request.rules()));
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Receipt confirm(long userId, long id, ConfirmRequest request) {
         lockUser(userId);
         if (request == null) throw invalid("请选择并校对需要保存的课程。");
@@ -120,7 +135,7 @@ public class ScheduleImportService {
                 || request.rules().size() > 200 || request.rules().stream().anyMatch(rule -> rule == null)) {
             throw invalid("请选择1至200条课程并提供任务版本。");
         }
-        String fingerprint = request.reviewedScheduleVersion() == null
+        String fingerprint = request.conflictToken() != null ? fingerprint(request) : request.reviewedScheduleVersion() == null
                 ? fingerprint(new ConfirmFingerprint(Long.toString(id), request.version(), request.rules()))
                 : fingerprint(new ReviewedConfirmFingerprint(Long.toString(id), request.version(), request.rules(),
                         request.reviewedScheduleVersion()));
@@ -139,13 +154,18 @@ public class ScheduleImportService {
                 && !Long.valueOf(term.scheduleVersion()).equals(request.reviewedScheduleVersion())) {
             throw conflict("课表或节次已变化，请刷新后重新校对当前课表，无需重新识别图片。");
         }
-        List<String> ruleIds = new ArrayList<>();
-        for (RuleWrite rule : request.rules()) {
-            if (!Long.toString(task.termId()).equals(rule.termId()) || rule.version() != null
-                    || (rule.courseId() != null && !rule.courseId().isBlank())) {
-                throw invalid("导入课程须属于该学期，确认时不能关联知识库课程。");
+        validateRules(task, request.rules());
+        List<String> ruleIds;
+        if ("FILE".equals(task.sourceType())) {
+            var batch = scheduleService.analyzeImport(userId, term, request.rules());
+            if (!Long.valueOf(term.scheduleVersion()).equals(request.reviewedScheduleVersion())
+                    || !previewToken(task, term, request.rules()).equals(request.conflictToken())) {
+                throw conflict("请按当前课表预览并确认所选安排。");
             }
-            ruleIds.add(scheduleService.createRule(userId, rule).ruleId());
+            ruleIds = scheduleService.insertImport(userId, term, batch);
+        } else {
+            ruleIds = new ArrayList<>();
+            for (RuleWrite rule : request.rules()) ruleIds.add(scheduleService.createRule(userId, rule).ruleId());
         }
         long finalVersion = schedules.term(userId, task.termId()).orElseThrow(ScheduleImportService::notFound)
                 .scheduleVersion();
@@ -156,13 +176,26 @@ public class ScheduleImportService {
         return receipt;
     }
 
+    private static void validateRules(ImportRow task, List<RuleWrite> rules) {
+        if (rules == null || rules.isEmpty() || rules.size() > 200) throw invalid("请选择1至200条课程。");
+        for (RuleWrite rule : rules) {
+            if (rule == null || !Long.toString(task.termId()).equals(rule.termId()) || rule.version() != null
+                    || (rule.courseId() != null && !rule.courseId().isBlank())) {
+                throw invalid("导入课程须属于该学期，确认时不能关联知识库课程。");
+            }
+        }
+    }
+    private String previewToken(ImportRow task, Term term, List<RuleWrite> rules) {
+        return fingerprint(new ReviewedConfirmFingerprint(Long.toString(task.id()), task.version(), rules,
+                term.scheduleVersion()));
+    }
     private ImportView view(ImportRow row) {
         boolean expired = isExpirable(row.status()) && !row.expiresAt().isAfter(now());
         return new ImportView(Long.toString(row.id()), Long.toString(row.termId()), row.sourceType(),
                 expired ? "EXPIRED" : row.status(), row.version(), row.scheduleVersion(), row.attempt(),
                 ScTimeZone.toOffsetDateTime(row.expiresAt()).toString(), expired ? null : row.sourceText(),
                 expired ? null : parseJson(row.draftJson()), expired ? null : row.errorMessage(),
-                row.receiptJson() == null ? null : parseReceipt(row.receiptJson()));
+                row.receiptJson() == null ? null : parseReceipt(row.receiptJson()), row.sourceFormat(), row.fileAssistUsed());
     }
     private void ensureLive(ImportRow row) {
         if (isExpirable(row.status()) && !row.expiresAt().isAfter(now())) {

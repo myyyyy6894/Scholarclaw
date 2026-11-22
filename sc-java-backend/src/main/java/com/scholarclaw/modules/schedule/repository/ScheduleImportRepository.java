@@ -19,7 +19,7 @@ public class ScheduleImportRepository {
                             String status, long scheduleVersion, String draftJson, String errorMessage,
                             int attempt, String leaseToken, LocalDateTime leaseUntil, long version,
                             LocalDateTime expiresAt, String confirmRequestId, String confirmFingerprint,
-                            String receiptJson) { }
+                            String receiptJson, String sourceFormat, boolean fileAssistUsed) { }
     private static final RowMapper<ImportRow> ROW = (rs, n) -> new ImportRow(
             rs.getLong("import_id"), rs.getLong("user_id"), rs.getLong("term_id"),
             rs.getString("client_request_id"), rs.getString("input_fingerprint"), rs.getString("source_type"),
@@ -29,7 +29,7 @@ public class ScheduleImportRepository {
             rs.getString("error_message"), rs.getInt("attempt"), rs.getString("lease_token"),
             rs.getObject("lease_until", LocalDateTime.class), rs.getLong("version"),
             rs.getObject("expires_at", LocalDateTime.class), rs.getString("confirm_request_id"),
-            rs.getString("confirm_fingerprint"), rs.getString("receipt_json"));
+            rs.getString("confirm_fingerprint"), rs.getString("receipt_json"), rs.getString("source_format"), rs.getBoolean("file_assist_used"));
     private final JdbcTemplate jdbc;
 
     public ScheduleImportRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -69,6 +69,58 @@ public class ScheduleImportRepository {
         if (id == null) throw new IllegalStateException("导入任务未返回 ID");
         return id.longValue();
     }
+    public long insertFile(long userId, long termId, String requestId, String fingerprint, String format,
+                           String draft, long scheduleVersion, LocalDateTime expiresAt, LocalDateTime now) {
+        var holder = new GeneratedKeyHolder();
+        jdbc.update(connection -> {
+            PreparedStatement ps = connection.prepareStatement("""
+                    INSERT INTO t_schedule_import
+                      (user_id,term_id,client_request_id,input_fingerprint,source_type,source_format,status,
+                       draft_json,schedule_version,expires_at,created_at,updated_at)
+                    VALUES (?,?,?,?,'FILE',?,'REVIEW_REQUIRED',?,?,?,?,?)
+                    """, Statement.RETURN_GENERATED_KEYS);
+            ps.setLong(1, userId);
+            ps.setLong(2, termId);
+            ps.setString(3, requestId);
+            ps.setString(4, fingerprint);
+            ps.setString(5, format);
+            ps.setString(6, draft);
+            ps.setLong(7, scheduleVersion);
+            ps.setObject(8, expiresAt);
+            ps.setObject(9, now);
+            ps.setObject(10, now);
+            return ps;
+        }, holder);
+        Number id = holder.getKey();
+        if (id == null) throw new IllegalStateException("导入任务未返回 ID");
+        return id.longValue();
+    }
+
+    public int replaceFileLayout(long userId, long id, long version, String draft, LocalDateTime now) {
+        return jdbc.update("""
+                UPDATE t_schedule_import SET draft_json=?,error_message=NULL,version=version+1,updated_at=?
+                WHERE user_id=? AND import_id=? AND version=? AND source_type='FILE' AND status='REVIEW_REQUIRED'
+                  AND expires_at>?
+                """, draft, now, userId, id, version, now);
+    }
+
+    public int consumeFileAssist(long userId, long id, long version, LocalDateTime now) {
+        return jdbc.update("""
+                UPDATE t_schedule_import SET file_assist_used=1,version=version+1,updated_at=?
+                WHERE user_id=? AND import_id=? AND version=? AND source_type='FILE' AND status='REVIEW_REQUIRED'
+                  AND file_assist_used=0 AND expires_at>?
+                """, now, userId, id, version, now);
+    }
+
+    public void finishFileAssist(long userId, long id, long version, String draft, String error, LocalDateTime now) {
+        jdbc.update("""
+                UPDATE t_schedule_import SET draft_json=COALESCE(?,draft_json),error_message=?,
+                  version=version+1,updated_at=?
+                WHERE user_id=? AND import_id=? AND version=? AND source_type='FILE' AND status='REVIEW_REQUIRED'
+                  AND file_assist_used=1 AND expires_at>?
+                """, draft, error, now, userId, id, version, now);
+    }
+
     public Optional<ImportRow> find(long userId, long id) {
         return jdbc.query("SELECT * FROM t_schedule_import WHERE user_id=? AND import_id=?", ROW, userId, id)
                 .stream().findFirst();
@@ -133,7 +185,7 @@ public class ScheduleImportRepository {
     public int expireTextTasks(LocalDateTime now) {
         return jdbc.update("UPDATE t_schedule_import SET status='EXPIRED',source_text=NULL,draft_json=NULL,"
                         + "lease_token=NULL,lease_until=NULL,error_message=NULL,version=version+1,updated_at=? "
-                        + "WHERE source_type='TEXT' AND status IN ('QUEUED','RUNNING','REVIEW_REQUIRED','FAILED') "
+                        + "WHERE source_type IN ('TEXT','FILE') AND status IN ('QUEUED','RUNNING','REVIEW_REQUIRED','FAILED') "
                         + "AND expires_at<=? ORDER BY import_id LIMIT 100", now, now);
     }
     public int retry(long userId, long id, long version, LocalDateTime now) {

@@ -4,6 +4,7 @@ import { ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/error'
 import type { RuleWrite, SchedulePeriod, ScheduleRule, ScheduleTerm } from '@/api/schedule'
 import {
+  assistScheduleFile, changeScheduleImportLayout, createFileScheduleImport, getScheduleFileModel, previewScheduleImport,
   cancelScheduleImport, confirmScheduleImport, createImageScheduleImport, createTextScheduleImport,
   getScheduleImageModel, getScheduleImport, getScheduleImportImage, listScheduleImports,
   retryImageScheduleImport, retryScheduleImport,
@@ -18,13 +19,21 @@ const props = defineProps<{
   term: ScheduleTerm
   rules: ScheduleRule[]
   periods: SchedulePeriod[]
-  sourceType: 'TEXT' | 'IMAGE'
+  sourceType: 'TEXT' | 'IMAGE' | 'FILE'
 }>()
-const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: []; 'configure-periods': [] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: []; 'configure-periods': []; 'configure-term': [minimumWeeks: number] }>()
 const visible = computed({ get: () => props.modelValue, set: (value: boolean) => emit('update:modelValue', value) })
 const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const rawText = ref('')
 const imageFile = ref<File | null>(null)
+const schoolFile = ref<File | null>(null)
+const tableIndex = ref<number>()
+const headerRow = ref<number>()
+const columns = ref<Record<string, number | undefined>>({})
+const columnLabels = {
+  title: '课程名称', weekday: '星期', weeks: '教学周', period: '节次', start_period: '开始节次', end_period: '结束节次',
+  start_time: '开始钟点', end_time: '结束钟点', room: '教室', teacher: '教师', section_code: '教学班号',
+}
 const previewUrl = ref('')
 const recent = ref<ScheduleImport[]>([])
 const task = ref<ScheduleImport | null>(null)
@@ -46,11 +55,14 @@ const deadline = computed(() => task.value
   ? new Intl.DateTimeFormat('zh-CN', { timeZone: props.term.timezone, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(task.value.expires_at))
   : '')
+const minimumWeeks = computed(() => task.value?.draft?.minimum_weeks ?? 0)
 const selectedCount = computed(() => editors.value.filter((item) => item.included).length)
 const missingPeriods = computed(() => {
   const defined = new Set(props.periods.map((period) => period.period_no))
   return [...new Set(editors.value.filter((row) => row.included && row.timeMode === 'period')
-    .flatMap((row) => [row.startPeriod, row.endPeriod])
+    .flatMap((row) => row.startPeriod !== undefined && row.endPeriod !== undefined
+      ? Array.from({ length: Math.max(0, row.endPeriod - row.startPeriod + 1) }, (_, index) => row.startPeriod! + index)
+      : [])
     .filter((period): period is number => period !== undefined && !defined.has(period)))].sort((a, b) => a - b)
 })
 const scheduleChanged = computed(() => task.value !== null && task.value.schedule_version !== props.term.schedule_version)
@@ -165,6 +177,10 @@ function startNew(): void {
   editors.value = []
   rawText.value = ''
   imageFile.value = null
+  schoolFile.value = null
+  tableIndex.value = undefined
+  headerRow.value = undefined
+  columns.value = {}
   imageOperation = null
   message.value = ''
   createOperation.value = null
@@ -213,6 +229,71 @@ async function createImage(): Promise<void> {
     imageOperation = null
     await loadRecent()
     if (visible.value) schedulePoll(nextGeneration)
+  } catch (error) { notifyError(error) } finally { busy.value = false }
+}
+function selectSchoolFile(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  if (file && (!/\.(xlsx|csv|docx)$/i.test(file.name) || !file.size || file.size > 2 * 1024 * 1024)) {
+    schoolFile.value = null
+    input.value = ''
+    notifyWarning('请选择不超过 2 MiB 的 XLSX、CSV 或 DOCX 文件。')
+    return
+  }
+  schoolFile.value = file
+  createOperation.value = null
+}
+async function createSchoolFile(): Promise<void> {
+  const file = schoolFile.value
+  if (busy.value || !file) return
+  const fingerprint = JSON.stringify([props.term.term_id, file.name, file.size, file.lastModified])
+  createOperation.value = operationFor(createOperation.value, fingerprint, requestId)
+  const current = generation
+  busy.value = true
+  try {
+    const result = await createFileScheduleImport(props.term.term_id, file, createOperation.value.requestId)
+    if (current !== generation) return
+    setTask(result, true)
+    await loadRecent()
+  } catch (error) { notifyError(error) } finally { busy.value = false }
+}
+async function changeLayout(): Promise<void> {
+  const current = task.value
+  if (busy.value || !current || !schoolFile.value || !tableIndex.value) return
+  const mapping: Record<string, number> = {}
+  for (const [field, column] of Object.entries(columns.value)) if (column) mapping[field] = column
+  const generationAtStart = generation
+  busy.value = true
+  try {
+    const next = await changeScheduleImportLayout(current.import_id, current.version, schoolFile.value, {
+      table_index: tableIndex.value, ...(headerRow.value ? { header_row: headerRow.value, mapping } : {}),
+    })
+    if (generationAtStart === generation) setTask(next, true)
+  } catch (error) { notifyError(error) } finally { busy.value = false }
+}
+async function assistFile(): Promise<void> {
+  const current = task.value
+  const generationAtStart = generation
+  if (busy.value || !current) return
+  busy.value = true
+  try {
+    const model = await getScheduleFileModel()
+    try {
+      await ElMessageBox.confirm(`整份草稿的结构化课程字段将发送给 ${model.provider} · ${model.model_name}（${model.origin}）。发送字段包括课程名、班号、教师、教室、星期和时间。服务商可能收费，确认后调用一次。请先核对草稿字段。`,
+        '确认模型整理', { type: 'warning', confirmButtonText: '同意发送', cancelButtonText: '继续手动校对' })
+    } catch { return }
+    if (generationAtStart !== generation) return
+    const next = await assistScheduleFile(current.import_id, current.version, model.confirmation_token)
+    if (generationAtStart === generation) {
+      const prior = copyEditors(editors.value)
+      setTask(next, true)
+      editors.value = editors.value.map((row, index) => {
+        const edited = prior[index]
+        if (!edited || edited.sourceRef !== row.sourceRef || edited.sourceText !== row.sourceText) return row
+        return { ...edited, title: edited.title || row.title, teacher: edited.teacher || row.teacher,
+          room: edited.room || row.room, sectionCode: edited.sectionCode || row.sectionCode, issues: row.issues }
+      })
+    }
   } catch (error) { notifyError(error) } finally { busy.value = false }
 }
 async function create(): Promise<void> {
@@ -281,6 +362,24 @@ async function confirmRules(): Promise<void> {
     if (!rules.length) throw new Error('请至少选择一条课程。')
     if (rules.length > 200) throw new Error('每次最多保存 200 条课程。')
   } catch (error) { notifyWarning(error instanceof Error ? error.message : '请检查课程内容。'); return }
+  if (current.source_type === 'FILE') {
+    busy.value = true
+    try {
+      const preview = await previewScheduleImport(current.import_id, current.version, rules)
+      const details = preview.conflicts.map((item) =>
+        `第 ${item.row} 条「${item.title}」${item.duplicate ? '可能重复。' : ''}${item.dates.length ? `撞课日期 ${item.dates.join('、')}` : ''}`)
+      await ElMessageBox.confirm(`将追加 ${rules.length} 条课程到「${props.term.name}」。${details.length ? `\n\n${details.join('\n')}` : ''}`,
+        '确认保存课表', { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '继续校对' })
+      const fingerprint = JSON.stringify([current.import_id, current.version, preview.conflict_token, rules])
+      confirmOperation.value = operationFor(confirmOperation.value, fingerprint, requestId)
+      const receipt = await confirmScheduleImport(current.import_id, { version: current.version,
+        client_request_id: confirmOperation.value.requestId, rules, reviewed_schedule_version: preview.schedule_version,
+        conflict_token: preview.conflict_token })
+      await saved(current, receipt)
+    } catch (error) { if (error !== 'cancel' && error !== 'close') notifyError(error) }
+    finally { busy.value = false }
+    return
+  }
   const warnings = importConflicts(rules, props.rules, props.periods)
   const reviewedScheduleVersion = props.term.schedule_version
   const changed = current.schedule_version !== reviewedScheduleVersion
@@ -311,21 +410,26 @@ async function confirmRules(): Promise<void> {
       })
       receipt = await submit(rules.map((rule) => ({ ...rule, confirm_overlap: true })))
     }
-    generation++
-    clearTimer()
-    setTask({ ...current, status: 'CONFIRMED', receipt, source_text: null, draft: null }, true)
-    confirmOperation.value = null
-    emit('saved')
-    notifySuccess('课表已保存。')
-    try { await loadRecent() } catch { /* 已保存；历史列表可稍后刷新。 */ }
+    await saved(current, receipt)
   } catch (error) { if (error !== 'cancel' && error !== 'close') notifyError(error) }
   finally { busy.value = false }
+}
+async function saved(current: ScheduleImport, receipt: ScheduleImportReceipt): Promise<void> {
+  generation++
+  clearTimer()
+  setTask({ ...current, status: 'CONFIRMED', receipt, source_text: null, draft: null }, true)
+  confirmOperation.value = null
+  schoolFile.value = null
+  emit('saved')
+  notifySuccess('课表已保存。')
+  try { await loadRecent() } catch { /* 已保存；历史列表可稍后刷新。 */ }
 }
 </script>
 
 <template>
-  <el-dialog v-model="visible" :title="sourceType === 'IMAGE' ? '导入图片课表' : '导入文字课表'" width="min(920px, calc(100vw - 24px))" class="import-dialog">
+  <el-dialog v-model="visible" :title="sourceType === 'FILE' ? '上传学校导出' : sourceType === 'IMAGE' ? '导入图片课表' : '导入文字课表'" width="min(920px, calc(100vw - 24px))" class="import-dialog">
     <p v-if="sourceType === 'TEXT'" class="import-hint">每行一条，例如：高等数学 周一 第1-2节 1-16周 教师：张老师，教室：A101。系统只提供建议，请逐项核对。</p>
+    <p v-else-if="sourceType === 'FILE'" class="import-hint">支持 XLSX、CSV 和 DOCX，文件不超过 2 MiB。先在本地提取，核对后整批保存。</p>
     <p v-else class="import-hint">选择 PNG 或 JPEG 课表图片。识别结果仅供参考，请对照原图逐项校对后保存。</p>
     <p v-if="periods.length === 0" class="import-warning">还没有设置节次时间。设置一次后，按节次识别的课程会共用这些时间。
       <el-button v-if="!task || !['QUEUED', 'RUNNING'].includes(task.status)" text type="primary" @click="emit('configure-periods')">设置节次时间</el-button>
@@ -343,6 +447,10 @@ async function confirmRules(): Promise<void> {
         <el-input v-model="rawText" type="textarea" :rows="8" maxlength="20000" show-word-limit placeholder="粘贴课表文字，每行一条" />
         <p class="import-hint">文字临时保存，确认或取消后清除；未完成任务会在有效期后清理。不会调用模型。</p>
         <el-button type="primary" :loading="busy" @click="create">生成校对建议</el-button>
+      </template>
+      <template v-else-if="sourceType === 'FILE'">
+        <label class="image-input">选择学校课表文件 <input type="file" accept=".xlsx,.csv,.docx" :disabled="busy" @change="selectSchoolFile" /></label>
+        <el-button type="primary" :loading="busy" :disabled="!schoolFile" @click="createSchoolFile">生成校对草稿</el-button>
       </template>
       <template v-else>
         <label class="image-input">选择图片 <input type="file" accept="image/png,image/jpeg" :disabled="busy" @change="selectImage" /></label>
@@ -362,6 +470,27 @@ async function confirmRules(): Promise<void> {
       <p v-if="task.status === 'CONFIRMED'" class="import-hint">已保存 {{ task.receipt?.rule_ids.length ?? 0 }} 条课程，临时内容正在清理。</p>
       <p v-if="task.status === 'EXPIRED' || task.status === 'CANCELED'" class="import-hint">临时内容已不可用，可以新建导入。</p>
       <template v-if="task.status === 'REVIEW_REQUIRED'">
+        <template v-if="task.source_type === 'FILE'">
+          <p v-if="minimumWeeks" class="import-hint">样本至少包含第 {{ minimumWeeks }} 周。</p>
+          <p v-if="minimumWeeks > term.week_count" class="import-warning">当前学期只有 {{ term.week_count }} 周。
+            <el-button text type="primary" @click="emit('configure-term', minimumWeeks)">补齐学期周数</el-button>
+          </p>
+          <p v-if="!editors.length" class="import-warning">未找到可识别的课表布局，请选择表格和列映射。</p>
+          <details v-if="task.draft?.tables?.length" class="import-hint">
+            <summary>选择表格或调整明细列映射</summary>
+            <label v-if="!schoolFile" class="image-input">重新选择原文件 <input type="file" accept=".xlsx,.csv,.docx" :disabled="busy" @change="selectSchoolFile" /></label>
+            <el-select v-model="tableIndex" placeholder="选择工作表或表格">
+              <el-option v-for="table in task.draft.tables" :key="table.index" :value="table.index" :label="table.label" />
+            </el-select>
+            <p>使用自动布局时可留空。手动映射时填写标题行及各字段的列号，从 1 开始。</p>
+            <label>标题行 <el-input-number v-model="headerRow" :min="1" :max="400" /></label>
+            <div v-if="headerRow" class="import-fields">
+              <label v-for="(label, field) in columnLabels" :key="field">{{ label }}<el-input-number v-model="columns[field]" :min="1" :max="64" /></label>
+            </div>
+            <el-button :loading="busy" :disabled="!schoolFile || !tableIndex" @click="changeLayout">应用到同一草稿</el-button>
+          </details>
+          <el-button v-if="editors.some((row) => row.state === 'COURSE') && !task.file_assist_used" :loading="busy" @click="assistFile">模型协助整理</el-button>
+        </template>
         <p v-if="scheduleChanged" class="import-warning">课表或节次已变化，请按当前时间重新核对；不需要再次识别图片。</p>
         <p v-if="missingPeriods.length" class="import-warning">第 {{ missingPeriods.join('、') }} 节还没有设置时间。
           <el-button text type="primary" @click="emit('configure-periods')">设置节次时间</el-button>
@@ -374,6 +503,10 @@ async function confirmRules(): Promise<void> {
         <p class="import-hint">已选 {{ selectedCount }} 条。可修改每一项、取消不需要的行，或添加空白行。修改暂存在当前页面，刷新或离开页面前请确认保存。</p>
         <article v-for="(row, index) in editors" :key="index" class="import-row">
           <div class="import-row__heading"><el-checkbox v-model="row.included">保存第 {{ index + 1 }} 条</el-checkbox><el-button text type="danger" @click="editors.splice(index, 1)">移除</el-button></div>
+          <p v-if="row.sourceRef" class="import-hint">{{ row.sourceRef }}<template v-if="row.sectionCode"> · 教学班 {{ row.sectionCode }}</template>
+            <template v-if="row.state === 'UNSCHEDULED'"> · 未排定</template><template v-else-if="row.state === 'UNPARSED'"> · 待解析</template>
+          </p>
+          <p v-if="row.startPeriod && row.startTime && row.endTime" class="import-warning">原表钟点 {{ row.startTime }} 至 {{ row.endTime }}，请核对后选择按节次或按时刻。</p>
           <p v-if="row.sourceText" class="import-source">原文：{{ row.sourceText }}</p>
           <p v-if="row.issues.length" class="import-warning">{{ row.issues.join('；') }}</p>
           <div class="import-fields">

@@ -57,6 +57,8 @@ public class PythonAiEngineClient {
     /** Python 侧内部意图路由与 DDL 提取路径（`04` §4.9.2，TASK-701/704）。 */
     public static final String ROUTE_AND_EXTRACT_PATH = "/internal/ai/v1/agent/route-and-extract";
     /** Stateless schedule text extraction; caller still validates and requests user confirmation. */
+    public static final String SCHEDULE_FILE_PATH = "/internal/ai/v1/schedule/extract-file";
+    public static final String SCHEDULE_FILE_ASSIST_PATH = "/internal/ai/v1/schedule/assist-file";
     public static final String SCHEDULE_TEXT_PATH = "/internal/ai/v1/schedule/extract-text";
     /** One explicitly approved vision call; caller must not automatically replay it. */
     public static final String SCHEDULE_IMAGE_PATH = "/internal/ai/v1/schedule/extract-image";

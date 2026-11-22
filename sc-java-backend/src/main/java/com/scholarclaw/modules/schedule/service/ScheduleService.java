@@ -8,12 +8,14 @@ import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.schedule.dto.ScheduleDtos.*;
+import com.scholarclaw.modules.schedule.dto.ScheduleImportDtos.ImportConflict;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository.ExceptionRow;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository.Rule;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository.Term;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -151,6 +153,60 @@ public class ScheduleService {
         long id = repository.insertRule(candidate, now());
         repository.touchTerm(userId, termId, now());
         return ruleView(requireRule(userId, id));
+    }
+
+    record ImportBatch(List<Rule> candidates, List<ImportConflict> conflicts) { }
+
+    /** Called under the same user and term locks as other schedule mutations. */
+    ImportBatch analyzeImport(long userId, Term term, List<RuleWrite> writes) {
+        var existing = repository.rules(userId, term.id());
+        if (existing.size() + writes.size() > MAX_RULES_PER_TERM) throw invalid("单个学期课程规则不能超过500条。");
+        List<Rule> candidates = new ArrayList<>();
+        for (int i = 0; i < writes.size(); i++) {
+            candidates.add(buildRule(userId, Long.MAX_VALUE - i, term, writes.get(i)));
+        }
+        List<ScheduleTimeEngine.Rule> rules = new ArrayList<>(existing.stream().map(this::engineRule).toList());
+        candidates.stream().map(this::engineRule).forEach(rules::add);
+        var changes = repository.exceptions(userId, term.id()).stream().map(ScheduleService::engineChange).toList();
+        Set<String> importedIds = new java.util.HashSet<>();
+        candidates.forEach(candidate -> importedIds.add(Long.toString(candidate.id())));
+        Map<String, List<LocalDate>> dates = new HashMap<>();
+        LocalDate last = term.firstMonday().plusWeeks(term.weekCount()).minusDays(1);
+        for (LocalDate start = term.firstMonday(); !start.isAfter(last); start = start.plusDays(28)) {
+            LocalDate end = start.plusDays(27);
+            if (end.isAfter(last)) end = last;
+            for (var occurrence : ScheduleTimeEngine.expand(engineTerm(term), rules, changes, start, end)) {
+                if (importedIds.contains(occurrence.ruleId()) && occurrence.conflict()) {
+                    dates.computeIfAbsent(occurrence.ruleId(), ignored -> new ArrayList<>()).add(occurrence.date());
+                }
+            }
+        }
+        List<ImportConflict> conflicts = new ArrayList<>();
+        List<Rule> earlier = new ArrayList<>(existing);
+        for (int i = 0; i < candidates.size(); i++) {
+            Rule rule = candidates.get(i);
+            var matchingDates = dates.getOrDefault(Long.toString(rule.id()), List.of());
+            boolean duplicate = earlier.stream().anyMatch(other -> sameArrangement(rule, other));
+            if (duplicate || !matchingDates.isEmpty()) {
+                conflicts.add(new ImportConflict(i + 1, rule.title(), List.copyOf(matchingDates), duplicate));
+            }
+            earlier.add(rule);
+        }
+        return new ImportBatch(List.copyOf(candidates), List.copyOf(conflicts));
+    }
+
+    List<String> insertImport(long userId, Term term, ImportBatch batch) {
+        LocalDateTime now = now();
+        List<String> ids = batch.candidates().stream()
+                .map(rule -> Long.toString(repository.insertRule(rule, now))).toList();
+        repository.touchTerm(userId, term.id(), now);
+        return ids;
+    }
+
+    private static boolean sameArrangement(Rule a, Rule b) {
+        return a.title().equalsIgnoreCase(b.title()) && a.weekday() == b.weekday()
+                && a.start().equals(b.start()) && a.end().equals(b.end()) && a.weeksJson().equals(b.weeksJson())
+                && java.util.Objects.equals(a.room(), b.room()) && java.util.Objects.equals(a.teacher(), b.teacher());
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)

@@ -124,6 +124,26 @@ class KnowledgeUploadServiceTest {
         verify(storageService).deleteQuietly(temp);
     }
 
+    @Test
+    void archivesSlidesWithoutAnEmbeddingConfigurationOrIngestJob() {
+        Path temp = Path.of("/tmp/archive-slides.tmp");
+        UserConfigEntity config = validConfig();
+        config.setDefaultEmbeddingDim(null);
+        when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(config));
+        when(courseService.getActiveCourse(USER_ID, COURSE_ID)).thenReturn(course(IndexStatus.REBUILDING));
+        when(file.getOriginalFilename()).thenReturn("lecture.PPTX");
+        var staged = new ValidatedUpload("lecture.PPTX", ".pptx", 10, "sha", temp);
+        var receipt = new KnowledgeDocVO(DOC_ID, COURSE_ID, "lecture.PPTX", ".pptx", 10, "STORED",
+                1, 1, null, null, 0, 0, 0, null, null, null, null, null,
+                "2026-10-21T10:00:00.000+08:00", "2026-10-21T10:00:00.000+08:00");
+        when(validator.validateAndStage(file)).thenReturn(staged);
+        when(commitService.commit(USER_ID, COURSE_ID, staged)).thenReturn(receipt);
+
+        assertThat(service.upload(USER_ID, COURSE_ID, file)).isEqualTo(receipt);
+        verify(ingestService, never()).enqueueInitial(any(), any());
+        verify(storageService).deleteQuietly(temp);
+    }
+
     private static UserConfigEntity validConfig() {
         UserConfigEntity config = new UserConfigEntity();
         config.setUserId(USER_ID);

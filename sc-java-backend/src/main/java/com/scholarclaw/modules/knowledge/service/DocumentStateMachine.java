@@ -30,6 +30,7 @@ public final class DocumentStateMachine {
                 DocumentStatus.PARSING, DocumentStatus.DELETING));
         ALLOWED.put(DocumentStatus.FAILED, EnumSet.of(
                 DocumentStatus.PARSING, DocumentStatus.DELETING));
+        ALLOWED.put(DocumentStatus.STORED, EnumSet.of(DocumentStatus.DELETING));
         ALLOWED.put(DocumentStatus.DELETING, EnumSet.of(DocumentStatus.DELETED));
         ALLOWED.put(DocumentStatus.DELETED, EnumSet.noneOf(DocumentStatus.class));
     }

@@ -70,6 +70,31 @@ class ScheduleIntegrationTest {
     @MockBean TokenRevocationService revocations;
 
     @Test
+    void examsUseActualDatesAndHideForeignRulesWithVersionedWrites() {
+        long owner = configs.createUserAccount("exam_owner_" + System.nanoTime(), "hash", "Asia/Shanghai").getUserId();
+        long stranger = configs.createUserAccount("exam_other_" + System.nanoTime(), "hash", "Asia/Shanghai").getUserId();
+        var term = service.createTerm(owner, new TermWrite("考试学期", LocalDate.of(2026, 9, 7), 16,
+                "Asia/Shanghai", true, null, false));
+        var rule = service.createRule(owner, directRule(term.termId()));
+        long ruleId = Long.parseLong(rule.ruleId());
+        long termId = Long.parseLong(term.termId());
+        LocalDate examDate = LocalDate.of(2027, 1, 9);
+        var first = new ExamWrite(examDate, LocalTime.of(9, 0), LocalTime.of(11, 0), "考场 A", 0L);
+        assertCode(() -> service.saveExam(stranger, ruleId, first), ErrorCode.RESOURCE_NOT_FOUND);
+        var saved = service.saveExam(owner, ruleId, first);
+        assertThat(service.exams(owner, termId)).containsExactly(saved);
+        assertThat(saved.date()).isEqualTo(examDate);
+        assertCode(() -> service.exams(stranger, termId), ErrorCode.RESOURCE_NOT_FOUND);
+        assertCode(() -> service.saveExam(owner, ruleId, first), ErrorCode.STATE_CONFLICT);
+        var edited = service.saveExam(owner, ruleId,
+                new ExamWrite(examDate, LocalTime.of(10, 0), LocalTime.of(12, 0), "考场 B", saved.version()));
+        assertThat(edited.version()).isEqualTo(2);
+        assertCode(() -> service.deleteExam(owner, ruleId, saved.version()), ErrorCode.STATE_CONFLICT);
+        service.deleteRule(owner, ruleId, rule.version());
+        assertThat(service.exams(owner, termId)).isEmpty();
+    }
+
+    @Test
     void httpRequiresJwtUsesStringIdsAndHidesOtherUsersResources() throws Exception {
         var first = configs.createUserAccount("schedule_web_" + System.nanoTime(), "hash", "Asia/Shanghai");
         var second = configs.createUserAccount("schedule_web_" + System.nanoTime(), "hash", "Asia/Shanghai");

@@ -10,6 +10,7 @@ import com.scholarclaw.modules.course.service.CourseService;
 import com.scholarclaw.modules.schedule.dto.ScheduleDtos.*;
 import com.scholarclaw.modules.schedule.dto.ScheduleImportDtos.ImportConflict;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository;
+import com.scholarclaw.modules.schedule.repository.ScheduleRepository.Exam;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository.ExceptionRow;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository.Rule;
 import com.scholarclaw.modules.schedule.repository.ScheduleRepository.Term;
@@ -94,6 +95,13 @@ public class ScheduleService {
                 if ("MOVE".equals(change.kind())) {
                     ScheduleTimeEngine.resolve(change.targetDate(), change.start(), zone(proposed.timezone()));
                     ScheduleTimeEngine.resolve(change.targetDate(), change.end(), zone(proposed.timezone()));
+                }
+            }
+            if (!current.timezone().equals(clean.timezone())) {
+                ZoneId updatedZone = zone(clean.timezone());
+                for (Exam exam : repository.exams(userId, termId)) {
+                    ScheduleTimeEngine.resolve(exam.date(), exam.start(), updatedZone);
+                    ScheduleTimeEngine.resolve(exam.date(), exam.end(), updatedZone);
                 }
             }
             if (!Boolean.TRUE.equals(clean.confirmScheduleChange())) {
@@ -246,6 +254,52 @@ public class ScheduleService {
         requireVersion(version, old.version());
         repository.deleteRule(userId, ruleId);
         repository.touchTerm(userId, old.termId(), now());
+    }
+
+    @Transactional(readOnly = true)
+    public List<ExamView> exams(long userId, long termId) {
+        requireTerm(userId, termId);
+        return repository.exams(userId, termId).stream().map(ScheduleService::examView).toList();
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ExamView saveExam(long userId, long ruleId, ExamWrite request) {
+        lockActiveUser(userId);
+        Rule rule = requireRule(userId, ruleId);
+        Term term = requireTermForUpdate(userId, rule.termId());
+        requireRule(userId, ruleId);
+        if (request == null || request.date() == null
+                || request.date().getYear() < 1000 || request.date().getYear() > 9999) {
+            throw invalid("请填写有效的考试日期。");
+        }
+        validateTimePrecision(request.startTime(), request.endTime());
+        ScheduleTimeEngine.resolve(request.date(), request.startTime(), zone(term.timezone()));
+        ScheduleTimeEngine.resolve(request.date(), request.endTime(), zone(term.timezone()));
+        var old = repository.exam(userId, ruleId);
+        long version = old.map(Exam::version).orElse(0L);
+        requireVersion(request.version(), version);
+        var exam = new Exam(ruleId, userId, term.id(), request.date(), request.startTime(), request.endTime(),
+                optionalText(request.room(), 100, "考场"), version);
+        if (old.isEmpty()) {
+            repository.insertExam(exam);
+        } else if (repository.updateExam(exam) != 1) {
+            throw stale();
+        }
+        return examView(repository.exam(userId, ruleId).orElseThrow(ScheduleService::notFound));
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void deleteExam(long userId, long ruleId, Long version) {
+        lockActiveUser(userId);
+        Rule rule = requireRule(userId, ruleId);
+        requireTermForUpdate(userId, rule.termId());
+        var exam = repository.exam(userId, ruleId).orElseThrow(ScheduleService::notFound);
+        requireVersion(version, exam.version());
+        if (repository.deleteExam(userId, ruleId, exam.version()) != 1) throw stale();
+    }
+
+    private static ExamView examView(Exam exam) {
+        return new ExamView(Long.toString(exam.ruleId()), exam.date(), exam.start(), exam.end(), exam.room(), exam.version());
     }
 
     @Transactional(readOnly = true)

@@ -24,6 +24,14 @@ public class ScheduleRepository {
                                String kind, LocalDate targetDate, LocalTime start, LocalTime end,
                                String room, long version) { }
 
+    public record Exam(long ruleId, long userId, long termId, LocalDate date,
+                       LocalTime start, LocalTime end, String room, long version) { }
+
+    private static final org.springframework.jdbc.core.RowMapper<Exam> EXAM = (rs, row) -> new Exam(
+            rs.getLong("rule_id"), rs.getLong("user_id"), rs.getLong("term_id"),
+            rs.getObject("exam_date", LocalDate.class), rs.getObject("start_time", LocalTime.class),
+            rs.getObject("end_time", LocalTime.class), rs.getString("room"), rs.getLong("version"));
+
     private final JdbcTemplate jdbc;
 
     public ScheduleRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -110,7 +118,34 @@ public class ScheduleRepository {
         return jdbc.update("UPDATE t_schedule_rule SET start_time=?,end_time=?,version=version+1,updated_at=? WHERE user_id=? AND rule_id=?",
                 start, end, now, userId, ruleId);
     }
+    public List<Exam> exams(long userId, long termId) {
+        return jdbc.query("""
+                SELECT * FROM t_schedule_exam WHERE user_id=? AND term_id=?
+                ORDER BY exam_date, start_time, rule_id
+                """, EXAM, userId, termId);
+    }
+    public Optional<Exam> exam(long userId, long ruleId) {
+        return jdbc.query("SELECT * FROM t_schedule_exam WHERE user_id=? AND rule_id=?", EXAM, userId, ruleId)
+                .stream().findFirst();
+    }
+    public void insertExam(Exam exam) {
+        jdbc.update("""
+                INSERT INTO t_schedule_exam (rule_id,user_id,term_id,exam_date,start_time,end_time,room)
+                VALUES (?,?,?,?,?,?,?)
+                """, exam.ruleId(), exam.userId(), exam.termId(), exam.date(), exam.start(), exam.end(), exam.room());
+    }
+    public int updateExam(Exam exam) {
+        return jdbc.update("""
+                UPDATE t_schedule_exam SET exam_date=?,start_time=?,end_time=?,room=?,version=version+1
+                WHERE user_id=? AND rule_id=? AND version=?
+                """, exam.date(), exam.start(), exam.end(), exam.room(), exam.userId(), exam.ruleId(), exam.version());
+    }
+    public int deleteExam(long userId, long ruleId, long version) {
+        return jdbc.update("DELETE FROM t_schedule_exam WHERE user_id=? AND rule_id=? AND version=?",
+                userId, ruleId, version);
+    }
     public void deleteRule(long userId, long ruleId) {
+        jdbc.update("DELETE FROM t_schedule_exam WHERE user_id=? AND rule_id=?", userId, ruleId);
         jdbc.update("DELETE FROM t_schedule_exception WHERE user_id=? AND rule_id=?", userId, ruleId);
         jdbc.update("DELETE FROM t_schedule_rule WHERE user_id=? AND rule_id=?", userId, ruleId);
     }
@@ -138,7 +173,7 @@ public class ScheduleRepository {
         jdbc.update("UPDATE t_schedule_rule SET course_id=NULL,version=version+1,updated_at=? WHERE user_id=? AND course_id=?", now, userId, courseId);
     }
     public void deleteUserData(long userId) {
-        for (String table : List.of("t_schedule_import", "t_schedule_exception", "t_schedule_rule", "t_schedule_period", "t_schedule_term")) {
+        for (String table : List.of("t_schedule_import", "t_schedule_exam", "t_schedule_exception", "t_schedule_rule", "t_schedule_period", "t_schedule_term")) {
             jdbc.update("DELETE FROM " + table + " WHERE user_id=?", userId);
         }
     }

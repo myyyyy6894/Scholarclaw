@@ -69,6 +69,16 @@ export interface RuleWrite {
   version?: number
   confirm_overlap: boolean
 }
+export interface ExamWrite {
+  date: string
+  start_time: string
+  end_time: string
+  room: string | null
+  version: number
+}
+export interface ScheduleExam extends ExamWrite {
+  rule_id: BigIntId
+}
 export interface ScheduleException {
   exception_id: BigIntId
   rule_id: BigIntId
@@ -134,6 +144,12 @@ export const updateScheduleRule = (id: BigIntId, body: RuleWrite): Promise<Sched
   apiRequest(rulePath(id), { method: 'PUT', body })
 export const deleteScheduleRule = (id: BigIntId, version: number): Promise<null> =>
   apiRequest(`${rulePath(id)}?version=${version}`, { method: 'DELETE' })
+export const listScheduleExams = (id: BigIntId): Promise<ScheduleExam[]> =>
+  apiRequest(`${termPath(id)}/exams`)
+export const saveScheduleExam = (id: BigIntId, body: ExamWrite): Promise<ScheduleExam> =>
+  apiRequest(`${rulePath(id)}/exam`, { method: 'PUT', body })
+export const deleteScheduleExam = (id: BigIntId, version: number): Promise<null> =>
+  apiRequest(`${rulePath(id)}/exam?version=${version}`, { method: 'DELETE' })
 export const listScheduleExceptions = (id: BigIntId): Promise<ScheduleException[]> =>
   apiRequest(`${rulePath(id)}/exceptions`)
 export const saveScheduleException = (id: BigIntId, originalDate: string, body: ExceptionWrite): Promise<ScheduleException> =>

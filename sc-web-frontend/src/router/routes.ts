@@ -1,7 +1,6 @@
 import type { RouteRecordRaw } from 'vue-router'
 
 import AppShell from '@/components/layout/AppShell.vue'
-import CoursesView from '@/views/CoursesView.vue'
 import DdlView from '@/views/DdlView.vue'
 import GuideView from '@/views/GuideView.vue'
 import HomeView from '@/views/HomeView.vue'
@@ -39,8 +38,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'courses',
         name: 'courses',
-        component: CoursesView,
-        meta: { title: '课程空间', requiresAuth: true },
+        redirect: (to) => ({ name: 'schedule', query: to.query, hash: '#courses' }),
       },
       {
         path: 'knowledge',
@@ -64,7 +62,7 @@ export const routes: RouteRecordRaw[] = [
         path: 'schedule',
         name: 'schedule',
         component: ScheduleView,
-        meta: { title: '我的课表', requiresAuth: true },
+        meta: { title: '课表与课程', requiresAuth: true },
       },
       {
         path: 'planning',

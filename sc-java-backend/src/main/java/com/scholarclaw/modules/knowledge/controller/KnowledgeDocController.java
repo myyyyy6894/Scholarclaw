@@ -6,8 +6,15 @@ import com.scholarclaw.common.response.Result;
 import com.scholarclaw.common.security.SecurityContextUtils;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeFileService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeUploadService;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,19 +40,34 @@ public class KnowledgeDocController {
 
     private final KnowledgeDocService knowledgeDocService;
     private final KnowledgeUploadService knowledgeUploadService;
+    private final KnowledgeFileService files;
 
     public KnowledgeDocController(KnowledgeDocService knowledgeDocService,
-                                  KnowledgeUploadService knowledgeUploadService) {
+                                  KnowledgeUploadService knowledgeUploadService, KnowledgeFileService files) {
         this.knowledgeDocService = knowledgeDocService;
         this.knowledgeUploadService = knowledgeUploadService;
+        this.files = files;
     }
 
     @GetMapping("/{courseId}/docs")
     public Result<List<KnowledgeDocVO>> list(@PathVariable("courseId") String courseId,
                                              @RequestParam(value = "status", required = false) String status) {
-        Long parsed = parseCourseId(courseId);
+        Long parsed = parseId(courseId, "course_id");
         return Result.ok(knowledgeDocService.listDocs(
                 SecurityContextUtils.requireCurrentUserId(), parsed, status));
+    }
+
+    @GetMapping("/{courseId}/docs/{docId}/file")
+    public ResponseEntity<Resource> file(@PathVariable("courseId") String courseId,
+                                         @PathVariable("docId") String docId) {
+        var original = files.read(SecurityContextUtils.requireCurrentUserId(),
+                parseId(courseId, "course_id"), parseId(docId, "doc_id"));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .header("X-Content-Type-Options", "nosniff")
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(original.filename(), StandardCharsets.UTF_8).build().toString())
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(original.resource());
     }
 
     /**
@@ -57,12 +79,12 @@ public class KnowledgeDocController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     public Result<KnowledgeDocVO> upload(@PathVariable("courseId") String courseId,
                                          @RequestPart("file") MultipartFile file) {
-        Long parsed = parseCourseId(courseId);
-        return Result.ok("课件已上传，等待异步解析", knowledgeUploadService.upload(
-                SecurityContextUtils.requireCurrentUserId(), parsed, file));
+        Long parsed = parseId(courseId, "course_id");
+        var uploaded = knowledgeUploadService.upload(SecurityContextUtils.requireCurrentUserId(), parsed, file);
+        return Result.ok("STORED".equals(uploaded.status()) ? "课件已保存" : "课件已上传，等待异步解析", uploaded);
     }
 
-    private static Long parseCourseId(String raw) {
+    private static Long parseId(String raw, String field) {
         try {
             long value = Long.parseLong(raw);
             if (value <= 0) {
@@ -71,7 +93,7 @@ public class KnowledgeDocController {
             return value;
         } catch (NumberFormatException e) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR,
-                    "course_id 必须为正的十进制字符串。");
+                    field + " 必须为正的十进制字符串。");
         }
     }
 }

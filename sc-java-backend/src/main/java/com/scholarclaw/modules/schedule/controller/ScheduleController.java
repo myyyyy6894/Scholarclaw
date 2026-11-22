@@ -68,6 +68,22 @@ public class ScheduleController {
         return Result.ok("课程已删除", null);
     }
 
+    @GetMapping("/terms/{termId}/exams")
+    public Result<List<ExamView>> exams(@PathVariable String termId) {
+        return Result.ok(service.exams(user(), id(termId)));
+    }
+
+    @PutMapping("/rules/{ruleId}/exam")
+    public Result<ExamView> saveExam(@PathVariable String ruleId, @RequestBody ExamWrite request) {
+        return Result.ok(service.saveExam(user(), id(ruleId), request));
+    }
+
+    @DeleteMapping("/rules/{ruleId}/exam")
+    public Result<Void> deleteExam(@PathVariable String ruleId, @RequestParam Long version) {
+        service.deleteExam(user(), id(ruleId), version);
+        return Result.ok(null);
+    }
+
     @GetMapping("/rules/{ruleId}/exceptions")
     public Result<List<ExceptionView>> exceptions(@PathVariable String ruleId) {
         return Result.ok(service.exceptions(user(), id(ruleId)));

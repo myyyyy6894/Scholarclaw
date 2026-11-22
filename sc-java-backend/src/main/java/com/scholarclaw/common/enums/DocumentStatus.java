@@ -11,5 +11,6 @@ public enum DocumentStatus {
     READY,
     FAILED,
     DELETING,
-    DELETED
+    DELETED,
+    STORED
 }

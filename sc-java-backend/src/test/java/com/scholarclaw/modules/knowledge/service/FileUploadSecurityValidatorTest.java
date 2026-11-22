@@ -7,9 +7,12 @@ import static org.mockito.Mockito.when;
 
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,6 +27,30 @@ class FileUploadSecurityValidatorTest {
 
     private FileUploadSecurityValidator validator() {
         return new FileUploadSecurityValidator(new StorageService(tempDir.toString()));
+    }
+
+    @Test
+    void checksPptxEntriesWithoutExtractingFiles() throws Exception {
+        var buffer = new ByteArrayOutputStream();
+        try (var zip = new ZipOutputStream(buffer)) {
+            for (var name : java.util.List.of("[Content_Types].xml", "ppt/presentation.xml")) {
+                zip.putNextEntry(new ZipEntry(name));
+                zip.write("<xml/>".getBytes(StandardCharsets.UTF_8));
+                zip.closeEntry();
+            }
+        }
+        var file = new MockMultipartFile("file", "例题.PPTX", "application/octet-stream", buffer.toByteArray());
+        var staged = validator().validateAndStage(file);
+        assertThat(staged.extension()).isEqualTo(".pptx");
+        assertThat(Files.readAllBytes(staged.tempFile())).isEqualTo(buffer.toByteArray());
+
+        var invalid = new MockMultipartFile("file", "not.pptx", "application/octet-stream", new byte[] {1, 2});
+        assertThatThrownBy(() -> validator().validateAndStage(invalid))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode()).isEqualTo(ErrorCode.FILE_MAGIC_INVALID));
+        try (var files = Files.list(staged.tempFile().getParent())) {
+            assertThat(files.toList()).containsExactly(staged.tempFile());
+        }
     }
 
     @Test

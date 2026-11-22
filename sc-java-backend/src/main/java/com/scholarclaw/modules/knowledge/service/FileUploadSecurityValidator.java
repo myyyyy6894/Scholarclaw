@@ -14,9 +14,11 @@ import java.nio.file.Path;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Set;
+import java.util.zip.ZipFile;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -30,9 +32,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class FileUploadSecurityValidator {
 
     static final long MAX_FILE_SIZE_BYTES = 52_428_800L;
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(".pdf", ".md", ".txt");
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(".pdf", ".md", ".txt", ".ppt", ".pptx");
     private static final int MAX_FILE_NAME_LENGTH = 255;
     private static final byte[] PDF_MAGIC = {'%', 'P', 'D', 'F', '-'};
+    private static final byte[] OLE_MAGIC = {
+            (byte) 0xd0, (byte) 0xcf, 0x11, (byte) 0xe0, (byte) 0xa1, (byte) 0xb1, 0x1a, (byte) 0xe1
+    };
 
     private final StorageService storageService;
 
@@ -50,7 +55,7 @@ public class FileUploadSecurityValidator {
         if (!ALLOWED_EXTENSIONS.contains(extension)) {
             throw new BusinessException(ErrorCode.FILE_TYPE_UNSUPPORTED);
         }
-        validateContent(file, extension);
+        if (!".pptx".equals(extension)) validateContent(file, extension);
 
         Path temp = null;
         try {
@@ -59,8 +64,12 @@ public class FileUploadSecurityValidator {
             try (var input = new DigestInputStream(file.getInputStream(), digest)) {
                 Files.copy(input, temp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
+            if (".pptx".equals(extension)) validateSlidesArchive(temp);
             return new ValidatedUpload(safeName, extension, file.getSize(),
                     HexFormat.of().formatHex(digest.digest()), temp);
+        } catch (BusinessException e) {
+            storageService.deleteQuietly(temp);
+            throw e;
         } catch (IOException | NoSuchAlgorithmException e) {
             if (temp != null) {
                 storageService.deleteQuietly(temp);
@@ -100,20 +109,14 @@ public class FileUploadSecurityValidator {
     }
 
     private static void validateContent(MultipartFile file, String extension) {
-        if (".pdf".equals(extension)) {
-            byte[] head = new byte[PDF_MAGIC.length];
+        if (".pdf".equals(extension) || ".ppt".equals(extension)) {
+            byte[] magic = ".pdf".equals(extension) ? PDF_MAGIC : OLE_MAGIC;
             try (var input = file.getInputStream()) {
-                int read = input.readNBytes(head, 0, head.length);
-                if (read != PDF_MAGIC.length) {
+                if (!Arrays.equals(input.readNBytes(magic.length), magic)) {
                     throw new BusinessException(ErrorCode.FILE_MAGIC_INVALID);
                 }
             } catch (IOException e) {
                 throw new BusinessException(ErrorCode.FILE_MAGIC_INVALID);
-            }
-            for (int i = 0; i < PDF_MAGIC.length; i++) {
-                if (head[i] != PDF_MAGIC[i]) {
-                    throw new BusinessException(ErrorCode.FILE_MAGIC_INVALID);
-                }
             }
             return;
         }
@@ -133,6 +136,27 @@ public class FileUploadSecurityValidator {
             }
         } catch (CharacterCodingException e) {
             throw new BusinessException(ErrorCode.FILE_MAGIC_INVALID);
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCode.FILE_MAGIC_INVALID);
+        }
+    }
+
+    static boolean supportsExtension(String extension) {
+        return extension != null && ALLOWED_EXTENSIONS.contains(extension);
+    }
+
+    static boolean storageOnly(String extension) {
+        return ".ppt".equals(extension) || ".pptx".equals(extension);
+    }
+
+    /** Only inspect archive entries; never expand or parse user-supplied slides. */
+    private static void validateSlidesArchive(Path path) {
+        try (var zip = new ZipFile(path.toFile())) {
+            var types = zip.getEntry("[Content_Types].xml");
+            var presentation = zip.getEntry("ppt/presentation.xml");
+            if (types == null || types.isDirectory() || presentation == null || presentation.isDirectory()) {
+                throw new BusinessException(ErrorCode.FILE_MAGIC_INVALID);
+            }
         } catch (IOException e) {
             throw new BusinessException(ErrorCode.FILE_MAGIC_INVALID);
         }

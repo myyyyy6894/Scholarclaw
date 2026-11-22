@@ -14,6 +14,8 @@ export function documentStatusLabel(status: DocumentStatus): string {
       return '就绪'
     case 'FAILED':
       return '失败'
+    case 'STORED':
+      return '已存档'
     case 'DELETING':
       return '删除中'
     case 'DELETED':
@@ -94,13 +96,13 @@ export class LatestRequest {
 }
 
 export const MAX_UPLOAD_BYTES = 52_428_800
-export const UPLOAD_ACCEPT = '.pdf,.md,.txt'
+export const UPLOAD_ACCEPT = '.pdf,.md,.txt,.ppt,.pptx'
 
 /** 客户端预检只做即时反馈；服务端仍执行完整四重校验。 */
 export function uploadFileError(file: File): string | null {
   const lower = file.name.toLowerCase()
-  if (!['.pdf', '.md', '.txt'].some((ext) => lower.endsWith(ext))) {
-    return '仅支持 .pdf、.md、.txt 格式的课件。'
+  if (!UPLOAD_ACCEPT.split(',').some((ext) => lower.endsWith(ext))) {
+    return '仅支持 PDF、Markdown、TXT、PPT 和 PPTX 课件。'
   }
   if (file.size <= 0) {
     return '不能上传空文件。'

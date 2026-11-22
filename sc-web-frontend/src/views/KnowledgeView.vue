@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { ElMessageBox } from 'element-plus'
+import { useRoute } from 'vue-router'
 
 import { listCourses } from '@/api/course'
 import type { CourseNamespace, IndexStatus } from '@/api/course'
-import { deleteDoc, listDocs, reindexDoc, retryDoc, uploadDoc } from '@/api/knowledge'
+import { deleteDoc, listDocs, readDocFile, reindexDoc, retryDoc, uploadDoc } from '@/api/knowledge'
 import type { KnowledgeDoc, ListableDocumentStatus } from '@/api/knowledge'
 import BaseCard from '@/components/ui/BaseCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -42,7 +43,9 @@ const courseStore = useCourseStore()
 
 const courses = ref<CourseNamespace[]>([])
 const docs = ref<KnowledgeDoc[]>([])
-const selectedCourseId = ref<string | null>(courseStore.selectedCourseId)
+const route = useRoute()
+const requestedCourse = computed(() => typeof route.query.course === 'string' ? route.query.course : null)
+const selectedCourseId = ref<string | null>(requestedCourse.value ?? courseStore.selectedCourseId)
 const filterStatus = ref<ListableDocumentStatus | ''>('')
 const loadingCourses = ref(true)
 const loadingDocs = ref(false)
@@ -88,6 +91,7 @@ const statusOptions: Array<{ value: ListableDocumentStatus | ''; label: string }
   { value: 'UPLOADED', label: '待解析' },
   { value: 'PARSING', label: '解析中' },
   { value: 'READY', label: '就绪' },
+  { value: 'STORED', label: '已存档' },
   { value: 'FAILED', label: '失败' },
   { value: 'DELETING', label: '删除中' },
   { value: 'DELETED', label: '已删除' },
@@ -102,6 +106,7 @@ onMounted(() => {
 onUnmounted(() => {
   compactQuery?.removeEventListener('change', syncCompact)
   stopPolling()
+  closeFilePreview()
 })
 
 function syncPolling(): void {
@@ -125,6 +130,7 @@ function stopPolling(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  selectedCourseId.value = requestedCourse.value ?? selectedCourseId.value
   await loadCourses()
   if (selectedCourseId.value !== null) {
     await loadDocs()
@@ -142,7 +148,7 @@ async function loadCourses(background = false): Promise<void> {
     courses.value = result
     const exists = courses.value.some((item) => item.course_id === selectedCourseId.value)
     if (!exists) {
-      selectedCourseId.value = courses.value[0]?.course_id ?? null
+      selectedCourseId.value = requestedCourse.value === null ? courses.value[0]?.course_id ?? null : null
     }
     courseStore.select(selectedCourseId.value)
   } catch (error) {
@@ -154,6 +160,14 @@ async function loadCourses(background = false): Promise<void> {
     else if (coursesRequests.isCurrent(requestSeq)) loadingCourses.value = false
   }
 }
+
+watch(requestedCourse, (requested) => {
+  if (requested === null || loadingCourses.value) return
+  selectedCourseId.value = courses.value.some((course) => course.course_id === requested) ? requested : null
+  courseStore.select(selectedCourseId.value)
+  filterStatus.value = ''
+  void loadDocs()
+})
 
 const docsRequests = new LatestRequest()
 
@@ -238,7 +252,8 @@ async function uploadFile(file: File): Promise<void> {
   uploading.value = true
   try {
     const uploaded = await uploadDoc(course.course_id, file)
-    notifySuccess(
+    if (uploaded.status === 'STORED') notifySuccess(`《${uploaded.doc_name}》已存档`)
+    else notifySuccess(
       uploaded.status === 'PARSING'
         ? `《${uploaded.doc_name}》已上传并进入解析队列`
         : `《${uploaded.doc_name}》已上传，暂未入队，系统将自动补投`,
@@ -269,6 +284,38 @@ function onDrop(event: DragEvent): void {
   const file = event.dataTransfer?.files?.[0]
   if (file !== undefined) {
     void uploadFile(file)
+  }
+}
+
+const filePreview = ref<KnowledgeDoc | null>(null)
+const filePreviewUrl = ref('')
+const fileError = ref('')
+let fileRequest: AbortController | null = null
+
+function closeFilePreview(): void {
+  fileRequest?.abort()
+  fileRequest = null
+  if (filePreviewUrl.value) URL.revokeObjectURL(filePreviewUrl.value)
+  filePreviewUrl.value = ''
+  filePreview.value = null
+}
+
+watch(selectedCourseId, closeFilePreview)
+
+async function openFile(doc: KnowledgeDoc): Promise<void> {
+  closeFilePreview()
+  filePreview.value = doc
+  fileError.value = ''
+  const controller = new AbortController()
+  fileRequest = controller
+  try {
+    const original = await readDocFile(doc, controller.signal)
+    if (fileRequest !== controller) return
+    const type = doc.file_ext === '.pdf' ? 'application/pdf'
+      : ['.txt', '.md'].includes(doc.file_ext) ? 'text/plain;charset=utf-8' : 'application/octet-stream'
+    filePreviewUrl.value = URL.createObjectURL(new Blob([original], { type }))
+  } catch (error) {
+    if (!controller.signal.aborted) fileError.value = error instanceof Error ? error.message : '课件读取失败。'
   }
 }
 
@@ -350,8 +397,7 @@ function documentTone(doc: KnowledgeDoc): Tone {
         <span class="knowledge-hero__eyebrow">COURSE KNOWLEDGE</span>
         <h2>{{ currentCourse?.course_name ?? '课程知识库' }}</h2>
         <p>
-          左侧选中的课程会作为问答的默认课程。上传成功后文件进入解析队列，解析与向量索引完成后状态变为“就绪”；
-          失败文档可重试，就绪文档可重建索引。
+          查看和下载课程原文件。已就绪的资料可用于问答，演示文稿可下载后打开。
         </p>
       </div>
 
@@ -521,7 +567,7 @@ function documentTone(doc: KnowledgeDoc): Tone {
                 </span>
                 <span class="upload-zone__text">
                   <strong>{{ uploading ? '正在上传…' : '拖拽课件到此处，或点击上传' }}</strong>
-                  <small>支持 PDF / MD / TXT；扩展名、大小与编码由服务端再次校验</small>
+                  <small>PDF、Markdown、TXT 支持检索，PPT 和 PPTX 可存档下载</small>
                 </span>
                 <el-button
                   type="primary"
@@ -553,7 +599,7 @@ function documentTone(doc: KnowledgeDoc): Tone {
                 v-else-if="docs.length === 0"
                 image="/illustrations/scene-study-desk.png"
                 title="当前课程还没有课件"
-                description="上传 PDF / MD / TXT 后，系统会解析、分块并建立向量索引。"
+                description="上传 PDF、文本文档或演示文稿。"
                 compact
               >
                 <template #action>
@@ -563,10 +609,11 @@ function documentTone(doc: KnowledgeDoc): Tone {
               <el-table v-else :data="docs" row-key="doc_id" size="small">
                 <el-table-column label="课件" :min-width="compact ? 120 : 220">
                   <template #default="{ row }">
-                    <div>{{ row.doc_name }}</div>
+                    <button v-if="canDelete(row)" type="button" class="document-link" @click="openFile(row)">{{ row.doc_name }}</button>
+                    <div v-else>{{ row.doc_name }}</div>
                     <div class="knowledge-muted">
                       {{ row.file_ext }} · {{ formatFileSize(row.file_size_bytes) }}
-                      <template v-if="!compact">
+                      <template v-if="!compact && row.status !== 'STORED'">
                         · 解析 v{{ row.parse_version }} · 课程 v{{ row.course_index_version }}
                       </template>
                     </div>
@@ -603,8 +650,11 @@ function documentTone(doc: KnowledgeDoc): Tone {
                     <span v-else class="knowledge-muted">—</span>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" :width="compact ? 150 : 190" fixed="right">
+                <el-table-column label="操作" :width="compact ? 167 : 220" fixed="right">
                   <template #default="{ row }">
+                    <el-button v-if="canDelete(row)" text type="primary" @click="openFile(row)">
+                      {{ row.status === 'STORED' ? '下载' : '查看' }}
+                    </el-button>
                     <el-button
                       v-if="canRetry(row)"
                       text
@@ -643,10 +693,26 @@ function documentTone(doc: KnowledgeDoc): Tone {
         </BaseCard>
       </section>
     </div>
+    <el-dialog :model-value="filePreview !== null" :title="filePreview?.doc_name ?? '课件'"
+      width="min(880px, calc(100vw - 28px))" @update:model-value="(open: boolean) => { if (!open) closeFilePreview() }">
+      <p v-if="fileError" role="alert" class="knowledge-error">{{ fileError }}</p>
+      <p v-else-if="!filePreviewUrl" role="status">正在读取课件…</p>
+      <iframe v-else-if="filePreview && ['.pdf', '.txt', '.md'].includes(filePreview.file_ext)"
+        :src="filePreviewUrl" title="课件预览" class="document-frame" referrerpolicy="no-referrer" />
+      <p v-else>下载后使用演示文稿应用打开。</p>
+      <template #footer>
+        <el-button v-if="fileError && filePreview" @click="openFile(filePreview)">重试</el-button>
+        <a v-if="filePreviewUrl" class="el-button el-button--primary"
+          :href="filePreviewUrl" :download="filePreview?.doc_name">下载原文件</a>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.document-link { color: var(--sc-primary); background: transparent; border: 0; padding: 0; font: inherit; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.document-link:hover { text-decoration: underline; }
+.document-frame { width: 100%; height: min(62vh, 660px); border: 1px solid var(--sc-border); border-radius: 8px; }
 .knowledge-page {
   display: flex;
   flex-direction: column;

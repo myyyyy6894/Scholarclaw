@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Plus } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
@@ -8,16 +8,19 @@ import { listCourses } from '@/api/course'
 import type { CourseNamespace } from '@/api/course'
 import { ApiError } from '@/api/error'
 import {
-  createScheduleRule, createScheduleTerm, deleteScheduleException, deleteScheduleRule,
-  listOccurrences, listScheduleExceptions, listSchedulePeriods, listScheduleRules, listScheduleTerms,
-  previewSchedulePeriods, saveScheduleException, saveSchedulePeriods, updateScheduleRule, updateScheduleTerm,
+  createScheduleRule, createScheduleTerm, deleteScheduleExam, deleteScheduleException, deleteScheduleRule,
+  listOccurrences, listScheduleExams, listScheduleExceptions, listSchedulePeriods, listScheduleRules, listScheduleTerms,
+  previewSchedulePeriods, saveScheduleExam, saveScheduleException, saveSchedulePeriods, updateScheduleRule, updateScheduleTerm,
 } from '@/api/schedule'
 import type {
-  ExceptionWrite, RuleWrite, ScheduleException, ScheduleOccurrence, SchedulePeriod, ScheduleRule, ScheduleTerm,
+  ExamWrite, ExceptionWrite, RuleWrite, ScheduleExam, ScheduleException, ScheduleOccurrence, SchedulePeriod, ScheduleRule, ScheduleTerm,
   TermWrite,
 } from '@/api/schedule'
 import { getUserConfig } from '@/api/user-config'
 import BaseCard from '@/components/ui/BaseCard.vue'
+import CoursesView from '@/views/CoursesView.vue'
+import { generatePeriods } from '@/views/schedule/period-template'
+import type { PeriodBlock } from '@/views/schedule/period-template'
 import ScheduleImportDialog from '@/views/schedule/ScheduleImportDialog.vue'
 import { notifyError, notifySuccess, notifyWarning } from '@/utils/notify'
 import { formatClock, formatClockSeconds, mondayOf, parseWeeks, shiftDate, todayInZone, weekDates } from '@/views/schedule/schedule-date'
@@ -30,6 +33,7 @@ const term = computed(() => terms.value.find((item) => item.term_id === termId.v
 const periods = ref<SchedulePeriod[]>([])
 const rules = ref<ScheduleRule[]>([])
 const occurrences = ref<ScheduleOccurrence[]>([])
+const exams = ref<ScheduleExam[]>([])
 const selectedDate = ref('')
 const mode = ref<'week' | 'day'>('week')
 const loading = ref(true)
@@ -76,6 +80,7 @@ async function loadWorkspace(): Promise<void> {
   const current = term.value
   if (!current || !selectedDate.value) {
     occurrences.value = []
+    exams.value = []
     periods.value = []
     rules.value = []
     loading.value = false
@@ -87,13 +92,15 @@ async function loadWorkspace(): Promise<void> {
   errorMessage.value = ''
   const dates = mode.value === 'week' ? weekDates(selectedDate.value) : [selectedDate.value]
   try {
-    const [nextPeriods, nextRules, result] = await Promise.all([
+    const [nextPeriods, nextRules, result, nextExams] = await Promise.all([
       listSchedulePeriods(current.term_id), listScheduleRules(current.term_id),
       listOccurrences(current.term_id, dates[0], dates[dates.length - 1]),
+      listScheduleExams(current.term_id),
     ])
     if (requestGeneration !== generation) return
     periods.value = nextPeriods
     rules.value = nextRules
+    exams.value = nextExams
     occurrences.value = result.occurrences
     weekNo.value = result.week_no
   } catch (error) {
@@ -130,8 +137,21 @@ function changeMode(value: string | number | boolean | undefined): void {
     void loadWorkspace()
   }
 }
-function eventsOn(date: string): ScheduleOccurrence[] {
-  return occurrences.value.filter((event) => event.date === date)
+const examsByRule = computed(() => new Map(exams.value.map((exam) => [exam.rule_id, exam])))
+const rulesById = computed(() => new Map(rules.value.map((rule) => [rule.rule_id, rule])))
+const timeline = computed(() => {
+  const items = [
+    ...occurrences.value.map((event) => ({
+      key: event.key, date: event.date, time: clock(event.start_at), kind: 'class' as const, event,
+    })),
+    ...exams.value.map((exam) => ({
+      key: `exam-${exam.rule_id}`, date: exam.date, time: exam.start_time.slice(0, 5), kind: 'exam' as const, exam,
+    })),
+  ]
+  return items.sort((a, b) => a.time.localeCompare(b.time))
+})
+function eventsOn(date: string): typeof timeline.value {
+  return timeline.value.filter((item) => item.date === date)
 }
 function dateLabel(date: string): string {
   const weekday = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7
@@ -147,7 +167,8 @@ function eventStatus(event: ScheduleOccurrence): string {
 function showNowBefore(date: string, index: number): boolean {
   if (date !== today.value) return false
   const items = eventsOn(date)
-  const next = items.findIndex((event) => Date.parse(event.start_at) > nowMs.value)
+  const next = items.findIndex((item) => item.kind === 'exam'
+    ? item.time > currentTime.value : Date.parse(item.event.start_at) > nowMs.value)
   return index === (next < 0 ? items.length : next)
 }
 
@@ -212,14 +233,41 @@ async function submitTerm(): Promise<void> {
 const periodDialog = ref(false)
 const periodDraft = ref<SchedulePeriod[]>([])
 let returnToImportAfterPeriods = false
-function openPeriods(): void {
+const periodBlocks = ref<Array<PeriodBlock & { label: string; presets?: string[] }>>([])
+const periodDuration = ref<number | undefined>(45)
+const periodGap = ref<number | undefined>(10)
+const replacePeriodTimes = ref(false)
+const periodTarget = ref(0)
+const periodGenerationError = ref('')
+function openPeriods(required = 0): void {
+  periodTarget.value = required
+  const total = Math.max(required, ...periods.value.map((period) => period.period_no), 8)
+  periodBlocks.value = [
+    { label: '上午', start: '08:00', count: 4, presets: ['07:50', '08:00', '08:10'] },
+    { label: '下午', start: '14:00', count: 4, presets: ['14:00', '14:30'] },
+    { label: '晚上', start: '19:00', count: Math.max(0, total - 8) },
+  ]
+  replacePeriodTimes.value = false
+  periodGenerationError.value = ''
   periodDraft.value = periods.value.map((item) => ({ ...item }))
   periodDialog.value = true
 }
-function configureImportPeriods(): void {
+function configureImportPeriods(required: number): void {
   returnToImportAfterPeriods = true
   importDialog.value = false
-  openPeriods()
+  openPeriods(required)
+}
+function fillPeriods(): void {
+  periodGenerationError.value = ''
+  try {
+    periodDraft.value = generatePeriods(periodBlocks.value, periodDuration.value, periodGap.value,
+      periodDraft.value, replacePeriodTimes.value)
+    if (periodTarget.value > Math.max(...periodDraft.value.map((period) => period.period_no))) {
+      periodGenerationError.value = `草稿需要到第 ${periodTarget.value} 节，请增加节数或手动补齐。`
+    }
+  } catch (error) {
+    periodGenerationError.value = error instanceof Error ? error.message : '无法生成节次。'
+  }
 }
 function resumeImportAfterPeriods(): void {
   if (returnToImportAfterPeriods) {
@@ -309,8 +357,47 @@ async function submitRule(): Promise<void> {
   } catch (error) { if (error !== 'cancel' && error !== 'close') notifyError(error) }
   finally { busy.value = false }
 }
+const examRule = ref<ScheduleRule | null>(null)
+const examDialog = ref(false)
+const examForm = reactive<ExamWrite>({ date: '', start_time: '', end_time: '', room: '', version: 0 })
+function openExam(rule?: ScheduleRule): void {
+  if (!rule) return
+  const exam = examsByRule.value.get(rule.rule_id)
+  examRule.value = rule
+  Object.assign(examForm, exam ? { ...exam } : {
+    date: selectedDate.value, start_time: '09:00:00', end_time: '11:00:00', room: '', version: 0,
+  })
+  examDialog.value = true
+}
+async function submitExam(): Promise<void> {
+  const rule = examRule.value
+  if (!rule || busy.value) return
+  busy.value = true
+  try {
+    const { date, start_time, end_time, room, version } = examForm
+    await saveScheduleExam(rule.rule_id, { date, start_time, end_time, room: room || null, version })
+    selectedDate.value = date
+    examDialog.value = false
+    await loadWorkspace()
+    notifySuccess('考试已加入课表。')
+  } catch (error) { notifyError(error) } finally { busy.value = false }
+}
+async function removeExam(): Promise<void> {
+  const rule = examRule.value
+  if (!rule || busy.value || examForm.version === 0) return
+  try { await ElMessageBox.confirm(`删除「${rule.title}」的考试安排？`, '删除考试', { type: 'warning' }) }
+  catch { return }
+  busy.value = true
+  try {
+    await deleteScheduleExam(rule.rule_id, examForm.version)
+    examDialog.value = false
+    await loadWorkspace()
+    notifySuccess('考试已删除。')
+  } catch (error) { notifyError(error) } finally { busy.value = false }
+}
+
 async function removeRule(rule: ScheduleRule): Promise<void> {
-  try { await ElMessageBox.confirm(`删除「${rule.title}」及其停调课记录？`, '删除课程', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }) }
+  try { await ElMessageBox.confirm(`删除「${rule.title}」及其考试和停调课记录？`, '删除课程', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }) }
   catch { return }
   try {
     await deleteScheduleRule(rule.rule_id, rule.version)
@@ -393,7 +480,14 @@ async function removeException(item: ScheduleException): Promise<void> {
   } catch (error) { notifyError(error) }
 }
 
+async function jumpToCourses(): Promise<void> {
+  if (route.hash !== '#courses') return
+  await nextTick()
+  document.getElementById('courses')?.scrollIntoView({ block: 'start' })
+}
+watch(() => route.hash, jumpToCourses)
 onMounted(() => {
+  void jumpToCourses()
   if (window.matchMedia('(max-width: 720px)').matches) mode.value = 'day'
   void refresh()
   clockTimer = setInterval(() => {
@@ -414,8 +508,7 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
   <div class="schedule-page">
     <div class="schedule-heading">
       <div>
-        <h1>我的课表</h1>
-        <p>按教学周安排课程，临时停课或调课只改变那一次。</p>
+        <h1>教学课表</h1>
       </div>
       <div class="schedule-actions">
         <el-button @click="openTermEditor()">新建学期</el-button>
@@ -437,7 +530,7 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
             <el-option v-for="item in terms" :key="item.term_id" :label="`${item.name}${item.active ? '（当前）' : ''}`" :value="item.term_id" />
           </el-select>
           <el-button v-if="term" @click="openTermEditor(term)">学期设置</el-button>
-          <el-button v-if="term" @click="openPeriods">节次时间</el-button>
+          <el-button v-if="term" @click="openPeriods()">节次时间</el-button>
         </div>
         <div v-if="term" class="schedule-toolbar__nav">
           <el-button aria-label="上一段日期" @click="navigate(-1)"><ChevronLeft :size="16" /></el-button>
@@ -459,18 +552,25 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       <div v-else-if="term" class="schedule-grid" :class="{ 'schedule-grid--day': mode === 'day' }">
         <section v-for="date in days" :key="date" class="schedule-day" :class="{ 'schedule-day--today': date === today }">
           <h2>{{ dateLabel(date) }} <span v-if="date === today">今天</span></h2>
-          <p v-if="eventsOn(date).length === 0" class="schedule-day__empty">无课程</p>
-          <template v-for="(event, index) in eventsOn(date)" :key="event.key">
+          <p v-if="eventsOn(date).length === 0" class="schedule-day__empty">无安排</p>
+          <template v-for="(item, index) in eventsOn(date)" :key="item.key">
             <div v-if="showNowBefore(date, index)" class="schedule-now">现在 {{ currentTime }}</div>
-            <button type="button" class="schedule-event"
-              :class="{ 'schedule-event--conflict': event.conflict }" @click="openEvent(event)">
-              <span class="schedule-event__time">{{ clock(event.start_at) }}–{{ clock(event.end_at) }}</span>
-              <strong>{{ event.title }}</strong>
-              <small>{{ event.room || '教室未填写' }}</small>
-              <small>{{ event.teacher || '教师未填写' }}</small>
-              <span v-if="eventStatus(event)" class="schedule-event__moved">{{ eventStatus(event) }}</span>
-              <span v-if="event.conflict" class="schedule-event__warning">时间重叠</span>
-              <span v-else-if="event.moved" class="schedule-event__moved">已调课</span>
+            <button v-if="item.kind === 'class'" type="button" class="schedule-event"
+              :class="{ 'schedule-event--conflict': item.event.conflict }" @click="openEvent(item.event)">
+              <span class="schedule-event__time">{{ clock(item.event.start_at) }}–{{ clock(item.event.end_at) }}</span>
+              <strong>{{ item.event.title }}</strong>
+              <small>{{ item.event.room || '教室未填写' }}</small>
+              <small>{{ item.event.teacher || '教师未填写' }}</small>
+              <span v-if="eventStatus(item.event)" class="schedule-event__moved">{{ eventStatus(item.event) }}</span>
+              <span v-if="item.event.conflict" class="schedule-event__warning">时间重叠</span>
+              <span v-else-if="item.event.moved" class="schedule-event__moved">已调课</span>
+            </button>
+            <button v-else type="button" class="schedule-event schedule-event--exam"
+              @click="openExam(rulesById.get(item.exam.rule_id))">
+              <span class="schedule-event__time">{{ item.time }}–{{ item.exam.end_time.slice(0, 5) }}</span>
+              <strong>{{ rulesById.get(item.exam.rule_id)?.title }}</strong>
+              <small v-if="item.exam.room">{{ item.exam.room }}</small>
+              <span class="schedule-event__exam-label">考试</span>
             </button>
           </template>
           <div v-if="showNowBefore(date, eventsOn(date).length)" class="schedule-now">现在 {{ currentTime }}</div>
@@ -483,10 +583,19 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       <ul v-else class="rule-list">
         <li v-for="rule in rules" :key="rule.rule_id">
           <div><strong>{{ rule.title }}</strong><small>{{ weekdays[rule.weekday - 1] }} {{ rule.start_time.slice(0, 5) }}–{{ rule.end_time.slice(0, 5) }} · 第 {{ rule.weeks.join('、') }} 周</small></div>
-          <div><el-button text @click="openExceptions(rule)">停调课记录</el-button><el-button text @click="openRuleEditor(rule)">编辑</el-button><el-button text type="danger" @click="removeRule(rule)">删除</el-button></div>
+          <div class="rule-actions">
+            <router-link v-if="rule.course_id" :to="{ name: 'rag', query: { course: rule.course_id } }" class="schedule-link">AI 问答</router-link>
+            <el-button v-else text @click="openRuleEditor(rule)">关联课程空间</el-button>
+            <el-button text @click="openExam(rule)">{{ examsByRule.has(rule.rule_id) ? '编辑考试' : '添加考试' }}</el-button>
+            <el-button text @click="openExceptions(rule)">停调课记录</el-button>
+            <el-button text @click="openRuleEditor(rule)">编辑</el-button>
+            <el-button text type="danger" @click="removeRule(rule)">删除</el-button>
+          </div>
         </li>
       </ul>
     </BaseCard>
+
+    <CoursesView id="courses" />
 
     <ScheduleImportDialog v-if="term" v-model="importDialog" :term="term" :rules="rules" :periods="periods" :source-type="importSource" @saved="refresh(termId)" @configure-periods="configureImportPeriods" @configure-term="configureImportTerm" />
 
@@ -501,16 +610,57 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
       <template #footer><el-button @click="termDialog = false">取消</el-button><el-button type="primary" :loading="busy" @click="submitTerm">保存学期</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="periodDialog" title="设置节次时间" width="620px" class="schedule-dialog" @closed="resumeImportAfterPeriods">
-      <p class="schedule-hint">按学校作息填写；修改已使用的节次前会显示受影响课程。</p>
-      <div v-for="(period, index) in periodDraft" :key="index" class="period-row">
-        <span>第</span><el-input-number v-model="period.period_no" :min="1" :max="30" controls-position="right" /><span>节</span>
-        <el-time-picker v-model="period.start_time" format="HH:mm" value-format="HH:mm:ss" placeholder="开始" />
-        <span>至</span><el-time-picker v-model="period.end_time" format="HH:mm" value-format="HH:mm:ss" placeholder="结束" />
-        <el-button text type="danger" @click="periodDraft.splice(index, 1)">移除</el-button>
+    <el-dialog v-model="periodDialog" title="设置节次时间" width="620px" top="4vh" class="schedule-dialog" @closed="resumeImportAfterPeriods">
+      <div class="period-template">
+        <h3>按作息生成节次</h3>
+        <p v-if="periodTarget" class="schedule-hint">这份课表需要填写到第 {{ periodTarget }} 节。</p>
+        <div v-for="block in periodBlocks" :key="block.label" class="period-block">
+          <strong>{{ block.label }}</strong>
+          <label>首节开始 <el-time-picker v-model="block.start" format="HH:mm" value-format="HH:mm" /></label>
+          <label>节数 <el-input-number v-model="block.count" :min="0" :max="30" controls-position="right" /></label>
+          <div v-if="block.presets" class="period-presets" :aria-label="`${block.label}常用开始时间`" role="group">
+            <el-button v-for="time in block.presets" :key="time" size="small" plain
+              :type="block.start === time ? 'primary' : 'default'" :aria-pressed="block.start === time"
+              @click="block.start = time">{{ time }}</el-button>
+          </div>
+        </div>
+        <div class="period-block period-block--timing">
+          <label>每节课（分钟） <el-input-number v-model="periodDuration" :min="1" :max="180" controls-position="right" /></label>
+          <label>课间（分钟） <el-input-number v-model="periodGap" :min="0" :max="120" controls-position="right" /></label>
+        </div>
+        <div class="period-block period-block--actions">
+          <el-button @click="fillPeriods">生成节次</el-button>
+          <el-checkbox v-if="periodDraft.length" v-model="replacePeriodTimes">覆盖已有时间</el-checkbox>
+        </div>
+        <p v-if="periodGenerationError" role="alert" class="schedule-hint">{{ periodGenerationError }}</p>
+      </div>
+      <p class="schedule-hint">生成后可逐节调整。修改已使用的节次时，会先显示受影响的课程。</p>
+      <div v-if="periodDraft.length" class="period-list" aria-label="节次预览">
+        <div v-for="(period, index) in periodDraft" :key="index" class="period-row">
+          <span>第</span><el-input-number v-model="period.period_no" :min="1" :max="30" controls-position="right" /><span>节</span>
+          <el-time-picker v-model="period.start_time" format="HH:mm" value-format="HH:mm:ss" placeholder="开始" />
+          <span>至</span><el-time-picker v-model="period.end_time" format="HH:mm" value-format="HH:mm:ss" placeholder="结束" />
+          <el-button text type="danger" @click="periodDraft.splice(index, 1)">移除</el-button>
+        </div>
       </div>
       <el-button @click="addPeriod">添加节次</el-button>
       <template #footer><el-button @click="periodDialog = false">取消</el-button><el-button type="primary" :loading="busy" @click="submitPeriods">保存节次</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="examDialog" :title="`考试安排 · ${examRule?.title ?? ''}`" width="520px" class="schedule-dialog">
+      <el-form label-position="top">
+        <el-form-item label="考试日期"><el-date-picker v-model="examForm.date" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <div class="form-columns">
+          <el-form-item label="考试开始"><el-time-picker v-model="examForm.start_time" format="HH:mm" value-format="HH:mm:ss" /></el-form-item>
+          <el-form-item label="考试结束"><el-time-picker v-model="examForm.end_time" format="HH:mm" value-format="HH:mm:ss" /></el-form-item>
+        </div>
+        <el-form-item label="考场（可选）"><el-input v-model="examForm.room" maxlength="100" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button v-if="examForm.version" text type="danger" :disabled="busy" @click="removeExam">删除考试</el-button>
+        <el-button @click="examDialog = false">取消</el-button>
+        <el-button type="primary" :loading="busy" @click="submitExam">保存考试</el-button>
+      </template>
     </el-dialog>
 
     <el-dialog v-model="ruleDialog" :title="editingRule ? '编辑课程' : '添加课程'" width="620px" class="schedule-dialog">
@@ -569,12 +719,27 @@ onUnmounted(() => { if (clockTimer !== null) clearInterval(clockTimer) })
 .schedule-now { display: flex; align-items: center; gap: 5px; margin: 8px 0; color: var(--sc-danger); font-size: var(--sc-font-hint); }
 .schedule-now::after { content: ''; flex: 1; border-top: 1px solid currentColor; }
 .schedule-empty { padding: 28px 8px; color: var(--sc-text-secondary); text-align: center; }
+.rule-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.rule-actions .el-button + .el-button { margin-left: 0; }
+.schedule-link { font-size: 13px; color: var(--sc-primary); padding: 6px 8px; }
+.schedule-event--exam { border-inline-start: 3px solid var(--sc-warning); }
+.schedule-event__exam-label { color: var(--sc-text); background: var(--sc-warning-soft); font-weight: 600; font-size: 12px; }
 .rule-list { margin: 0; padding: 0; list-style: none; }
 .rule-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--sc-border); }
 .rule-list li:last-child { border-bottom: 0; }
 .rule-list strong, .rule-list small { display: block; }
 .rule-list small { margin-top: 5px; color: var(--sc-text-secondary); }
 .form-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.period-template { padding: 14px 16px; background: var(--sc-surface-muted); border: 1px solid var(--sc-border); border-radius: 10px; }
+.period-template h3 { margin: 0 0 10px; font-size: 15px; }
+.period-block { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; }
+.period-block strong { min-width: 2.5em; }
+.period-block label { display: inline-flex; align-items: center; gap: 6px; }
+.period-block :deep(.el-date-editor), .period-block .el-input-number { width: 112px; }
+.period-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+.period-presets .el-button + .el-button { margin-left: 0; }
+.period-block--actions { margin-top: 12px; }
+.period-list { max-height: min(29vh, 300px); overflow-y: auto; padding: 3px 8px 3px 0; margin-bottom: 8px; }
 .period-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .period-row .el-input-number { width: 100px; flex: none; }
 .period-row .el-date-editor { min-width: 0; }

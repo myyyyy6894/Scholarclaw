@@ -43,7 +43,8 @@ public class KnowledgeUploadCommitService {
     @Transactional(rollbackFor = Exception.class)
     public KnowledgeDocVO commit(Long userId, Long courseId, ValidatedUpload staged) {
         CourseNamespaceEntity course = courseService.getActiveCourseForUpdate(userId, courseId);
-        if (IndexStatus.REBUILDING.name().equals(course.getIndexStatus())) {
+        if (!FileUploadSecurityValidator.storageOnly(staged.extension())
+                && IndexStatus.REBUILDING.name().equals(course.getIndexStatus())) {
             throw new BusinessException(ErrorCode.E_SYS_03,
                     "当前课程索引正在重建中，请等待完成后再上传。");
         }

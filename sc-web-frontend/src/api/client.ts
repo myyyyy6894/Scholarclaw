@@ -128,9 +128,8 @@ function buildUrl(path: string): string {
   return `${resolveApiBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`
 }
 
-/** 读取当前用户的受保护图片；不把令牌放到图片 URL 中。 */
-export async function apiImage(path: string, signal?: AbortSignal): Promise<Blob> {
-  const headers: Record<string, string> = { Accept: 'image/png, image/jpeg' }
+async function getProtected(path: string, accept: string, signal?: AbortSignal): Promise<Response> {
+  const headers: Record<string, string> = { Accept: accept }
   const token = tokenProvider()
   if (token) headers.Authorization = `Bearer ${token}`
   let response: Response
@@ -144,6 +143,12 @@ export async function apiImage(path: string, signal?: AbortSignal): Promise<Blob
     const envelope = await parseEnvelope<unknown>(response)
     throw new ApiError({ code: envelope.code, message: envelope.message, traceId: envelope.trace_id, httpStatus: response.status })
   }
+  return response
+}
+
+/** 读取当前用户的受保护图片；不把令牌放到图片 URL 中。 */
+export async function apiImage(path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await getProtected(path, 'image/png, image/jpeg', signal)
   const type = (response.headers.get('Content-Type') ?? '').split(';', 1)[0].trim().toLowerCase()
   const limit = 10 * 1024 * 1024
   const length = Number(response.headers.get('Content-Length') ?? '0')
@@ -174,6 +179,28 @@ export async function apiImage(path: string, signal?: AbortSignal): Promise<Blob
     reader.releaseLock()
   }
   return new Blob(chunks, { type })
+}
+
+/** Authenticated original-file bytes; browsers never receive a public storage URL. */
+export async function apiAttachment(path: string, expectedBytes: number, signal?: AbortSignal): Promise<Blob> {
+  const response = await getProtected(path, 'application/octet-stream, application/json', signal)
+  const type = response.headers.get('Content-Type')?.split(';', 1)[0]?.trim().toLowerCase()
+  const length = Number(response.headers.get('Content-Length'))
+  if (type !== 'application/octet-stream' || !Number.isSafeInteger(expectedBytes)
+    || expectedBytes <= 0 || expectedBytes > 50 * 1024 * 1024 || length !== expectedBytes) {
+    await response.body?.cancel()
+    throw new ApiError({ code: CLIENT_ERROR_CODES.MALFORMED_RESPONSE, message: '课件响应格式或大小不正确。', httpStatus: response.status })
+  }
+  try {
+    const file = await response.blob()
+    if (file.size !== expectedBytes) {
+      throw new ApiError({ code: CLIENT_ERROR_CODES.MALFORMED_RESPONSE, message: '课件下载不完整。', httpStatus: response.status })
+    }
+    return file
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    throw new ApiError({ code: CLIENT_ERROR_CODES.NETWORK, message: '读取课件失败，请重试。', cause: error })
+  }
 }
 
 /**

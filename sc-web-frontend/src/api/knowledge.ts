@@ -1,9 +1,9 @@
-import { apiRequest } from '@/api/client'
+import { apiAttachment, apiRequest } from '@/api/client'
 import type { BigIntId } from '@/api/types'
 
 /** 课件文档 API（`04` §4.4 `API-DOC-001~005`）。 */
 
-export type DocumentStatus = 'UPLOADED' | 'PARSING' | 'READY' | 'FAILED' | 'DELETING' | 'DELETED'
+export type DocumentStatus = 'UPLOADED' | 'PARSING' | 'READY' | 'FAILED' | 'DELETING' | 'DELETED' | 'STORED'
 export type ListableDocumentStatus = DocumentStatus
 
 export interface KnowledgeDoc {
@@ -38,6 +38,13 @@ export function listDocs(courseId: BigIntId, status?: ListableDocumentStatus): P
   const query = status === undefined ? '' : `?status=${encodeURIComponent(status)}`
   return apiRequest<KnowledgeDoc[]>(
     `/v1/courses/${encodeURIComponent(courseId)}/docs${query}`,
+  )
+}
+
+export function readDocFile(doc: KnowledgeDoc, signal?: AbortSignal): Promise<Blob> {
+  return apiAttachment(
+    `/v1/courses/${encodeURIComponent(doc.course_id)}/docs/${encodeURIComponent(doc.doc_id)}/file`,
+    doc.file_size_bytes, signal,
   )
 }
 

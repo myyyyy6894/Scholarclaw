@@ -17,6 +17,7 @@ import com.scholarclaw.common.exception.GlobalExceptionHandler;
 import com.scholarclaw.common.security.ScUserPrincipal;
 import com.scholarclaw.modules.knowledge.dto.KnowledgeDocVO;
 import com.scholarclaw.modules.knowledge.service.KnowledgeDocService;
+import com.scholarclaw.modules.knowledge.service.KnowledgeFileService;
 import com.scholarclaw.modules.knowledge.service.KnowledgeUploadService;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -51,7 +52,7 @@ class KnowledgeDocControllerTest {
     void setUp() {
         service = mock(KnowledgeDocService.class);
         uploadService = mock(KnowledgeUploadService.class);
-        mockMvc = MockMvcBuilders.standaloneSetup(new KnowledgeDocController(service, uploadService))
+        mockMvc = MockMvcBuilders.standaloneSetup(new KnowledgeDocController(service, uploadService, mock(KnowledgeFileService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(MAPPER))
                 .setValidator(new LocalValidatorFactoryBean())

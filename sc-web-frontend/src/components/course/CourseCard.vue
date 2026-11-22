@@ -16,14 +16,13 @@ import {
 import type { CourseNamespace } from '@/api/course'
 import ProgressBar from '@/components/ui/ProgressBar.vue'
 import TagBadge from '@/components/ui/TagBadge.vue'
-import { useCourseStore } from '@/stores/course'
 import { indexStatusLabel } from '@/views/course/course-form'
 import { courseReadiness } from '@/views/home/dashboard-data'
 
 /**
  * 课程卡片（P2 首页 / P3 课程页共用）。
  *
- * 进度口径固定为「资料就绪度」= READY / 文档总数；文档总数为 0 时由
+ * 进度口径固定为「AI 检索覆盖」= READY / 文档总数；文档总数为 0 时由
  * `ProgressBar` 显示「暂无资料」，不显示 0%。
  */
 type Tone = 'blue' | 'green' | 'purple' | 'orange' | 'pink'
@@ -46,7 +45,6 @@ const TONE_ICONS: Record<Tone, Component> = {
   pink: BookOpen,
 }
 
-const courseStore = useCourseStore()
 const icon = computed(() => TONE_ICONS[props.tone])
 const readiness = computed(() => courseReadiness(props.course))
 const indexTone = computed(() => {
@@ -59,17 +57,13 @@ const indexTone = computed(() => {
   return 'warning' as const
 })
 
-function selectCourse(): void {
-  courseStore.select(props.course.course_id)
-}
 </script>
 
 <template>
   <article class="course-card" :class="[`course-card--${tone}`, { 'course-card--compact': compact }]">
     <router-link
       class="course-card__body"
-      :to="{ name: 'knowledge' }"
-      @click="selectCourse"
+      :to="{ name: 'knowledge', query: { course: course.course_id } }"
     >
       <div class="course-card__top">
         <span class="course-card__icon">
@@ -84,7 +78,7 @@ function selectCourse(): void {
 
       <ProgressBar
         :value="readiness.percent"
-        label="资料就绪度"
+        label="AI 检索覆盖"
         :tone="readiness.percent === 100 ? 'success' : 'primary'"
       />
 
@@ -102,10 +96,12 @@ function selectCourse(): void {
       </span>
       <router-link
         class="course-card__more"
-        :to="{ name: 'knowledge' }"
-        @click="selectCourse"
+        :to="{ name: 'knowledge', query: { course: course.course_id } }"
       >
         查看<ChevronRight :size="13" :stroke-width="2" />
+      </router-link>
+      <router-link v-if="!compact" :to="{ name: 'rag', query: { course: course.course_id } }" class="course-card__more">
+        AI 问答
       </router-link>
       <slot name="actions" />
     </div>
@@ -229,7 +225,8 @@ function selectCourse(): void {
 .course-card__foot {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 6px 9px;
+  flex-wrap: wrap;
   padding-top: 9px;
   border-top: 1px solid var(--sc-border);
   color: var(--sc-text-secondary);
@@ -253,6 +250,7 @@ function selectCourse(): void {
   align-items: center;
   gap: 1px;
   margin-left: auto;
+  white-space: nowrap;
   color: var(--sc-primary);
   text-decoration: none;
 }

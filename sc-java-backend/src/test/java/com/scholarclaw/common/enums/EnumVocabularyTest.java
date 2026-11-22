@@ -20,7 +20,7 @@ class EnumVocabularyTest {
     @DisplayName("DocumentStatus 六态取值锁定")
     void documentStatusVocabularyIsLocked() {
         assertThat(namesOf(DocumentStatus.class))
-                .containsExactly("UPLOADED", "PARSING", "READY", "FAILED", "DELETING", "DELETED");
+                .containsExactly("UPLOADED", "PARSING", "READY", "FAILED", "DELETING", "DELETED", "STORED");
     }
 
     @Test

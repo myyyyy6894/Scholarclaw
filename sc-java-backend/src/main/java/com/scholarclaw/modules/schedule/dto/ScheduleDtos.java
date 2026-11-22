@@ -24,6 +24,9 @@ public final class ScheduleDtos {
     public record RuleView(String ruleId, String termId, String courseId, String title, String teacher,
                            String room, int weekday, LocalTime startTime, LocalTime endTime,
                            Integer startPeriod, Integer endPeriod, List<Integer> weeks, long version) { }
+    public record ExamWrite(LocalDate date, LocalTime startTime, LocalTime endTime, String room, Long version) { }
+    public record ExamView(String ruleId, LocalDate date, LocalTime startTime,
+                           LocalTime endTime, String room, long version) { }
     public record ExceptionWrite(String kind, LocalDate targetDate, LocalTime startTime, LocalTime endTime,
                                  String room, Long version, Boolean confirmOverlap) { }
     public record ExceptionView(String exceptionId, String ruleId, LocalDate originalDate, String kind,

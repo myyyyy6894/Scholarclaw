@@ -77,7 +77,7 @@ public class KnowledgeUploadRecoveryService {
         int restored = 0;
         int removedMetadata = 0;
         for (KnowledgeDocEntity doc : docMapper.selectList(Wrappers.<KnowledgeDocEntity>lambdaQuery()
-                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
+                .in(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name(), DocumentStatus.STORED.name())
                 .eq(KnowledgeDocEntity::getStorageRelPath, "pending")
                 .lt(KnowledgeDocEntity::getUpdatedAt, pendingBefore))) {
             String expected = storageService.rawRelativePath(
@@ -87,7 +87,7 @@ public class KnowledgeUploadRecoveryService {
                 int affected = docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
                         .eq(KnowledgeDocEntity::getDocId, doc.getDocId())
                         .eq(KnowledgeDocEntity::getUserId, doc.getUserId())
-                        .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
+                        .eq(KnowledgeDocEntity::getStatus, doc.getStatus())
                         .eq(KnowledgeDocEntity::getStorageRelPath, "pending")
                         .set(KnowledgeDocEntity::getStorageRelPath, expected)
                         .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
@@ -96,7 +96,7 @@ public class KnowledgeUploadRecoveryService {
                 int affected = docMapper.delete(Wrappers.<KnowledgeDocEntity>lambdaQuery()
                         .eq(KnowledgeDocEntity::getDocId, doc.getDocId())
                         .eq(KnowledgeDocEntity::getUserId, doc.getUserId())
-                        .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
+                        .eq(KnowledgeDocEntity::getStatus, doc.getStatus())
                         .eq(KnowledgeDocEntity::getStorageRelPath, "pending"));
                 removedMetadata += affected;
             }

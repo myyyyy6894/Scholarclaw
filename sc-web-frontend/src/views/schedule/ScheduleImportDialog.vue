@@ -21,7 +21,7 @@ const props = defineProps<{
   periods: SchedulePeriod[]
   sourceType: 'TEXT' | 'IMAGE' | 'FILE'
 }>()
-const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: []; 'configure-periods': []; 'configure-term': [minimumWeeks: number] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: []; 'configure-periods': [lastPeriod: number]; 'configure-term': [minimumWeeks: number] }>()
 const visible = computed({ get: () => props.modelValue, set: (value: boolean) => emit('update:modelValue', value) })
 const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const rawText = ref('')
@@ -433,7 +433,7 @@ async function saved(current: ScheduleImport, receipt: ScheduleImportReceipt): P
     <p v-else-if="sourceType === 'FILE'" class="import-hint">支持 XLSX、CSV 和 DOCX，文件不超过 2 MiB。先在本地提取，核对后整批保存。</p>
     <p v-else class="import-hint">选择 PNG 或 JPEG 课表图片。识别结果仅供参考，请对照原图逐项校对后保存。</p>
     <p v-if="periods.length === 0" class="import-warning">还没有设置节次时间。设置一次后，按节次识别的课程会共用这些时间。
-      <el-button v-if="!task || !['QUEUED', 'RUNNING'].includes(task.status)" text type="primary" @click="emit('configure-periods')">设置节次时间</el-button>
+      <el-button v-if="!task || !['QUEUED', 'RUNNING'].includes(task.status)" text type="primary" @click="emit('configure-periods', missingPeriods.at(-1) ?? 0)">设置节次时间</el-button>
       <span v-else>识别完成后即可设置。</span>
     </p>
     <div v-if="visibleRecent.length" class="import-history">
@@ -504,7 +504,7 @@ async function saved(current: ScheduleImport, receipt: ScheduleImportReceipt): P
         </template>
         <p v-if="scheduleChanged" class="import-warning">课表或节次已变化，请按当前时间重新核对；不需要再次识别图片。</p>
         <p v-if="missingPeriods.length" class="import-warning">第 {{ missingPeriods.join('、') }} 节还没有设置时间。
-          <el-button text type="primary" @click="emit('configure-periods')">设置节次时间</el-button>
+          <el-button text type="primary" @click="emit('configure-periods', missingPeriods.at(-1) ?? 0)">设置节次时间</el-button>
         </p>
         <div v-if="task.error_message" role="alert" class="import-warning">
           {{ task.error_message }}

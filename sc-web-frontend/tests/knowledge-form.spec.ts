@@ -46,6 +46,7 @@ describe('knowledge document presentation', () => {
     expect(documentStatusLabel('UPLOADED')).toBe('待解析')
     expect(documentStatusLabel('PARSING')).toBe('解析中')
     expect(documentStatusLabel('READY')).toBe('就绪')
+    expect(documentStatusLabel('STORED')).toBe('已存档')
     expect(documentStatusLabel('FAILED')).toBe('失败')
     expect(documentStatusLabel('DELETING')).toBe('删除中')
     expect(documentStatusLabel('DELETED')).toBe('已删除')
@@ -103,8 +104,9 @@ describe('knowledge document presentation', () => {
 
   it('客户端上传预检拒绝空文件、超限与非白名单扩展名', () => {
     expect(uploadFileError(new File(['x'], 'a.pdf'))).toBeNull()
+    expect(uploadFileError(new File(['x'], 'a.PPTX'))).toBeNull()
     expect(uploadFileError(new File([''], 'a.pdf'))).toContain('空文件')
-    expect(uploadFileError(new File(['MZ'], 'a.exe'))).toContain('.pdf')
+    expect(uploadFileError(new File(['MZ'], 'a.exe'))).toContain('仅支持')
     const oversized = new File(['x'], 'big.pdf')
     Object.defineProperty(oversized, 'size', { value: 52_428_801 })
     expect(uploadFileError(oversized)).toContain('50MB')

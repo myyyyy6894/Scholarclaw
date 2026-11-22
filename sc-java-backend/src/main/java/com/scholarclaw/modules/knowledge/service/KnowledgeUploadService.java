@@ -8,11 +8,6 @@ import com.scholarclaw.modules.knowledge.service.FileUploadSecurityValidator.Val
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.ModelConfigRules;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -57,19 +52,24 @@ public class KnowledgeUploadService {
         this.storageService = storageService;
     }
 
-    public KnowledgeDocVO upload(Long userId, Long courseId, MultipartFile file) {        UserConfigEntity config = userConfigService.findById(userId)
+    public KnowledgeDocVO upload(Long userId, Long courseId, MultipartFile file) {
+        UserConfigEntity config = userConfigService.findById(userId)
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
         if (UserConfigService.isDeactivating(config)) {
             throw new BusinessException(ErrorCode.ACCOUNT_DEACTIVATED);
         }
-        if (!modelConfigRules.isEmbeddingConfigValid(config)) {
+        String filename = FileUploadSecurityValidator.sanitizeFileName(file == null ? null : file.getOriginalFilename());
+        int dot = filename.lastIndexOf('.');
+        boolean slides = dot > 0 && FileUploadSecurityValidator.storageOnly(
+                filename.substring(dot).toLowerCase(java.util.Locale.ROOT));
+        if (!slides && !modelConfigRules.isEmbeddingConfigValid(config)) {
             throw new BusinessException(ErrorCode.E_SYS_01,
                     "⚠️ 尚未配置完整的向量模型（Embedding），请先前往【个人设置 -> 模型配置】完成配置。");
         }
         // 快速失败：事务内还会用行锁重新校验课程归属与索引状态
         var course = courseService.getActiveCourse(userId, courseId);
-        if (com.scholarclaw.common.enums.IndexStatus.REBUILDING.name()
+        if (!slides && com.scholarclaw.common.enums.IndexStatus.REBUILDING.name()
                 .equals(course.getIndexStatus())) {
             throw new BusinessException(ErrorCode.E_SYS_03,
                     "当前课程索引正在重建中，请等待完成后再上传。");
@@ -78,6 +78,7 @@ public class KnowledgeUploadService {
         ValidatedUpload staged = uploadValidator.validateAndStage(file);
         try {
             KnowledgeDocVO committed = commitService.commit(userId, courseId, staged);
+            if (FileUploadSecurityValidator.storageOnly(staged.extension())) return committed;
             // 事务已提交：先认领 PARSING 再发布；未获 broker 确认时由巡检补投
             ingestService.enqueueInitial(userId, Long.valueOf(committed.docId()));
             return docService.toVO(docService.requireOwnedDoc(userId, Long.valueOf(committed.docId())));

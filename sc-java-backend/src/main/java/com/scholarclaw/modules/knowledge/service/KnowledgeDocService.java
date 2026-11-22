@@ -38,7 +38,7 @@ public class KnowledgeDocService {
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
     private static final Set<String> LISTABLE_STATUSES = Set.of(
             DocumentStatus.UPLOADED.name(), DocumentStatus.PARSING.name(),
-            DocumentStatus.READY.name(), DocumentStatus.FAILED.name(),
+            DocumentStatus.READY.name(), DocumentStatus.FAILED.name(), DocumentStatus.STORED.name(),
             DocumentStatus.DELETING.name(), DocumentStatus.DELETED.name());
 
     /**
@@ -69,7 +69,7 @@ public class KnowledgeDocService {
 
     /**
      * `API-DOC-001`：查询课程下文档；默认返回 `status != 'DELETED'`（含 `DELETING` 过渡态），
-     * 可选按六态过滤；`DELETED` 只能通过显式 `status=DELETED` 查询。
+     * 可选按状态过滤；`DELETED` 只能通过显式 `status=DELETED` 查询。
      */
     public List<KnowledgeDocVO> listDocs(Long userId, Long courseId, String status) {
         courseService.getActiveCourse(userId, courseId);
@@ -82,7 +82,7 @@ public class KnowledgeDocService {
             String normalized = status.trim().toUpperCase(Locale.ROOT);
             if (!LISTABLE_STATUSES.contains(normalized)) {
                 throw new BusinessException(ErrorCode.VALIDATION_ERROR,
-                        "status 仅允许 UPLOADED/PARSING/READY/FAILED/DELETING/DELETED。");
+                        "status 仅允许 UPLOADED/PARSING/READY/FAILED/DELETING/DELETED/STORED。");
             }
             query.eq(KnowledgeDocEntity::getStatus, normalized);
         }
@@ -100,7 +100,8 @@ public class KnowledgeDocService {
     public KnowledgeDocEntity createDocumentMetadata(CourseNamespaceEntity course, String docName,
                                                      String fileExt, long fileSizeBytes,
                                                      String fileSha256, String storageRelPath) {
-        if (IndexStatus.REBUILDING.name().equals(course.getIndexStatus())) {
+        boolean stored = FileUploadSecurityValidator.storageOnly(fileExt.toLowerCase(Locale.ROOT));
+        if (!stored && IndexStatus.REBUILDING.name().equals(course.getIndexStatus())) {
             throw new BusinessException(ErrorCode.E_SYS_03,
                     "当前课程索引正在重建中，请等待完成后再上传。");
         }
@@ -113,7 +114,7 @@ public class KnowledgeDocService {
         entity.setFileSizeBytes(fileSizeBytes);
         entity.setFileSha256(fileSha256);
         entity.setStorageRelPath(storageRelPath);
-        entity.setStatus(DocumentStatus.UPLOADED.name());
+        entity.setStatus((stored ? DocumentStatus.STORED : DocumentStatus.UPLOADED).name());
         entity.setParseVersion(1);
         entity.setCourseIndexVersion(course.getIndexVersion());
         entity.setPageCount(0);
@@ -143,7 +144,8 @@ public class KnowledgeDocService {
         int affected = docMapper.update(null, Wrappers.<KnowledgeDocEntity>lambdaUpdate()
                 .eq(KnowledgeDocEntity::getDocId, docId)
                 .eq(KnowledgeDocEntity::getUserId, userId)
-                .eq(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name())
+                .in(KnowledgeDocEntity::getStatus, DocumentStatus.UPLOADED.name(), DocumentStatus.STORED.name())
+                .eq(KnowledgeDocEntity::getStorageRelPath, "pending")
                 .set(KnowledgeDocEntity::getStorageRelPath, storageRelPath)
                 .set(KnowledgeDocEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime()));
         if (affected != 1) {

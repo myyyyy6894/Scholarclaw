@@ -1,5 +1,5 @@
 {
-  "schema_version": "V1.0.15",
+  "schema_version": "V1.0.16",
   "migration_table": "sc_schema_migration",
   "forbidden_tables": [
     "t_ddl_subtask",
@@ -2547,6 +2547,87 @@
         ],
         "checks": [
           "chk_schedule_reminder"
+        ]
+      },
+      "t_schedule_exam": {
+        "columns": [
+          {
+            "name": "rule_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "term_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "exam_date",
+            "type": "date",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_time",
+            "type": "time",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "end_time",
+            "type": "time",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "room",
+            "type": "varchar(100)",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "rule_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_exam_term",
+            "unique": false,
+            "columns": [
+              "user_id",
+              "term_id",
+              "exam_date"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_exam_time"
         ]
       }
     },

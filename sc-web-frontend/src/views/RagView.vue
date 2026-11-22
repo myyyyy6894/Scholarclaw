@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
 
 import {
@@ -76,7 +77,9 @@ interface FocusableInput {
 }
 
 const courses = ref<CourseNamespace[]>([])
-const selectedCourseId = ref<string | null>(courseStore.selectedCourseId)
+const route = useRoute()
+const requestedCourse = computed(() => typeof route.query.course === 'string' ? route.query.course : null)
+const selectedCourseId = ref<string | null>(requestedCourse.value ?? courseStore.selectedCourseId)
 const messages = ref<UiMessage[]>([])
 const historyItems = ref<ChatMessage[]>([])
 const query = ref('')
@@ -124,11 +127,12 @@ async function bootstrap(): Promise<void> {
   courseError.value = ''
   try {
     courses.value = await listCourses()
+    if (requestedCourse.value !== null) selectedCourseId.value = requestedCourse.value
     const exists = courses.value.some(
       (course) => course.course_id === selectedCourseId.value,
     )
     if (!exists) {
-      selectedCourseId.value = courses.value[0]?.course_id ?? null
+      selectedCourseId.value = requestedCourse.value === null ? courses.value[0]?.course_id ?? null : null
     }
     courseStore.select(selectedCourseId.value)
     if (selectedCourseId.value !== null) {
@@ -141,6 +145,12 @@ async function bootstrap(): Promise<void> {
     loadingCourses.value = false
   }
 }
+
+watch(requestedCourse, (requested) => {
+  if (requested === null || loadingCourses.value) return
+  selectedCourseId.value = courses.value.some((course) => course.course_id === requested) ? requested : null
+  void onCourseChange()
+})
 
 function handleCourseChange(): void {
   void onCourseChange()

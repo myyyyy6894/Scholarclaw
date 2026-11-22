@@ -38,7 +38,7 @@ public enum ErrorCode {
     FILE_SIZE_EXCEEDED("FILE_SIZE_EXCEEDED", HttpStatus.BAD_REQUEST, null,
             "上传文件为空或超过 50MB 上限，请压缩或拆分后重试。"),
     FILE_TYPE_UNSUPPORTED("FILE_TYPE_UNSUPPORTED", HttpStatus.BAD_REQUEST, null,
-            "当前版本仅支持 .pdf、.md、.txt 格式的课件。"),
+            "仅支持 PDF、Markdown、TXT、PPT 和 PPTX 课件。"),
     FILE_MAGIC_INVALID("FILE_MAGIC_INVALID", HttpStatus.BAD_REQUEST, null,
             "文件内容与扩展名不匹配，文件可能已损坏或后缀被伪造。"),
     COURSE_NO_READY_DOCS("COURSE_NO_READY_DOCS", HttpStatus.BAD_REQUEST, null,

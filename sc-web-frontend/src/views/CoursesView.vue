@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { Library, MessagesSquare, MoreHorizontal, Plus, Search, Upload } from '@lucide/vue'
+import { MoreHorizontal, Plus, Search } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
 
 import {
@@ -64,12 +64,6 @@ const switchForm = ref<SwitchFormState>({
 
 const hasCourses = computed(() => courses.value.length > 0)
 const filteredCourses = computed(() => filterCourses(courses.value, searchQuery.value))
-const summary = computed(() => ({
-  courses: courses.value.length,
-  ready: courses.value.reduce((total, item) => total + item.ready_doc_count, 0),
-  parsing: courses.value.reduce((total, item) => total + item.parsing_doc_count, 0),
-  failed: courses.value.reduce((total, item) => total + item.failed_doc_count, 0),
-}))
 
 onMounted(() => {
   void loadCourses()
@@ -197,155 +191,78 @@ function toneFor(index: number): (typeof TONES)[number] {
 </script>
 
 <template>
-  <div class="courses-page">
-    <div class="courses-main">
-      <section class="courses-hero">
-        <div class="courses-hero__copy">
-          <span class="courses-hero__eyebrow">COURSE WORKSPACE</span>
-          <h2>我的课程</h2>
-          <p>管理你的课程空间，关联知识库，让 AI 更好地为你的学习服务。</p>
-          <div class="courses-hero__summary">
-            <span>课程 {{ summary.courses }}</span>
-            <span>就绪 {{ summary.ready }}</span>
-            <span>解析中 {{ summary.parsing }}</span>
-            <span v-if="summary.failed > 0" class="is-danger">失败 {{ summary.failed }}</span>
-          </div>
-        </div>
-        <div class="courses-hero__side">
-          <div class="courses-hero__art">
-            <img src="/illustrations/course-header-books.png" alt="" />
-          </div>
-          <el-button type="primary" :icon="Plus" @click="openCreate">新建课程</el-button>
-        </div>
-      </section>
+  <section class="courses-page" aria-labelledby="courses-heading">
+    <header class="courses-toolbar">
+      <h2 id="courses-heading">课程空间</h2>
+      <label class="courses-search">
+        <Search :size="16" aria-hidden="true" />
+        <input v-model="searchQuery" type="search" placeholder="搜索课程" aria-label="搜索课程" />
+      </label>
+      <el-button type="primary" :icon="Plus" @click="openCreate">新建课程</el-button>
+    </header>
 
-      <div class="courses-toolbar">
-        <div class="courses-tabs">
-          <button type="button" class="course-tab course-tab--active">
-            全部课程 <span class="course-tab__count">{{ courses.length }}</span>
-          </button>
-        </div>
-
-        <div class="courses-tools">
-          <label class="courses-search">
-            <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
-            <input v-model="searchQuery" type="search" placeholder="搜索课程…" aria-label="搜索课程" />
-          </label>
-        </div>
-      </div>
-
-      <div v-if="loading" class="courses-grid" aria-hidden="true">
-        <div v-for="index in 6" :key="index" class="course-skeleton" />
-      </div>
-
-      <BaseCard v-else-if="loadError !== ''" title="课程读取失败">
-        <div class="module-error">
-          <p>{{ loadError }}</p>
-          <el-button size="small" @click="loadCourses">重新加载</el-button>
-        </div>
-      </BaseCard>
-
-      <BaseCard v-else-if="!hasCourses">
-        <EmptyState
-          image="/illustrations/scene-study-desk.png"
-          title="还没有课程空间"
-          description="创建第一门课程，上传课件后即可使用知识库问答与 DDL 提醒。"
-        >
-          <template #action>
-            <el-button type="primary" @click="openCreate">新建课程</el-button>
-          </template>
-        </EmptyState>
-      </BaseCard>
-
-      <BaseCard v-else-if="filteredCourses.length === 0">
-        <EmptyState
-          title="没有匹配的课程"
-          :description="`没有找到与「${searchQuery}」匹配的课程名称或备注。`"
-        >
-          <template #action>
-            <el-button @click="searchQuery = ''">清除搜索</el-button>
-          </template>
-        </EmptyState>
-      </BaseCard>
-
-      <div v-else class="courses-grid">
-        <div
-          v-for="(course, index) in filteredCourses"
-          :key="course.course_id"
-          class="courses-grid__item"
-          :class="{ 'is-deleting': deletingId === course.course_id }"
-        >
-          <CourseCard
-            :course="course"
-            :ddl-count="ddlCountFor(course.course_id)"
-            :tone="toneFor(index)"
-          >
-            <template #actions>
-              <el-dropdown trigger="click" placement="bottom-end">
-                <button type="button" class="course-menu" aria-label="课程操作" title="课程操作">
-                  <MoreHorizontal :size="16" :stroke-width="1.8" />
-                </button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item @click="openSwitch(course)">切换 Embedding</el-dropdown-item>
-                    <el-dropdown-item divided @click="deleteCourseFromMenu(course)">删除课程</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </template>
-          </CourseCard>
-        </div>
-      </div>
+    <div v-if="loading" class="courses-grid" aria-hidden="true">
+      <div v-for="index in 6" :key="index" class="course-skeleton" />
     </div>
 
-    <aside class="courses-rail">
-      <BaseCard title="我的课表" subtitle="教学周与上课安排">
-        <div class="rail-placeholder">
-          <span class="rail-placeholder__art">
-            <img src="/illustrations/status-schedule.png" alt="" loading="lazy" />
-          </span>
-          <p>按学期查看本周课程，也可以记录停课和调课。</p>
-          <router-link :to="{ name: 'schedule' }">查看课表</router-link>
-        </div>
-      </BaseCard>
-
-      <BaseCard title="课程快捷操作">
-        <ul class="rail-actions">
-          <li>
-            <router-link class="rail-action" :to="{ name: 'knowledge' }">
-              <span class="rail-action__icon"><Upload :size="16" :stroke-width="1.8" /></span>
-              <span class="rail-action__text">
-                <strong>添加学习资料</strong>
-                <small>上传文档，关联到课程</small>
-              </span>
-            </router-link>
-          </li>
-          <li>
-            <router-link class="rail-action" :to="{ name: 'knowledge' }">
-              <span class="rail-action__icon"><Library :size="16" :stroke-width="1.8" /></span>
-              <span class="rail-action__text">
-                <strong>查看课程知识库</strong>
-                <small>管理课程相关的所有文档</small>
-              </span>
-            </router-link>
-          </li>
-          <li>
-            <router-link class="rail-action" :to="{ name: 'rag' }">
-              <span class="rail-action__icon"><MessagesSquare :size="16" :stroke-width="1.8" /></span>
-              <span class="rail-action__text">
-                <strong>课程问答</strong>
-                <small>基于本课程的知识进行提问</small>
-              </span>
-            </router-link>
-          </li>
-        </ul>
-      </BaseCard>
-
-      <div class="rail-quote">
-        <img src="/illustrations/scene-study-desk.png" alt="" loading="lazy" />
-        <p>在知识的海洋里<br />找到属于你的方向</p>
+    <BaseCard v-else-if="loadError !== ''" title="课程读取失败">
+      <div class="module-error">
+        <p>{{ loadError }}</p>
+        <el-button size="small" @click="loadCourses">重新加载</el-button>
       </div>
-    </aside>
+    </BaseCard>
+
+    <BaseCard v-else-if="!hasCourses">
+      <EmptyState
+        image="/illustrations/scene-study-desk.png"
+        title="还没有课程空间"
+        description="创建第一门课程，上传课件后即可使用知识库问答与 DDL 提醒。"
+      >
+        <template #action>
+          <el-button type="primary" @click="openCreate">新建课程</el-button>
+        </template>
+      </EmptyState>
+    </BaseCard>
+
+    <BaseCard v-else-if="filteredCourses.length === 0">
+      <EmptyState
+        title="没有匹配的课程"
+        :description="`没有找到与「${searchQuery}」匹配的课程名称或备注。`"
+      >
+        <template #action>
+          <el-button @click="searchQuery = ''">清除搜索</el-button>
+        </template>
+      </EmptyState>
+    </BaseCard>
+
+    <div v-else class="courses-grid">
+      <div
+        v-for="(course, index) in filteredCourses"
+        :key="course.course_id"
+        class="courses-grid__item"
+        :class="{ 'is-deleting': deletingId === course.course_id }"
+      >
+        <CourseCard
+          :course="course"
+          :ddl-count="ddlCountFor(course.course_id)"
+          :tone="toneFor(index)"
+        >
+          <template #actions>
+            <el-dropdown trigger="click" placement="bottom-end">
+              <button type="button" class="course-menu" aria-label="课程操作" title="课程操作">
+                <MoreHorizontal :size="16" :stroke-width="1.8" />
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="openSwitch(course)">切换 Embedding</el-dropdown-item>
+                  <el-dropdown-item divided @click="deleteCourseFromMenu(course)">删除课程</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
+        </CourseCard>
+      </div>
+    </div>
 
     <el-dialog v-model="creating" title="新建课程空间" width="520px">
       <el-form label-width="90px">
@@ -409,427 +326,25 @@ function toneFor(index: number): (typeof TONES)[number] {
         <el-button type="primary" :loading="switching" @click="submitSwitch">确认切换</el-button>
       </template>
     </el-dialog>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.courses-page {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: var(--sc-card-gap);
-  align-items: start;
-}
-
-.courses-main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sc-card-gap);
-  min-width: 0;
-}
-
-.courses-hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 26px 30px;
-  overflow: hidden;
-  border: 1px solid var(--sc-border);
-  border-radius: 16px;
-  background: linear-gradient(
-    120deg,
-    var(--sc-primary-soft) 0%,
-    var(--sc-surface) 55%,
-    var(--sc-accent-soft) 100%
-  );
-  box-shadow: var(--sc-shadow);
-}
-
-.courses-hero__copy {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  min-width: 0;
-}
-
-.courses-hero__eyebrow {
-  color: var(--sc-primary-strong);
-  font-size: var(--sc-font-hint);
-  font-weight: 700;
-  letter-spacing: 1.2px;
-}
-
-.courses-hero h2 {
-  color: var(--sc-text);
-  font-size: var(--sc-font-title);
-  font-weight: var(--sc-font-title-weight);
-  letter-spacing: -0.3px;
-}
-
-.courses-hero p {
-  color: var(--sc-text-secondary);
-  font-size: var(--sc-font-caption);
-  line-height: 1.7;
-}
-
-.courses-hero__summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.courses-hero__summary span {
-  padding: 2px 9px;
-  border-radius: var(--sc-radius-pill);
-  color: var(--sc-text-secondary);
-  background: var(--sc-surface);
-  font-size: var(--sc-font-hint);
-}
-
-.courses-hero__summary span.is-danger {
-  color: var(--sc-danger);
-  background: var(--sc-danger-soft);
-}
-
-.courses-hero__side {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 16px;
-}
-
-.courses-hero__art {
-  display: grid;
-  place-items: center;
-  width: 116px;
-  height: 100px;
-  padding: 6px;
-  border-radius: 14px;
-  background: #f1f6ff;
-}
-
-.courses-hero__art img {
-  display: block;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.courses-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--sc-border);
-}
-
-.courses-tabs {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  min-width: 0;
-}
-
-.course-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 2px 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: var(--sc-text-secondary);
-  background: transparent;
-  font-family: var(--sc-font-sans);
-  font-size: var(--sc-font-body);
-  cursor: pointer;
-}
-
-.course-tab--active {
-  border-bottom-color: var(--sc-primary);
-  color: var(--sc-primary-strong);
-  font-weight: 600;
-}
-
-.course-tab__count {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: var(--sc-radius-pill);
-  color: var(--sc-primary-strong);
-  background: var(--sc-primary-soft);
-  font-size: var(--sc-font-hint);
-  line-height: 18px;
-  text-align: center;
-}
-
-.courses-tools {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
+.courses-page { display: grid; gap: 14px; scroll-margin-top: 16px; }
+.courses-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.courses-toolbar h2 { margin: 0 auto 0 0; font-size: 20px; }
 .courses-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-pill);
-  color: var(--sc-text-placeholder);
-  background: var(--sc-surface);
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border: 1px solid var(--sc-border); border-radius: 8px; color: var(--sc-text-secondary);
 }
-
-.courses-search:focus-within {
-  border-color: var(--sc-primary);
-  box-shadow: 0 0 0 3px var(--sc-primary-soft);
-}
-
-.courses-search input {
-  width: 150px;
-  border: 0;
-  outline: 0;
-  color: var(--sc-text);
-  background: transparent;
-  font-family: var(--sc-font-sans);
-  font-size: var(--sc-font-caption);
-}
-
-.courses-search input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.courses-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.courses-grid__item {
-  min-width: 0;
-}
-
-.courses-grid__item.is-deleting {
-  opacity: 0.55;
-  pointer-events: none;
-}
-
-.course-skeleton {
-  height: 188px;
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-card);
-  background: var(--sc-surface-muted);
-}
-
-.course-menu {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--sc-border);
-  border-radius: 7px;
-  color: var(--sc-text-placeholder);
-  background: var(--sc-surface);
-  cursor: pointer;
-}
-
-.course-menu:hover {
-  border-color: var(--sc-primary);
-  color: var(--sc-primary);
-}
-
-.courses-rail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sc-card-gap);
-  min-width: 0;
-}
-
-.rail-placeholder {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.rail-placeholder__art {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 64px;
-  height: 64px;
-  padding: 6px;
-  border-radius: 12px;
-  background: #f1f6ff;
-}
-
-.rail-placeholder__art img {
-  display: block;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.rail-placeholder p {
-  color: var(--sc-text-placeholder);
-  font-size: var(--sc-font-hint);
-  line-height: 1.6;
-}
-
-.rail-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.rail-action {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px;
-  border-radius: 10px;
-  color: inherit;
-  text-decoration: none;
-  transition: background-color 0.18s ease;
-}
-
-.rail-action:hover {
-  background: var(--sc-surface-hover);
-}
-
-.rail-action__icon {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  color: var(--sc-primary);
-  background: var(--sc-primary-soft);
-}
-
-.rail-action__text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.rail-action__text strong {
-  color: var(--sc-text);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.rail-action__text small {
-  overflow: hidden;
-  color: var(--sc-text-placeholder);
-  font-size: var(--sc-font-hint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail-quote {
-  position: relative;
-  min-height: 112px;
-  overflow: hidden;
-  border-radius: var(--sc-radius-card);
-  background: #eaf2ff;
-}
-
-.rail-quote img {
-  display: block;
-  width: 100%;
-  height: 132px;
-  object-fit: cover;
-  opacity: 0.9;
-}
-
-.rail-quote p {
-  position: absolute;
-  left: 14px;
-  bottom: 14px;
-  color: #1f2937;
-  font-size: var(--sc-font-caption);
-  font-weight: 600;
-  line-height: 1.6;
-}
-
-.module-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--sc-text-secondary);
-  font-size: var(--sc-font-caption);
-}
-
-.course-switch-form {
-  margin-top: 16px;
-}
-
-@media (max-width: 1360px) {
-  .courses-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 1199px) {
-  .courses-page {
-    grid-template-columns: 1fr;
-  }
-
-  .courses-rail {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
-  }
-}
-
-@media (max-width: 860px) {
-  .courses-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .courses-rail {
-    grid-template-columns: 1fr;
-  }
-
-  .courses-hero {
-    padding: 20px;
-  }
-
-  .courses-hero__art {
-    display: none;
-  }
-}
-
-@media (max-width: 639px) {
-  .courses-toolbar {
-    align-items: stretch;
-  }
-
-  .courses-tabs {
-    gap: 10px;
-    overflow-x: auto;
-  }
-
-  .courses-tools {
-    width: 100%;
-  }
-
-  .courses-search {
-    flex: 1;
-  }
-
-  .courses-search input {
-    width: 100%;
-  }
-}
+.courses-search:focus-within { border-color: var(--sc-primary); }
+.courses-search input { outline: none; border: 0; background: transparent; color: var(--sc-text); width: 120px; font: inherit; }
+.courses-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 14px; }
+.courses-grid__item { display: grid; min-width: 0; }
+.courses-grid__item.is-deleting { opacity: 0.6; pointer-events: none; }
+.course-skeleton { min-height: 116px; border: 1px solid var(--sc-border); border-radius: 12px; }
+.course-menu { border: 0; padding: 5px; background: transparent; cursor: pointer; color: var(--sc-text-secondary); }
+.course-menu:hover { color: var(--sc-primary); }
+.module-error p { color: var(--sc-text-secondary); }
+.course-switch-form { margin-top: 16px; }
 </style>

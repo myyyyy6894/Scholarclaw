@@ -1,5 +1,7 @@
 package com.scholarclaw.common.im;
 
+import java.time.Instant;
+
 /**
  * 「用户自带的官方机器人」投递能力。
  *
@@ -17,5 +19,5 @@ public interface OfficialBotSender {
     boolean sendProactive(Long userId, String content);
 
     /** Send only if the binding captured by the notification is still current. */
-    boolean sendProactive(Long userId, long bindingVersion, String content);
+    boolean sendProactive(Long userId, long bindingVersion, Instant deadline, String content);
 }

@@ -8,12 +8,14 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -41,13 +43,18 @@ public class QqBotApiClient {
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
+    private final Clock clock;
     private final Map<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
-    public QqBotApiClient(ObjectMapper objectMapper) {
+    @Autowired
+    public QqBotApiClient(ObjectMapper objectMapper, Clock clock) {
+        this(objectMapper, clock, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build());
+    }
+
+    QqBotApiClient(ObjectMapper objectMapper, Clock clock, HttpClient httpClient) {
         this.objectMapper = objectMapper;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .build();
+        this.clock = clock;
+        this.httpClient = httpClient;
     }
 
     /** 机器人侧的可恢复错误：由调用方决定是否重连/重试。 */
@@ -126,7 +133,19 @@ public class QqBotApiClient {
      */
     public void sendC2cText(String appId, String clientSecret, String openid,
                             String content, String msgId, int msgSeq) {
+        postC2cText(openid, content, msgId, msgSeq, accessToken(appId, clientSecret));
+    }
+
+    /** A slow access-token refresh must not turn a timely claim into a post after class starts. */
+    public boolean sendC2cTextBefore(String appId, String clientSecret, String openid, String content, Instant deadline) {
+        if (!clock.instant().isBefore(deadline)) return false;
         String token = accessToken(appId, clientSecret);
+        if (!clock.instant().isBefore(deadline)) return false;
+        postC2cText(openid, content, null, 0, token);
+        return true;
+    }
+
+    private void postC2cText(String openid, String content, String msgId, int msgSeq, String token) {
         var payload = new java.util.LinkedHashMap<String, Object>();
         payload.put("content", content);
         payload.put("msg_type", 0);

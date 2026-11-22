@@ -5,6 +5,7 @@ import com.scholarclaw.common.im.OfficialBotSender;
 import com.scholarclaw.common.security.AesGcmCryptoService;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
+import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -54,15 +55,15 @@ public class QqBotSender implements OfficialBotSender {
     @Override
     public boolean sendProactive(Long userId, String content) {
         UserConfigEntity config = userConfigService.findById(userId).orElse(null);
-        return sendProactive(config, config == null ? null : config.getQqbotBindingVersion(), content);
+        return sendProactive(config, config == null ? null : config.getQqbotBindingVersion(), null, content);
     }
 
     @Override
-    public boolean sendProactive(Long userId, long bindingVersion, String content) {
-        return sendProactive(userConfigService.findById(userId).orElse(null), bindingVersion, content);
+    public boolean sendProactive(Long userId, long bindingVersion, Instant deadline, String content) {
+        return sendProactive(userConfigService.findById(userId).orElse(null), bindingVersion, deadline, content);
     }
 
-    private boolean sendProactive(UserConfigEntity config, Long bindingVersion, String content) {
+    private boolean sendProactive(UserConfigEntity config, Long bindingVersion, Instant deadline, String content) {
         String openid = config == null ? null : config.getQqbotOpenid();
         if (config == null || !verifiedFor(config, config.getQqbotAppId(), bindingVersion, openid)) {
             log.debug("QQ 绑定不可用，跳过主动推送");
@@ -71,6 +72,9 @@ public class QqBotSender implements OfficialBotSender {
         Credential credential = credential(config);
         if (credential == null) {
             return false;
+        }
+        if (deadline != null) {
+            return apiClient.sendC2cTextBefore(credential.appId(), credential.secret(), openid, content, deadline);
         }
         apiClient.sendC2cText(credential.appId(), credential.secret(), openid, content, null, 0);
         return true;

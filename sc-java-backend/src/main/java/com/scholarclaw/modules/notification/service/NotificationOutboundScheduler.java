@@ -9,6 +9,7 @@ import com.scholarclaw.modules.notification.mapper.NotificationLogMapper;
 import com.scholarclaw.modules.userconfig.entity.UserConfigEntity;
 import com.scholarclaw.modules.userconfig.service.UserConfigService;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -226,11 +227,13 @@ public class NotificationOutboundScheduler {
         String body = "距离上课约 " + minutes + " 分钟。\n" + candidate.getContent();
         boolean delivered;
         try {
-            delivered = officialBotSender.sendProactive(candidate.getUserId(), candidate.getQqBindingVersion(), body);
+            delivered = officialBotSender.sendProactive(candidate.getUserId(), candidate.getQqBindingVersion(),
+                    Instant.ofEpochSecond(deadline), body);
         } catch (RuntimeException e) {
             return scheduleFallback(id, lease, "QQ 投递结果未知，仅保留站内信", now);
         }
-        if (!delivered) return scheduleFallback(id, lease, "QQ 会话不可用，仅站内信", now);
+        if (!delivered) return scheduleFallback(id, lease, clock.instant().getEpochSecond() >= deadline
+                ? "课程已开始，停止 QQ 投递" : "QQ 会话不可用，仅站内信", LocalDateTime.now(clock));
         mapper.markSent(id, lease, LocalDateTime.now(clock).truncatedTo(ChronoUnit.MILLIS));
         return Outcome.SENT;
     }

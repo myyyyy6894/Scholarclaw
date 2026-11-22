@@ -139,7 +139,7 @@ class ScheduleReminderIntegrationTest {
         assertThat(notices(user)).singleElement().satisfies(notice -> assertThat(notice.status()).isEqualTo("RATE_LIMITED_DELAYED"));
         assertThat(outbound.dispatchOnce().sent()).isZero();
         clock.at(7, 46);
-        when(sender.sendProactive(eq(user), eq(7L), anyString())).thenReturn(true);
+        when(sender.sendProactive(eq(user), eq(7L), any(Instant.class), anyString())).thenReturn(true);
         var start = new CountDownLatch(1);
         try (var threads = Executors.newFixedThreadPool(2)) {
             var one = threads.submit(() -> { start.await(); return outbound.dispatchOnce().sent(); });
@@ -147,7 +147,7 @@ class ScheduleReminderIntegrationTest {
             start.countDown();
             assertThat(one.get(10, TimeUnit.SECONDS) + two.get(10, TimeUnit.SECONDS)).isOne();
         }
-        verify(sender, times(1)).sendProactive(eq(user), eq(7L), contains("14 分钟"));
+        verify(sender, times(1)).sendProactive(eq(user), eq(7L), eq(MONDAY.atTime(8, 0).atZone(ZONE).toInstant()), contains("14 分钟"));
         clock.at(7, 55);
         assertThat(reminders.reconcile(user)).isOne();
         clock.at(8, 15);
@@ -173,11 +173,11 @@ class ScheduleReminderIntegrationTest {
 
         clock.at(8, 20);
         reminders.reconcile(user);
-        when(sender.sendProactive(eq(user), eq(7L), anyString())).thenThrow(new IllegalStateException("fake timeout"));
+        when(sender.sendProactive(eq(user), eq(7L), any(Instant.class), anyString())).thenThrow(new IllegalStateException("fake timeout"));
         assertThat(outbound.dispatchOnce().fallback()).isOne();
         clock.at(8, 22);
         assertThat(outbound.dispatchOnce().sent()).isZero();
-        verify(sender, times(1)).sendProactive(eq(user), eq(7L), contains("第二节"));
+        verify(sender, times(1)).sendProactive(eq(user), eq(7L), eq(MONDAY.atTime(8, 40).atZone(ZONE).toInstant()), contains("第二节"));
         assertThat(notices(user)).hasSize(2).allSatisfy(notice -> assertThat(notice.status()).isEqualTo("FALLBACK_WEB_ONLY"));
         assertThat(notices(user).getLast().error()).contains("投递结果未知");
 

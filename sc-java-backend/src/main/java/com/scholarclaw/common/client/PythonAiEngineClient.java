@@ -55,6 +55,7 @@ public class PythonAiEngineClient {
     /** Python 侧内部 RAG 流式问答路径（`04` §4.9.3，TASK-604）。 */
     public static final String RAG_QA_STREAM_PATH = "/internal/ai/v1/rag/qa-stream";
     /** Python 侧内部意图路由与 DDL 提取路径（`04` §4.9.2，TASK-701/704）。 */
+    public static final String AGENT_INTERPRET_PATH = "/internal/ai/v1/agent/interpret";
     public static final String ROUTE_AND_EXTRACT_PATH = "/internal/ai/v1/agent/route-and-extract";
     /** Stateless schedule text extraction; caller still validates and requests user confirmation. */
     public static final String SCHEDULE_FILE_PATH = "/internal/ai/v1/schedule/extract-file";

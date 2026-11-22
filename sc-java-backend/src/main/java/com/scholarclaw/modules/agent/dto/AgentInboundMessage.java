@@ -13,5 +13,12 @@ public record AgentInboundMessage(
         String rawText,
         String referenceTime,
         String courseId,
-        boolean forceCreate) {
+        boolean forceCreate,
+        QqSession qqSession) {
+    public AgentInboundMessage(Long userId, String sourcePlatform, String sourceMsgId, String rawText,
+                               String referenceTime, String courseId, boolean forceCreate) {
+        this(userId, sourcePlatform, sourceMsgId, rawText, referenceTime, courseId, forceCreate, null);
+    }
+
+    public record QqSession(String appId, Long bindingVersion, String openid) { }
 }

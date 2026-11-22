@@ -73,7 +73,8 @@ public class QqBotChannelAdapter {
         }
         try {
             AgentReply reply = orchestrator.handle(new AgentInboundMessage(
-                    userId, "QQ_OFFICIAL", message.messageId(), text, referenceTime(userId), null, false));
+                    userId, "QQ_OFFICIAL", message.messageId(), text, referenceTime(userId), null, false,
+                    new AgentInboundMessage.QqSession(message.appId(), message.connectionVersion(), openid)));
             if (reply != null && reply.replyText() != null && !reply.replyText().isBlank()) {
                 safeReply(message, reply.replyText());
             }

@@ -14,10 +14,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.ddl_extract import DdlPayload
+from app.schemas.probe import ModelEndpointPayload
 
 
 class AgentIntent(StrEnum):
@@ -36,3 +38,51 @@ class RouteAndExtractData(BaseModel):
     intent: AgentIntent
     intent_confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     ddl_payload: DdlPayload | None = None
+
+
+class NaturalAction(StrEnum):
+    SCHEDULE_QUERY = "SCHEDULE_QUERY"
+    REMINDER_GET = "REMINDER_GET"
+    REMINDER_SET = "REMINDER_SET"
+    DDL_LIST = "DDL_LIST"
+    DDL_QUERY = "DDL_QUERY"
+    DDL_RESCHEDULE = "DDL_RESCHEDULE"
+    DDL_DONE = "DDL_DONE"
+    DDL_CANCEL = "DDL_CANCEL"
+    DDL_CONFIRM = "DDL_CONFIRM"
+    DDL_EXTRACT = "DDL_EXTRACT"
+    KB_QA = "KB_QA"
+    KB_INGEST = "KB_INGEST"
+    CLARIFY = "CLARIFY"
+    HELP = "HELP"
+    UNSUPPORTED = "UNSUPPORTED"
+    IGNORE = "IGNORE"
+
+
+class NaturalArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    task_hint: str | None = Field(default=None, max_length=120)
+    date_expression: str | None = Field(default=None, max_length=32)
+    time_expression: str | None = Field(default=None, max_length=32)
+    period_expression: str | None = Field(default=None, max_length=24)
+    schedule_view: Literal["LIST", "FIRST", "NEXT", "CONFLICTS"] | None = None
+    reminder_enabled: bool | None = None
+
+
+class NaturalRouteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    user_id: str = Field(pattern=r"^[0-9]{1,19}$")
+    raw_text: str = Field(min_length=1, max_length=4000)
+    chat_config: ModelEndpointPayload
+
+
+class NaturalRouteData(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: NaturalAction
+    arguments: NaturalArguments = Field(default_factory=NaturalArguments)
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    missing: list[Literal["task", "date", "exact_time", "scope"]] = Field(default_factory=list, max_length=4)
+    evidence: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(default_factory=list, max_length=6)

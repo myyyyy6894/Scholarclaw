@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 待二次确认的动作（Redis `sc:u:{uid}:pending_action`，TTL 10 分钟）。
@@ -22,9 +24,20 @@ public record PendingAction(
         LocalDate dueDate,
         LocalTime dueTime,
         String rawText,
-        String createdAt) {
+        String createdAt,
+        Map<String, OffsetDateTime> expectedVersions) {
+
+    public PendingAction(AgentToolAction action, Long taskId, List<Long> taskIds, LocalDate dueDate, LocalTime dueTime,
+                         String rawText, String createdAt) {
+        this(action, taskId, taskIds, dueDate, dueTime, rawText, createdAt, Map.of());
+    }
+
+    public PendingAction withVersions(Map<String, OffsetDateTime> versions) {
+        return new PendingAction(action, taskId, taskIds, dueDate, dueTime, rawText, createdAt, Map.copyOf(versions));
+    }
 
     public PendingAction {
+        if (expectedVersions == null) expectedVersions = Map.of();
         if (taskIds == null || taskIds.isEmpty()) {
             taskIds = taskId == null ? List.of() : List.of(taskId);
         } else {

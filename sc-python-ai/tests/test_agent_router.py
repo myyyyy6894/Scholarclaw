@@ -429,13 +429,12 @@ class TestModelOutputDiagnostics:
 
         assert "内容为空" in str(exc.value)
 
-    def test_invalid_json_error_includes_raw_snippet(self) -> None:
+    def test_invalid_json_error_omits_model_output(self) -> None:
         with pytest.raises(_InvalidIntentOutput) as exc:
             _parse_model_response(_response("抱歉，我无法完成这个请求"))
 
         assert "不是合法 JSON" in str(exc.value)
-        # 原始输出要带进错误信息，否则排查只能靠猜
-        assert "抱歉" in str(exc.value)
+        assert "抱歉" not in str(exc.value)
 
 
 class TestProviderTimeoutBudget:

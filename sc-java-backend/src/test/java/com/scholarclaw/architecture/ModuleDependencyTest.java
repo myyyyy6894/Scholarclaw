@@ -49,7 +49,7 @@ class ModuleDependencyTest {
             new ModuleRule("notification", List.of("userconfig")),
             new ModuleRule("ddl", List.of("course", "userconfig", "notification")),
             new ModuleRule("knowledge", List.of("course", "userconfig", "notification")),
-            new ModuleRule("agent", List.of("ddl", "knowledge", "course", "userconfig", "notification")),
+            new ModuleRule("agent", List.of("ddl", "knowledge", "course", "userconfig", "notification", "schedule")),
             new ModuleRule("channel", List.of("agent", "knowledge", "userconfig")),
             new ModuleRule("scheduler", List.of("ddl", "knowledge", "course", "userconfig", "schedule"))
     );

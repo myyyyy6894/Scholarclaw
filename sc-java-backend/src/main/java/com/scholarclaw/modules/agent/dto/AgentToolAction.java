@@ -7,6 +7,9 @@ package com.scholarclaw.modules.agent.dto;
  * 编排层只返回明确指引，**不伪造执行结果**。
  */
 public enum AgentToolAction {
+    SCHEDULE_QUERY,
+    REMINDER_GET,
+    REMINDER_SET,
     DDL_EXTRACT,
     TASK_LIST,
     TASK_QUERY,

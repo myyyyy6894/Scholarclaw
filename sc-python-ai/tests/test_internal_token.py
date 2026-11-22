@@ -88,7 +88,7 @@ def test_registered_internal_routes_are_exactly_the_expected_set() -> None:
     assert paths == {HEALTH_PATH, "/internal/ai/v1/model/probe",
                      "/internal/ai/v1/rag/vectors", "/internal/ai/v1/rag/collections",
                      "/internal/ai/v1/rag/qa-stream",
-                     "/internal/ai/v1/agent/route-and-extract",
+                     "/internal/ai/v1/agent/route-and-extract", "/internal/ai/v1/agent/interpret",
                      "/internal/ai/v1/schedule/extract-text", "/internal/ai/v1/schedule/extract-image",
                      "/internal/ai/v1/schedule/extract-file", "/internal/ai/v1/schedule/assist-file"}
 

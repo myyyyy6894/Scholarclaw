@@ -32,9 +32,11 @@ public class PendingActionStore {
         this.objectMapper = objectMapper;
     }
 
-    public void save(Long userId, PendingAction action) {
+    public void save(Long userId, PendingAction action) { save(userId, null, action); }
+
+    void save(Long userId, String scope, PendingAction action) {
         try {
-            redisTemplate.opsForValue().set(key(userId),
+            redisTemplate.opsForValue().set(key(userId, scope),
                     objectMapper.writeValueAsString(action), TTL);
         } catch (RuntimeException | JsonProcessingException e) {
             log.error("待确认动作暂存失败 userId={}", userId);
@@ -43,15 +45,17 @@ public class PendingActionStore {
         }
     }
 
-    public Optional<PendingAction> load(Long userId) {
+    public Optional<PendingAction> load(Long userId) { return load(userId, null); }
+
+    Optional<PendingAction> load(Long userId, String scope) {
         try {
-            String json = redisTemplate.opsForValue().get(key(userId));
+            String json = redisTemplate.opsForValue().get(key(userId, scope));
             if (json == null || json.isBlank()) {
                 return Optional.empty();
             }
             return Optional.of(objectMapper.readValue(json, PendingAction.class));
         } catch (JsonProcessingException e) {
-            clear(userId);
+            clear(userId, scope);
             return Optional.empty();
         } catch (RuntimeException e) {
             log.warn("待确认动作读取失败 userId={}", userId);
@@ -59,12 +63,18 @@ public class PendingActionStore {
         }
     }
 
-    public void clear(Long userId) {
+    public void clear(Long userId) { clear(userId, null); }
+
+    void clear(Long userId, String scope) {
         try {
-            redisTemplate.delete(key(userId));
+            redisTemplate.delete(key(userId, scope));
         } catch (RuntimeException e) {
             log.warn("待确认动作清除失败 userId={}", userId);
         }
+    }
+
+    private static String key(Long userId, String scope) {
+        return scope == null ? key(userId) : scope + ":slash_action";
     }
 
     static String key(Long userId) {

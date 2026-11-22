@@ -48,6 +48,11 @@ public class ScheduleService {
     }
 
     @Transactional(readOnly = true)
+    public java.util.Optional<TermView> activeTerm(long userId) {
+        return repository.activeTerm(userId).map(ScheduleService::termView);
+    }
+
+    @Transactional(readOnly = true)
     public List<TermView> terms(long userId) {
         return repository.terms(userId).stream().map(ScheduleService::termView).toList();
     }

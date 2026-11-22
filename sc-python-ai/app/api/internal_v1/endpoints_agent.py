@@ -19,10 +19,11 @@ from fastapi import APIRouter, Depends
 from app.core.config import get_settings
 from app.core.exceptions import AiErrorCode, NonRetryableAiError
 from app.core.security import require_internal_identity
-from app.schemas.agent_route import AgentIntent, RouteAndExtractData
+from app.schemas.agent_route import AgentIntent, NaturalRouteData, NaturalRouteRequest, RouteAndExtractData
 from app.schemas.common import InternalResponse
 from app.schemas.ddl_extract import DdlExtractRequest, ExtractionMode
 from app.services.agent.router import SingleAgentRouter
+from app.services.agent.natural_router import route_natural
 from app.services.ddl.extractor import (
     DdlExtractionRequest,
     DdlExtractor,
@@ -100,3 +101,13 @@ async def route_and_extract(
         ),
         message="Routing completed",
     )
+
+
+@router.post("/agent/interpret", response_model=InternalResponse[NaturalRouteData])
+async def interpret(
+    body: NaturalRouteRequest,
+    header_user_id: Annotated[str, Depends(require_internal_identity)],
+) -> InternalResponse[NaturalRouteData]:
+    if body.user_id != header_user_id:
+        raise NonRetryableAiError(AiErrorCode.VALIDATION_ERROR, "请求体用户与调用身份不一致。")
+    return InternalResponse.ok(await route_natural(get_settings(), body))

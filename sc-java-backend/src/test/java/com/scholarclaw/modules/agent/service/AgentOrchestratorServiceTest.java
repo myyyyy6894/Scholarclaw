@@ -85,7 +85,7 @@ class AgentOrchestratorServiceTest {
         service = new AgentOrchestratorService(new SlashCommandRouter(),
                 pendingIntentStore, pendingActionStore, pythonClient, userConfigResolver,
                 courseService, ddlTaskService, ddlExtractionService,
-                new NaturalTaskIntentParser());
+                new NaturalTaskIntentParser(), null);
 
         when(userConfigResolver.resolve(USER_ID))
                 .thenReturn(new ResolvedUser(new UserConfigEntity(), "Asia/Shanghai", ZONE));

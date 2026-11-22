@@ -291,24 +291,16 @@ def _parse_model_response(response: dict[str, Any]) -> _ModelIntentOutput:
         content = extract_chat_content(response)
     except ChatResponseError as exc:
         if exc.code == "empty_content":
-            raw = exc.raw_content
-            detail = _snippet(raw) if isinstance(raw, str) else type(raw).__name__
-            raise _InvalidIntentOutput(f"模型响应内容为空（raw={detail}）") from exc
+            raise _InvalidIntentOutput("模型响应内容为空") from None
         raise _InvalidIntentOutput("模型响应缺少 choices[0].message.content") from exc
     text = strip_code_fence(content)
     try:
         decoded = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise _InvalidIntentOutput(f"模型响应不是合法 JSON（raw={_snippet(text)}）") from exc
+    except json.JSONDecodeError:
+        raise _InvalidIntentOutput("模型响应不是合法 JSON") from None
     if not isinstance(decoded, dict):
         raise _InvalidIntentOutput("模型响应不是 JSON 对象")
     try:
         return _ModelIntentOutput.model_validate(decoded)
     except ValidationError as exc:
         raise _InvalidIntentOutput("模型响应不符合意图契约") from exc
-
-
-def _snippet(value: str, limit: int = 200) -> str:
-    """把模型原始输出压成一行短片段，便于日志定位（不含任何密钥）。"""
-    text = " ".join(str(value).split())
-    return text[:limit] + ("…" if len(text) > limit else "")

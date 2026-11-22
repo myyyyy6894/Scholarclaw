@@ -34,6 +34,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -205,6 +206,79 @@ public class DdlTaskService {
                 .map(DdlTaskDraft::toVO)
                 .toList();
         return new DdlTaskBoardVO(pending, drafts, active, completed);
+    }
+
+    /** Bounded title/course search for the assistant; no change drafts or raw chat are inspected. */
+    @Transactional(readOnly = true)
+    public List<DdlTaskVO> searchForAssistant(Long userId, String hint, boolean includeCompleted) {
+        UserContext user = resolveUserContext(userId);
+        List<String> statuses = new ArrayList<>(List.of(TaskStatus.PENDING_TIME.name(),
+                TaskStatus.PENDING_CONFIRM.name(), TaskStatus.ACTIVE.name(), TaskStatus.OVERDUE.name()));
+        if (includeCompleted) statuses.add(TaskStatus.COMPLETED.name());
+        String term = hint == null ? "" : hint.strip();
+        if (term.length() > 120 || term.contains("%") || term.contains("_") || term.contains("\\")) {
+            return List.of();
+        }
+        return queryTasks(userId, null, statuses, query -> {
+            if (!term.isBlank()) query.and(match -> match.like(DdlTaskEntity::getTaskTitle, term)
+                    .or().like(DdlTaskEntity::getCourseName, term));
+            query.orderByAsc(DdlTaskEntity::getDueAt).orderByAsc(DdlTaskEntity::getTaskId);
+        }, 7, user.zoneId());
+    }
+
+    /** Lock the whole slash-command batch before checking the versions the user saw. */
+    @Transactional(rollbackFor = Exception.class)
+    public void requireAssistantVersions(Long userId, List<Long> requested, Map<String, OffsetDateTime> versions) {
+        List<Long> ids = requireDistinctTaskIds(requested);
+        lockCourseRows(userId, readTasksForBatch(userId, ids));
+        for (Long id : ids.stream().sorted().toList()) {
+            DdlTaskEntity task = lockOwnedTask(userId, id);
+            var expected = versions.get(id.toString());
+            if (expected == null || !expected.equals(ScTimeZone.toOffsetDateTime(task.getUpdatedAt()))) {
+                throw new BusinessException(ErrorCode.STATE_CONFLICT, "任务在校对后已变化，请重新提出操作。");
+            }
+        }
+    }
+
+    public enum AssistantTaskChange { RESCHEDULE, DONE, CANCEL, CONFIRM }
+
+    /** Recheck the owned task's version under the existing course→task lock order. */
+    @Transactional(rollbackFor = Exception.class)
+    public DdlTaskVO applyAssistantChange(Long userId, Long taskId, OffsetDateTime expectedVersion,
+                                          AssistantTaskChange change, LocalDate date, LocalTime time) {
+        UserContext user = resolveUserContext(userId);
+        CourseRef course = null;
+        if (change == AssistantTaskChange.RESCHEDULE || change == AssistantTaskChange.CONFIRM) {
+            var snapshots = readTasksForBatch(userId, List.of(taskId));
+            course = batchCourse(userId, snapshots.getFirst(), lockCourseRows(userId, snapshots));
+        }
+        DdlTaskEntity task = lockOwnedTask(userId, taskId);
+        if (expectedVersion == null || !expectedVersion.equals(ScTimeZone.toOffsetDateTime(task.getUpdatedAt()))) {
+            throw new BusinessException(ErrorCode.STATE_CONFLICT, "任务在校对后已变化，请重新提出操作。");
+        }
+        if (TaskStatus.COMPLETED.name().equals(task.getStatus())) {
+            throw new BusinessException(ErrorCode.STATE_CONFLICT, "任务已完成，请从工作台检查。");
+        }
+        return switch (change) {
+            case DONE -> applyCompletion(userId, task, true, ScTimeZone.now().toLocalDateTime(), user.zoneId());
+            case CANCEL -> {
+                applyCancel(userId, task, ScTimeZone.now().toLocalDateTime(), false);
+                yield null;
+            }
+            case RESCHEDULE -> {
+                if (date == null || time == null) throw new BusinessException(ErrorCode.VALIDATION_ERROR, "请填写明确的新截止时间。");
+                yield updateTask(userId, taskId, sameTimeRequest(task, course, date, time));
+            }
+            case CONFIRM -> {
+                if (task.getDueDate() == null) {
+                    throw new BusinessException(ErrorCode.VALIDATION_ERROR, "请先为待确认任务补齐截止时间。");
+                }
+                var request = new UpdateDdlTaskRequest(course.courseId() == null ? null : course.courseId().toString(),
+                        course.courseName(), task.getTaskTitle(), task.getTimePrecision(), task.getDueDate().toString(),
+                        task.getDueTime() == null ? null : task.getDueTime().toString(), task.getDeliverableFormat(), task.getSubmissionChannel());
+                yield confirmTask(userId, taskId, request);
+            }
+        };
     }
 
     /**

@@ -35,6 +35,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -87,6 +88,7 @@ public class AgentOrchestratorService {
     private final DdlTaskService ddlTaskService;
     private final DdlExtractionService ddlExtractionService;
     private final NaturalTaskIntentParser naturalTaskIntentParser;
+    private final QqNaturalLanguageService qqNatural;
 
     public AgentOrchestratorService(SlashCommandRouter slashCommandRouter,
                                     PendingIntentStore pendingIntentStore,
@@ -96,7 +98,8 @@ public class AgentOrchestratorService {
                                     CourseService courseService,
                                     DdlTaskService ddlTaskService,
                                     DdlExtractionService ddlExtractionService,
-                                    NaturalTaskIntentParser naturalTaskIntentParser) {
+                                    NaturalTaskIntentParser naturalTaskIntentParser,
+                                    QqNaturalLanguageService qqNatural) {
         this.slashCommandRouter = slashCommandRouter;
         this.pendingIntentStore = pendingIntentStore;
         this.pendingActionStore = pendingActionStore;
@@ -106,10 +109,19 @@ public class AgentOrchestratorService {
         this.ddlTaskService = ddlTaskService;
         this.ddlExtractionService = ddlExtractionService;
         this.naturalTaskIntentParser = naturalTaskIntentParser;
+        this.qqNatural = qqNatural;
     }
 
     /** 处理一条入站文本消息；不做 IM 发送，只返回结构化结果与回复文案。 */
     public AgentReply handle(AgentInboundMessage message) {
+        if (message.qqSession() != null) {
+            requireText(message.sourceMsgId(), "sourceMsgId");
+            return qqNatural.once(message, () -> handleCore(message));
+        }
+        return handleCore(message);
+    }
+
+    private AgentReply handleCore(AgentInboundMessage message) {
         Long userId = message.userId();
         if (userId == null) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "userId 不能为空。");
@@ -119,7 +131,14 @@ public class AgentOrchestratorService {
         String sourceMsgId = requireText(message.sourceMsgId(), "sourceMsgId");
         ResolvedUser user = userConfigResolver.resolve(userId);
 
-        AgentReply pendingReply = handlePendingContexts(userId, rawText);
+        String scope = null;
+        if (message.qqSession() != null) {
+            QqConfirmedWriteService.requireBinding(message, user.config());
+            scope = QqConversationStore.scope(message);
+            AgentReply current = qqNatural.continueTurn(message, user);
+            if (current != null) return current;
+        }
+        AgentReply pendingReply = handlePendingContexts(userId, rawText, message, scope);
         if (pendingReply != null) {
             return pendingReply;
         }
@@ -127,11 +146,20 @@ public class AgentOrchestratorService {
         try {
             Optional<AgentCommand> command = slashCommandRouter.parse(rawText);
             if (command.isPresent()) {
-                return executeCommand(userId, platform, sourceMsgId, message, command.get());
+                return executeCommand(userId, platform, sourceMsgId, message, command.get(), scope);
             }
         } catch (AgentCommandException e) {
             return reply(AgentIntent.CHITCHAT_HELP, BigDecimal.ONE, AgentToolAction.CLARIFY,
                     e.getMessage(), null, null, false);
+        }
+
+        if (scope != null) {
+            var decision = qqNatural.classify(message, user);
+            if (decision.action() == QqNaturalRoute.Action.DDL_EXTRACT) {
+                return handleDdlExtraction(userId, platform, sourceMsgId, rawText, message.courseId(),
+                        message.referenceTime(), false, decision.confidence());
+            }
+            return qqNatural.execute(message, user, decision);
         }
 
         RouteDecision route = classify(userId, user, rawText, message);
@@ -158,23 +186,29 @@ public class AgentOrchestratorService {
         };
     }
 
-    private AgentReply handlePendingContexts(Long userId, String rawText) {
-        Optional<PendingAction> action = pendingActionStore.load(userId);
+    private AgentReply handlePendingContexts(Long userId, String rawText, AgentInboundMessage message, String scope) {
+        Optional<PendingAction> action = scope == null ? pendingActionStore.load(userId) : pendingActionStore.load(userId, scope);
         if (action.isPresent()) {
             if (matchesAny(rawText, CONFIRM_REPLIES)) {
-                pendingActionStore.clear(userId);
-                return executePendingAction(userId, action.get());
+                clearPendingAction(userId, scope);
+                if (scope == null) return executePendingAction(userId, action.get());
+                return qqNatural.verifiedLegacyWrite(message, () -> {
+                    var pending = action.get();
+                    ddlTaskService.requireAssistantVersions(userId, pending.taskIds(), pending.expectedVersions());
+                    return executePendingAction(userId, pending);
+                });
             }
             if (matchesAny(rawText, CANCEL_REPLIES)) {
-                pendingActionStore.clear(userId);
+                clearPendingAction(userId, scope);
                 return reply(AgentIntent.TASK_MANAGE, BigDecimal.ONE, AgentToolAction.IGNORE,
                         "已放弃本次待确认操作。", null, null, false);
             }
             // 未确认动作**不允许跨无关消息保留**：用户先发“/list”或查询 T103 后再说“确认”，
             // 不能把之前的删除/批量动作重新执行。这里在进入正常路由前清除。
-            pendingActionStore.clear(userId);
+            clearPendingAction(userId, scope);
         }
 
+        if (scope != null) return null;
         Optional<PendingIntent> pending = pendingIntentStore.load(userId);
         if (pending.isPresent()) {
             String choice = rawText.trim();
@@ -202,16 +236,23 @@ public class AgentOrchestratorService {
         return null;
     }
 
+    private void clearPendingAction(Long userId, String scope) {
+        if (scope == null) pendingActionStore.clear(userId);
+        else pendingActionStore.clear(userId, scope);
+    }
+
     private AgentReply executeCommand(Long userId, String platform, String sourceMsgId,
-                                      AgentInboundMessage message, AgentCommand command) {
+                                      AgentInboundMessage message, AgentCommand command, String scope) {
         return switch (command.kind()) {
             case DDL -> handleDdlExtraction(userId, platform, sourceMsgId, command.argument(),
                     message.courseId(), message.referenceTime(), message.forceCreate(),
                     BigDecimal.ONE);
             case LIST -> listTasks(userId, command.argument(), message.courseId(),
                     BigDecimal.ONE);
-            case DONE, CONFIRM, EDIT -> executeTaskCommand(userId, command,
-                    message.rawText(), BigDecimal.ONE);
+            case DONE, CONFIRM, EDIT -> scope == null
+                    ? executeTaskCommand(userId, command, message.rawText(), BigDecimal.ONE, null)
+                    : qqNatural.verifiedLegacyWrite(message,
+                            () -> executeTaskCommand(userId, command, message.rawText(), BigDecimal.ONE, scope));
             case KB -> reply(AgentIntent.KB_QA, BigDecimal.ONE, AgentToolAction.KB_QA_GUIDE,
                     "请在 Web 工作台【课程问答】中选择课程提问；QQ 文本通道暂未接入 RAG 流式回答。",
                     null, null, false);
@@ -222,7 +263,7 @@ public class AgentOrchestratorService {
      * 斜杠任务指令的批量边界：多任务写操作必须先二次确认，确认后整批执行或整批零执行。
      */
     private AgentReply executeTaskCommand(Long userId, AgentCommand command, String rawText,
-                                          BigDecimal confidence) {
+                                          BigDecimal confidence, String scope) {
         List<Long> taskIds = command.taskIds();
         if (taskIds.isEmpty()) {
             return reply(AgentIntent.TASK_MANAGE, confidence, AgentToolAction.CLARIFY,
@@ -235,7 +276,7 @@ public class AgentOrchestratorService {
         };
         if (taskIds.size() > 1) {
             return saveBatchPending(userId, taskIds, action, command.dueDate(),
-                    command.dueTime(), rawText, confidence);
+                    command.dueTime(), rawText, confidence, scope);
         }
         return switch (command.kind()) {
             case DONE -> executeDone(userId, taskIds.getFirst(), confidence,
@@ -253,13 +294,24 @@ public class AgentOrchestratorService {
     private AgentReply saveBatchPending(Long userId, List<Long> taskIds, AgentToolAction action,
                                         LocalDate dueDate, LocalTime dueTime, String rawText,
                                         BigDecimal confidence) {
+        return saveBatchPending(userId, taskIds, action, dueDate, dueTime, rawText, confidence, null);
+    }
+
+    private AgentReply saveBatchPending(Long userId, List<Long> taskIds, AgentToolAction action,
+                                        LocalDate dueDate, LocalTime dueTime, String rawText,
+                                        BigDecimal confidence, String scope) {
         PendingAction pending = switch (action) {
             case TASK_DONE -> PendingAction.done(taskIds, rawText, ScTimeZone.now().toString());
             case TASK_CANCEL -> PendingAction.cancel(taskIds, rawText, ScTimeZone.now().toString());
             default -> PendingAction.update(taskIds, action, dueDate, dueTime, rawText,
                     ScTimeZone.now().toString());
         };
-        pendingActionStore.save(userId, pending);
+        if (scope == null) pendingActionStore.save(userId, pending);
+        else {
+            var versions = new HashMap<String, java.time.OffsetDateTime>();
+            for (Long id : taskIds) versions.put(id.toString(), ddlTaskService.getTask(userId, id).updatedAt());
+            pendingActionStore.save(userId, scope, pending.withVersions(versions));
+        }
         String codes = taskIds.stream().map(id -> "#T" + id)
                 .collect(java.util.stream.Collectors.joining("、"));
         String text = switch (action) {

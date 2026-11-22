@@ -32,15 +32,6 @@ public class QqBotSender implements OfficialBotSender {
         this.apiClient = apiClient;
     }
 
-    /** 用户是否配置了自己的官方机器人（用于出站通道选择）。 */
-    @Override
-    public boolean isConfigured(Long userId) {
-        return userConfigService.findById(userId)
-                .map(config -> "ACTIVE".equals(config.getAccountStatus())
-                        && config.getQqbotAppId() != null && config.getQqbotSecretCipher() != null)
-                .orElse(false);
-    }
-
     /** 被动回复：带 msg_id 与递增 msg_seq（单聊 60 分钟内、每条最多 4 次）。 */
     public void reply(Long userId, String appId, Long version, String openid, String messageId,
                       int msgSeq, String content) {

@@ -156,21 +156,21 @@ class DdlExtractionServiceTest {
     void imPlatformExtractionUsesPlatformIdentity() {
         stubPython(payload("操作系统原理", "提交实验二报告", "DATE_ONLY",
                 "2099-12-31", null, 0.96, false, false));
-        when(draftStore.acquireRequestLock(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_777")))
+        when(draftStore.acquireRequestLock(eq("QQ_OFFICIAL"), eq(USER_ID), eq("msg_777")))
                 .thenReturn(DdlDraftStore.RequestLock.acquired("request-token"));
-        when(draftStore.loadReceipt(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_777")))
+        when(draftStore.loadReceipt(eq("QQ_OFFICIAL"), eq(USER_ID), eq("msg_777")))
                 .thenReturn(Optional.empty());
 
-        DdlExtractVO result = service.extractForPlatform(USER_ID, "QQ_ONEBOT", "msg_777",
+        DdlExtractVO result = service.extractForPlatform(USER_ID, "QQ_OFFICIAL", "msg_777",
                 "请于2099年12月31日提交实验报告", null, "2026-10-15T11:40:00+08:00", false);
 
         assertThat(result.extractOutcome()).isEqualTo(DdlExtractOutcome.CREATED);
         DdlTaskEntity entity = capturedCreatedEntity();
-        assertThat(entity.getSourcePlatform()).isEqualTo("QQ_ONEBOT");
+        assertThat(entity.getSourcePlatform()).isEqualTo("QQ_OFFICIAL");
         assertThat(entity.getSourceMsgId()).isEqualTo("msg_777");
         assertThat(entity.getIdempotencyKey()).isEqualTo(
-                DdlIdempotencyKey.forRequest(USER_ID, "QQ_ONEBOT", "msg_777"));
-        verify(draftStore).markProcessed(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_777"), any(), anyBoolean());
+                DdlIdempotencyKey.forRequest(USER_ID, "QQ_OFFICIAL", "msg_777"));
+        verify(draftStore).markProcessed(eq("QQ_OFFICIAL"), eq(USER_ID), eq("msg_777"), any(), anyBoolean());
         verify(pythonClient).postJson(any(), any(), any(), any(Duration.class));
     }
 
@@ -179,12 +179,12 @@ class DdlExtractionServiceTest {
     void extractionReadTimeoutAllowsSlowProvider() {
         stubPython(payload("操作系统原理", "提交实验二报告", "DATE_ONLY",
                 "2099-12-31", null, 0.96, false, false));
-        when(draftStore.acquireRequestLock(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_timeout")))
+        when(draftStore.acquireRequestLock(eq("QQ_OFFICIAL"), eq(USER_ID), eq("msg_timeout")))
                 .thenReturn(DdlDraftStore.RequestLock.acquired("request-token"));
-        when(draftStore.loadReceipt(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_timeout")))
+        when(draftStore.loadReceipt(eq("QQ_OFFICIAL"), eq(USER_ID), eq("msg_timeout")))
                 .thenReturn(Optional.empty());
 
-        service.extractForPlatform(USER_ID, "QQ_ONEBOT", "msg_timeout",
+        service.extractForPlatform(USER_ID, "QQ_OFFICIAL", "msg_timeout",
                 "请于2099年12月31日提交实验报告", null, "2026-10-15T11:40:00+08:00", false);
 
         ArgumentCaptor<Duration> captor = ArgumentCaptor.forClass(Duration.class);
@@ -198,16 +198,16 @@ class DdlExtractionServiceTest {
         DdlExtractedPayload routed = DdlExtractedPayload.fromData(data(payload(
                 "操作系统原理", "提交实验二报告", "DATE_ONLY",
                 "2099-12-31", null, 0.96, false, false)));
-        when(draftStore.acquireRequestLock(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_778")))
+        when(draftStore.acquireRequestLock(eq("QQ_OFFICIAL"), eq(USER_ID), eq("msg_778")))
                 .thenReturn(DdlDraftStore.RequestLock.acquired("request-token"));
-        when(draftStore.loadReceipt(eq("QQ_ONEBOT"), eq(USER_ID), eq("msg_778")))
+        when(draftStore.loadReceipt(eq("QQ_OFFICIAL"), eq(USER_ID), eq("msg_778")))
                 .thenReturn(Optional.empty());
 
-        DdlExtractVO result = service.persistRouted(USER_ID, "QQ_ONEBOT", "msg_778",
+        DdlExtractVO result = service.persistRouted(USER_ID, "QQ_OFFICIAL", "msg_778",
                 "请于2099年12月31日提交实验报告", null, false, routed);
 
         assertThat(result.extractOutcome()).isEqualTo(DdlExtractOutcome.CREATED);
-        assertThat(capturedCreatedEntity().getSourcePlatform()).isEqualTo("QQ_ONEBOT");
+        assertThat(capturedCreatedEntity().getSourcePlatform()).isEqualTo("QQ_OFFICIAL");
         verify(pythonClient, never()).postJson(any(), any(), any(), any(Duration.class));
     }
 

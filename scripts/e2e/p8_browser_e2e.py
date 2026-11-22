@@ -3,7 +3,7 @@
 
 前置：
 1. 整栈已启动（Java/Web 为最新 P8 镜像，临时 env 已开启快速提醒调度）；
-2. 本脚本假设 OneBot Action 替身已停止，用于验证“QQ 离线时 Web 仍可用”；
+2. 测试账号使用站内通知，无需配置 QQ 机器人；
 3. 临时 venv 已安装 playwright==1.51.0，系统 Chrome 可用。
 
 用法：
@@ -24,7 +24,6 @@ import httpx
 from playwright.sync_api import sync_playwright
 
 BASE = "http://127.0.0.1"
-NAPCAT_WEBUI_URL = "http://127.0.0.1:6099"
 FAILS: list[str] = []
 
 
@@ -89,21 +88,17 @@ def find_notification(client: httpx.Client, token: str, task_id: str):
 
 
 def main() -> int:
-    global BASE, NAPCAT_WEBUI_URL
+    global BASE
     parser = argparse.ArgumentParser(description="P8 Web notification browser E2E")
     parser.add_argument("--base-url", default=BASE)
     parser.add_argument("--password", default="Passw0rd123")
     parser.add_argument("--screenshot", default="/tmp/sc_p8_notifications.png")
-    parser.add_argument("--napcat-webui-url", default=NAPCAT_WEBUI_URL,
-                        help="设置页 NapCat 入口的期望 href（构建期 VITE_NAPCAT_WEBUI_URL）")
     args = parser.parse_args()
     BASE = args.base_url.rstrip("/")
-    NAPCAT_WEBUI_URL = args.napcat_webui_url.rstrip("/")
 
     client = httpx.Client(timeout=30.0, trust_env=False)
     suffix = str(int(time.time()))[-8:]
     username = f"p8_ui_{suffix}"
-    im_uid = f"2471{suffix}"
     status, body, text = call(client, "POST", "/api/v1/auth/register", json={
         "username": username, "password": args.password, "timezone": "Asia/Shanghai"})
     if status != 201:
@@ -112,14 +107,6 @@ def main() -> int:
     token = data["access_token"]
     uid = str(data["user_id"])
     print(f"[user] {username}")
-
-    # 绑定一个不存在的 OneBot Action 地址由外部保证（QQ 离线场景）；绑定仅影响出站状态。
-    status, body, text = call(client, "PUT", "/api/v1/user/preferences", token, json={
-        "timezone": "Asia/Shanghai", "dnd_start_time": "23:30",
-        "dnd_end_time": "07:30", "bound_im_platform": "QQ_ONEBOT",
-        "bound_im_uid": im_uid,
-    })
-    check("绑定 IM 偏好", status == 200, (status, text))
 
     title = "P8 Web 通知联调任务"
     task_id = create_due_task(client, token, title)
@@ -167,14 +154,8 @@ def main() -> int:
         unread = (data_of(body) or {}).get("unread_count") if status == 200 else None
         check("全部已读后未读数为 0", unread == 0, (status, body))
 
-        # 设置页必须提供可用的 NapCat WebUI 跳转入口（构建期 VITE_NAPCAT_WEBUI_URL）。
         page.goto(BASE + "/settings", wait_until="networkidle")
-        entry = page.get_by_role("link", name="打开 NapCat 登录页")
-        entry_count = entry.count()
-        entry_href = entry.first.get_attribute("href") if entry_count else None
-        check("设置页 NapCat 登录入口存在", entry_count == 1, entry_count)
-        check("设置页 NapCat 登录入口 href 正确", entry_href == NAPCAT_WEBUI_URL,
-              entry_href)
+        check("设置页有官方 QQ 机器人区域", page.get_by_role("heading", name="QQ 提醒（自带机器人）").count() > 0)
         page.screenshot(path=args.screenshot.replace(".png", "-settings.png"),
                         full_page=True)
 

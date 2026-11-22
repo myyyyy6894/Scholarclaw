@@ -31,7 +31,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
-import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -67,7 +66,6 @@ public class UserConfigController {
      * `userconfig` 不得直接访问 `t_course_namespace`（{@code 02} §4.1 Strict DAG）。
      */
     private static final String PROBE_UPSTREAM_FAILED = "模型探测未通过，原配置保持不变。";
-    private static final Set<String> IM_PLATFORMS = Set.of("QQ_ONEBOT", "WECOM");
 
     private final UserConfigService userConfigService;
     private final AesGcmCryptoService cryptoService;
@@ -323,7 +321,7 @@ public class UserConfigController {
         return left == null ? right == null : left.trim().equals(right == null ? null : right.trim());
     }
 
-    /** `API-USER-004`：更新个人偏好与 IM 绑定（组 B 偏好列）。 */
+    /** `API-USER-004`：更新个人偏好（组 B 偏好列）。 */
     @PutMapping("/preferences")
     public Result<UserConfigVO> updatePreferences(@Valid @RequestBody PreferencesRequest request) {
         Long userId = SecurityContextUtils.requireCurrentUserId();
@@ -331,20 +329,7 @@ public class UserConfigController {
         LocalTime dndStart = parseTime(request.dndStartTime(), "dnd_start_time");
         LocalTime dndEnd = parseTime(request.dndEndTime(), "dnd_end_time");
 
-        String platform = normalizeSecret(request.boundImPlatform());
-        String imUid = normalizeSecret(request.boundImUid());
-        if ((platform == null) != (imUid == null)) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
-                    "bound_im_platform 与 bound_im_uid 必须同时为空或同时非空。");
-        }
-        if (platform != null && !IM_PLATFORMS.contains(platform.toUpperCase(Locale.ROOT))) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
-                    "bound_im_platform 取值必须为 QQ_ONEBOT 或 WECOM。");
-        }
-
-        UserConfigEntity updated = userConfigService.updatePreferences(
-                userId, request.timezone(), dndStart, dndEnd,
-                platform == null ? null : platform.toUpperCase(Locale.ROOT), imUid);
+        UserConfigEntity updated = userConfigService.updatePreferences(userId, request.timezone(), dndStart, dndEnd);
         return Result.ok("偏好设置已更新", vo(updated, null));
     }
 
@@ -511,8 +496,6 @@ public class UserConfigController {
                 entity.getTimezone(),
                 formatTime(entity.getDndStartTime()),
                 formatTime(entity.getDndEndTime()),
-                entity.getBoundImPlatform(),
-                entity.getBoundImUid(),
                 formatTimestamp(entity.getUpdatedAt(), entity.getTimezone()),
                 modelConfigRules.isChatConfigValid(entity),
                 entity.getQqbotAppId(),

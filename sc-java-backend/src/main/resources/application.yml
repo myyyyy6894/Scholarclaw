@@ -151,28 +151,9 @@ sc:
   agent:
     route-read-timeout-seconds: ${SC_AGENT_ROUTE_READ_TIMEOUT_SECONDS:60}
   # 站内通知初始出站状态（TASK-802）：关闭或未绑定 IM 时直接 FALLBACK_WEB_ONLY；
-  # 真正的令牌桶限流与发送属 TASK-804。该开关与 compose 的 SC_IM_PUSH_ENABLED 一致。
+  # 总开关同时约束官方 QQ 机器人主动投递。
   im:
     push-enabled: ${SC_IM_PUSH_ENABLED:false}
-  # OneBot 11 入站 Webhook 与 Action API（TASK-803）。
-  # access-token 同时用于 NapCat 上报鉴权与出站 Action 调用；未注入时 Webhook 失败关闭。
-  onebot:
-    base-url: ${SC_ONEBOT_BASE_URL:}
-    access-token: ${SC_ONEBOT_ACCESS_TOKEN:}
-    # 额外发送者白名单（逗号分隔 QQ 号）；为空时只要求 t_user_config 绑定 ACTIVE 用户。
-    allowed-senders: ${SC_ONEBOT_ALLOWED_SENDERS:}
-    action-timeout-ms: ${SC_ONEBOT_ACTION_TIMEOUT_MS:5000}
-    # get_file 可能把整个文件以 base64 返回，需独立放宽超时（默认 30s）。
-    file-timeout-ms: ${SC_ONEBOT_FILE_TIMEOUT_MS:30000}
-    # 文件下载 Origin 白名单（逗号分隔，如 http://127.0.0.1:8080）。
-    # 默认空：拒绝一切回环/私网文件地址；仅在 NapCat 临时文件服务与 Java 同机时显式配置。
-    # 链路本地与云元数据地址即使加入白名单也会被硬拒绝。
-    file:
-      allowed-origins: ${SC_ONEBOT_FILE_ALLOWED_ORIGINS:}
-    executor:
-      core-size: ${SC_ONEBOT_EXECUTOR_CORE_SIZE:2}
-      max-size: ${SC_ONEBOT_EXECUTOR_MAX_SIZE:4}
-      queue-capacity: ${SC_ONEBOT_EXECUTOR_QUEUE_CAPACITY:200}
   # 站内通知 IM 出站（TASK-804）：扫描 PENDING_IM / RATE_LIMITED_DELAYED。
   # SC_IM_PUSH_ENABLED=false 时调度器仍会把残留待推送记录降级为 FALLBACK_WEB_ONLY。
   notification:
@@ -183,15 +164,6 @@ sc:
       batch-size: ${SC_NOTIFICATION_OUTBOUND_BATCH_SIZE:5}
       lease-seconds: ${SC_NOTIFICATION_OUTBOUND_LEASE_SECONDS:60}
       retry-delay-seconds: ${SC_NOTIFICATION_OUTBOUND_RETRY_DELAY_SECONDS:30}
-    im:
-      rate-capacity: ${SC_IM_RATE_CAPACITY:15}
-      rate-per-minute: ${SC_IM_RATE_PER_MINUTE:10}
-      rate-key-ttl-seconds: ${SC_IM_RATE_KEY_TTL_SECONDS:120}
-      redis-degraded-wait-ms: ${SC_IM_RATE_DEGRADED_WAIT_MS:10000}
-      jitter-min-ms: ${SC_IM_JITTER_MIN_MS:1500}
-      jitter-max-ms: ${SC_IM_JITTER_MAX_MS:3500}
-      rate-delay-min-ms: ${SC_IM_RATE_DELAY_MIN_MS:5000}
-      rate-delay-max-ms: ${SC_IM_RATE_DELAY_MAX_MS:15000}
   # DDL 定时提醒（TASK-801）：T-24h / T-6h / 逾期 / 待确认跟进。
   # 调度器每轮获取 Redis sc:lock:job:ddl_reminder；提醒位由 t_ddl_task 条件更新最终防重。
   ddl:

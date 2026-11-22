@@ -118,23 +118,6 @@ public class UserConfigService {
     }
 
     /**
-     * 按外部 IM 绑定账号反查活跃用户（`API-WEBHOOK-001` 白名单映射）。
-     *
-     * <p>命中唯一索引 {@code uk_user_bound_im (bound_im_platform, bound_im_uid)}；只返回
-     * {@code account_status = 'ACTIVE'} 的用户，注销中/停用账号不得触发任何业务。
-     */
-    public Optional<UserConfigEntity> findActiveByBoundIm(String platform, String imUid) {
-        if (platform == null || platform.isBlank() || imUid == null || imUid.isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.ofNullable(userConfigMapper.selectOne(
-                Wrappers.<UserConfigEntity>lambdaQuery()
-                        .eq(UserConfigEntity::getBoundImPlatform, platform.trim())
-                        .eq(UserConfigEntity::getBoundImUid, imUid.trim())
-                        .eq(UserConfigEntity::getAccountStatus, "ACTIVE")));
-    }
-
-    /**
      * 锁定当前用户配置行（TASK-506 复核修复）。
      *
      * <p>默认模型保存与建课共用同一把用户级行锁，避免“保存时统计到 0 门课程、探测/保存期间
@@ -197,25 +180,18 @@ public class UserConfigService {
         return findById(userId).orElseThrow(() -> new BusinessException(ErrorCode.AUTH_UNAUTHORIZED));
     }
 
-    /** 更新组 B 的偏好列（时区/免打扰/IM 绑定），同样不碰组 A。 */
+    /** 更新组 B 的偏好列（时区/免打扰），同样不碰组 A。 */
     @Transactional(rollbackFor = Exception.class)
     public UserConfigEntity updatePreferences(Long userId, String timezone, java.time.LocalTime dndStart,
-                                              java.time.LocalTime dndEnd, String imPlatform, String imUid) {
+                                              java.time.LocalTime dndEnd) {
         var wrapper = Wrappers.<UserConfigEntity>lambdaUpdate()
                 .eq(UserConfigEntity::getUserId, userId)
                 .eq(UserConfigEntity::getAccountStatus, "ACTIVE")
                 .set(UserConfigEntity::getTimezone, timezone)
                 .set(UserConfigEntity::getDndStartTime, dndStart)
                 .set(UserConfigEntity::getDndEndTime, dndEnd)
-                .set(UserConfigEntity::getBoundImPlatform, imPlatform)
-                .set(UserConfigEntity::getBoundImUid, imUid)
                 .set(UserConfigEntity::getUpdatedAt, ScTimeZone.now().toLocalDateTime());
-        try {
-            requireUpdated(userConfigMapper.update(null, wrapper));
-        } catch (DuplicateKeyException e) {
-            // uk_user_bound_im 拦截：该 IM 账号已被其他用户绑定（04 §4.2.4 业务规则 2）
-            throw new BusinessException(ErrorCode.IM_ACCOUNT_ALREADY_BOUND);
-        }
+        requireUpdated(userConfigMapper.update(null, wrapper));
         return findById(userId).orElseThrow(() -> new BusinessException(
                 ErrorCode.AUTH_UNAUTHORIZED, "登录状态已失效，请重新登录。"));
     }

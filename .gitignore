@@ -73,7 +73,7 @@ yarn-error.log*
 pnpm-debug.log*
 .eslintcache
 *.tsbuildinfo
-# 由 sc-web-nginx 启动脚本在容器内生成（SC_NAPCAT_WEBUI_URL / SC_OPERATOR_QQ），不入库
+# 由 sc-web-nginx 启动脚本在容器内生成（SC_OPERATOR_QQ / SC_PROJECT_URL），不入库
 sc-web-frontend/public/runtime-config.js
 
 # ===== 运行时数据（共享卷 / 中间件数据，绝不入库）=====

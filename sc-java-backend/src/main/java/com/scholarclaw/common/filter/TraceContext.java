@@ -108,7 +108,7 @@ public final class TraceContext {
     /**
      * 认证成功后绑定真实用户 ID，覆盖入口写入的占位符（{@code 04} §6.1.2）。
      *
-     * <p>只允许在 JWT 验签通过（或 OneBot 白名单映射命中）之后调用。传入 {@code null}
+     * <p>只允许在 用户身份验证通过之后调用。传入 {@code null}
      * 表示当前请求确实无用户身份（如内部服务健康探针），写回占位符。</p>
      */
     public static void bindUserId(Long userId) {

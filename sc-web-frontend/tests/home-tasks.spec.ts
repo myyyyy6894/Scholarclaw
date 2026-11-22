@@ -24,8 +24,11 @@ describe('home task lists', () => {
     expect(UPCOMING_TASKS.some((item) => item.task === 'TASK-706')).toBe(false)
   })
 
-  it('TASK-803/804/805 已实现且不再标记为 upcoming', () => {
-    for (const task of ['TASK-803', 'TASK-804', 'TASK-805']) {
+  it('官方 QQ 接入和提醒已展示，退役任务不再进入能力清单', () => {
+    expect(IMPLEMENTED_CAPABILITIES.some((item) => item.includes('QQ 官方机器人'))).toBe(true)
+    expect(IMPLEMENTED_CAPABILITIES.some((item) => item.includes('TASK-803'))).toBe(false)
+    expect(UPCOMING_TASKS.some((item) => item.task === 'TASK-803')).toBe(false)
+    for (const task of ['TASK-804', 'TASK-805']) {
       expect(IMPLEMENTED_CAPABILITIES.some((item) => item.includes(task))).toBe(true)
       expect(UPCOMING_TASKS.some((item) => item.task === task)).toBe(false)
     }

@@ -47,8 +47,6 @@ const CONFIG: UserConfig = {
   timezone: 'Asia/Shanghai',
   dnd_start_time: '23:30:00',
   dnd_end_time: '07:30:00',
-  bound_im_platform: 'QQ_ONEBOT',
-  bound_im_uid: '24681012',
   updated_at: '2026-10-20T00:00:00.000+08:00',
 }
 
@@ -283,8 +281,6 @@ describe('preferences form', () => {
 
     expect(form.timezone).toBe('Asia/Shanghai')
     expect(form.dndStartTime).toBe('23:30:00')
-    expect(form.imPlatform).toBe('QQ_ONEBOT')
-    expect(form.imUid).toBe('24681012')
   })
 
   it('HH:mm 自动补齐为 HH:mm:ss', () => {
@@ -296,24 +292,6 @@ describe('preferences form', () => {
 
     expect(request.dnd_start_time).toBe('22:15:00')
     expect(request.dnd_end_time).toBe('06:45:00')
-  })
-
-  it('IM 平台与账号必须成对，否则抛可读错误', () => {
-    const form = createPreferencesForm(CONFIG)
-    form.imUid = ''
-
-    expect(() => toPreferencesRequest(form)).toThrow(PreferencesValidationError)
-  })
-
-  it('两者都留空表示解绑，请求中为 null', () => {
-    const form = createPreferencesForm(CONFIG)
-    form.imPlatform = ''
-    form.imUid = '   '
-
-    const request = toPreferencesRequest(form)
-
-    expect(request.bound_im_platform).toBeNull()
-    expect(request.bound_im_uid).toBeNull()
   })
 
   it('非法时间格式被拒绝', () => {

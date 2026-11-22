@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>规则：
  * <ol>
- *   <li>用户未绑定 IM / 全局 {@code SC_IM_PUSH_ENABLED=false} / 用户配置不可用 →
+ *   <li>用户未验证官方 QQ 机器人绑定 / 全局 {@code SC_IM_PUSH_ENABLED=false} / 用户配置不可用 →
  *       {@code FALLBACK_WEB_ONLY}，站内信照常落库；</li>
  *   <li>紧急提醒（仅 T-6h）→ {@code PENDING_IM}，即使处于免打扰窗口也允许推送；</li>
  *   <li>非紧急提醒处于用户夜间免打扰窗口 → {@code RATE_LIMITED_DELAYED}，
@@ -24,8 +24,6 @@ import org.springframework.stereotype.Component;
  *   <li>其余情况 → {@code PENDING_IM}，{@code scheduled_push_at = now}。</li>
  * </ol>
  *
- * <p>本轮（TASK-802）只负责把状态与计划时间写正确；真正的出站发送、令牌桶限流与失败降级
- * 属 TASK-804。处于 {@code PENDING_IM} 的记录会保留到 TASK-804 的调度器接管。
  */
 @Component
 public class NotificationOutboundPolicy {
@@ -36,31 +34,28 @@ public class NotificationOutboundPolicy {
     /** 初始判定结果；{@code scheduledPushAt} 在 {@code FALLBACK_WEB_ONLY} 时为空。 */
     public record Decision(OutboundStatus status,
                            LocalDateTime scheduledPushAt,
-                           String imErrorMsg,
-                           String targetImPlatform,
-                           String targetImUid) {
+                           String imErrorMsg) {
     }
 
     public Decision resolve(boolean imPushEnabled, UserConfigEntity config,
                             NotificationBizType bizType, LocalDateTime now) {
-        String platform = config == null ? null : trimToNull(config.getBoundImPlatform());
-        String imUid = config == null ? null : trimToNull(config.getBoundImUid());
-        boolean bound = platform != null && imUid != null;
-
         if (config == null || UserConfigService.isDeactivating(config)) {
             return new Decision(OutboundStatus.FALLBACK_WEB_ONLY, null,
-                    "用户配置不可用，仅站内信", platform, imUid);
+                    "用户配置不可用，仅站内信");
         }
         if (!imPushEnabled) {
             return new Decision(OutboundStatus.FALLBACK_WEB_ONLY, null,
-                    "IM 推送总开关关闭，仅站内信", platform, imUid);
+                    "IM 推送总开关关闭，仅站内信");
         }
-        if (!bound) {
+        if (trimToNull(config.getQqbotAppId()) == null
+                || trimToNull(config.getQqbotSecretCipher()) == null
+                || !Integer.valueOf(1).equals(config.getQqbotBindingVerified())
+                || trimToNull(config.getQqbotOpenid()) == null) {
             return new Decision(OutboundStatus.FALLBACK_WEB_ONLY, null,
-                    "未绑定 IM 账号，仅站内信", null, null);
+                    "未验证官方 QQ 机器人绑定，仅站内信");
         }
         if (bizType.urgent()) {
-            return new Decision(OutboundStatus.PENDING_IM, now, null, platform, imUid);
+            return new Decision(OutboundStatus.PENDING_IM, now, null);
         }
 
         ZoneId userZone = resolveZone(config.getTimezone());
@@ -72,9 +67,9 @@ public class NotificationOutboundPolicy {
         if (withinDnd(localNow.toLocalTime(), dndStart, dndEnd)) {
             LocalDateTime resumeUserZone = nextDndEnd(localNow, dndStart, dndEnd);
             return new Decision(OutboundStatus.RATE_LIMITED_DELAYED,
-                    toAppZone(resumeUserZone, userZone), null, platform, imUid);
+                    toAppZone(resumeUserZone, userZone), null);
         }
-        return new Decision(OutboundStatus.PENDING_IM, now, null, platform, imUid);
+        return new Decision(OutboundStatus.PENDING_IM, now, null);
     }
 
     static boolean withinDnd(LocalTime time, LocalTime start, LocalTime end) {

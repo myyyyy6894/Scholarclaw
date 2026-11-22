@@ -268,21 +268,6 @@ class CourseServiceTest {
     }
 
     @Test
-    @DisplayName("默认课程并发冲突后回查胜出线程的行")
-    void defaultCourseRecoversFromDuplicateKey() {
-        CourseNamespaceEntity winner = activeCourse(IndexStatus.ACTIVE.name(), 1);
-        winner.setCourseId(3001L);
-        winner.setIsDefault(1);
-        when(mapper.selectActiveDefaultCourse(USER_ID)).thenReturn(null, winner);
-        when(mutationService.getOrCreateDefaultWithUserLock(eq(USER_ID), any()))
-                .thenThrow(new DuplicateKeyException("uk_course_user_default"));
-
-        CourseNamespaceEntity result = service.getOrCreateDefaultCourse(USER_ID);
-
-        assertThat(result).isSameAs(winner);
-    }
-
-    @Test
     @DisplayName("课程数量只统计当前用户未删除课程")
     void countsOnlyActiveCoursesOfCurrentUser() {
         when(mapper.selectCount(any())).thenReturn(3L);

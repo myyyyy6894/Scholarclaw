@@ -1,8 +1,6 @@
 package com.scholarclaw.modules.notification.service;
 
-import com.scholarclaw.common.client.OneBotApiClient;
 import com.scholarclaw.common.im.OfficialBotSender;
-import com.scholarclaw.common.config.ScTimeZone;
 import com.scholarclaw.common.enums.OutboundStatus;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.filter.TraceContext;
@@ -27,16 +25,12 @@ import org.springframework.stereotype.Component;
  * <ol>
  *   <li>用 `scheduled_push_at` 作为 DB 租约原子领取，多实例下同一行只有一个调度器能发送；</li>
  *   <li>重新校验全局开关、用户绑定、免打扰与通知类型（创建后用户可能解绑/停用）；</li>
- *   <li>Redis 全局令牌桶（10~15 条/分）+ 1.5~3.5s 随机抖动；</li>
  *   <li>成功 → `SENT_IM`；可重试失败 → `PENDING_IM` 且 30s 后重试，最多 2 次；</li>
  *   <li>重试耗尽/不可恢复/未配置 → `FALLBACK_WEB_ONLY`，站内信永不删除。</li>
  * </ol>
  *
  * <p><b>投递语义：</b>IM 侧是“至少一次”。若进程在“已发送、未写 SENT_IM”之间崩溃，
  * 或 {@code markSent} 写入失败，租约到期后会重试并可能产生重复；站内信与业务状态不受影响。
- * 绝不先写 SENT_IM 再发送，否则会永久丢消息。OneBot 11 的 {@code send_private_msg} 没有
- * 调用方可指定的幂等键，因此**不能证明严格恰好一次**；验收口径必须按“正常路径至少一次投递
- * + 本地去重”理解。
  */
 @Component
 public class NotificationOutboundScheduler {
@@ -44,20 +38,12 @@ public class NotificationOutboundScheduler {
     private static final Logger log = LoggerFactory.getLogger(NotificationOutboundScheduler.class);
     private static final int MAX_RETRY_COUNT = 2;
     private static final int MAX_ERROR_LENGTH = 512;
-    private static final String SUPPORTED_PLATFORM = "QQ_ONEBOT";
-    private static final String FALLBACK_UNCONFIGURED =
-            "OneBot Action API 未配置，仅站内信";
-    private static final String FALLBACK_UNSUPPORTED_PLATFORM =
-            "暂不支持的 IM 平台，仅站内信";
     private static final String FALLBACK_UNKNOWN_BIZ_TYPE =
             "通知类型无法识别，仅站内信";
 
     private final NotificationLogMapper mapper;
     private final UserConfigService userConfigService;
     private final NotificationOutboundPolicy outboundPolicy;
-    private final ImRateLimiter rateLimiter;
-    private final ImPushJitter jitter;
-    private final OneBotApiClient oneBotApiClient;
     private final OfficialBotSender officialBotSender;
     private final Clock clock;
     private final boolean enabled;
@@ -69,9 +55,6 @@ public class NotificationOutboundScheduler {
     public NotificationOutboundScheduler(NotificationLogMapper mapper,
                                          UserConfigService userConfigService,
                                          NotificationOutboundPolicy outboundPolicy,
-                                         ImRateLimiter rateLimiter,
-                                         ImPushJitter jitter,
-                                         OneBotApiClient oneBotApiClient,
                                          OfficialBotSender officialBotSender,
                                          Clock clock,
                                          @Value("${sc.notification.outbound.enabled:true}")
@@ -87,9 +70,6 @@ public class NotificationOutboundScheduler {
         this.mapper = mapper;
         this.userConfigService = userConfigService;
         this.outboundPolicy = outboundPolicy;
-        this.rateLimiter = rateLimiter;
-        this.jitter = jitter;
-        this.oneBotApiClient = oneBotApiClient;
         this.officialBotSender = officialBotSender;
         this.clock = clock;
         this.enabled = enabled;
@@ -170,6 +150,12 @@ public class NotificationOutboundScheduler {
             return Outcome.SKIPPED;
         }
 
+        if (candidate.getTargetImPlatform() != null) {
+            mapper.markFallback(candidate.getNotificationId(), leaseUntil,
+                    "原提醒渠道已停用，仅站内信", now);
+            return Outcome.FALLBACK;
+        }
+
         NotificationBizType bizType;
         try {
             bizType = NotificationBizType.fromCode(candidate.getBizType());
@@ -182,14 +168,8 @@ public class NotificationOutboundScheduler {
         UserConfigEntity config = userConfigService.findById(candidate.getUserId()).orElse(null);
         NotificationOutboundPolicy.Decision decision = outboundPolicy.resolve(
                 imPushEnabled, config, bizType, now);
-        boolean official = officialBotSender.isConfigured(candidate.getUserId());
         if (decision.status() == OutboundStatus.FALLBACK_WEB_ONLY) {
-            // 用户自带官方机器人时，"没有绑定 OneBot 平台"不再是降级理由
-            if (official) {
-                return dispatchViaOfficialBot(candidate, leaseUntil, now);
-            }
-            mapper.markFallback(candidate.getNotificationId(), leaseUntil,
-                    decision.imErrorMsg(), now);
+            mapper.markFallback(candidate.getNotificationId(), leaseUntil, decision.imErrorMsg(), now);
             return Outcome.FALLBACK;
         }
         if (decision.status() == OutboundStatus.RATE_LIMITED_DELAYED) {
@@ -197,63 +177,7 @@ public class NotificationOutboundScheduler {
                     decision.scheduledPushAt(), decision.imErrorMsg(), now);
             return Outcome.DELAYED;
         }
-        if (official) {
-            // 官方机器人优先：它不依赖 bound_im_platform，也不占 OneBot 的令牌桶
-            return dispatchViaOfficialBot(candidate, leaseUntil, now);
-        }
-        if (!SUPPORTED_PLATFORM.equals(decision.targetImPlatform())) {
-            mapper.markFallback(candidate.getNotificationId(), leaseUntil,
-                    FALLBACK_UNSUPPORTED_PLATFORM, now);
-            return Outcome.FALLBACK;
-        }
-        if (decision.targetImUid() == null || decision.targetImUid().isBlank()) {
-            mapper.markFallback(candidate.getNotificationId(), leaseUntil,
-                    "目标 IM 账号为空，仅站内信", now);
-            return Outcome.FALLBACK;
-        }
-        Long targetUid = parseUidOrNull(decision.targetImUid());
-        if (targetUid == null) {
-            mapper.markFallback(candidate.getNotificationId(), leaseUntil,
-                    "目标 IM 账号格式非法，仅站内信", now);
-            return Outcome.FALLBACK;
-        }
-        if (!oneBotApiClient.isConfigured()) {
-            mapper.markFallback(candidate.getNotificationId(), leaseUntil,
-                    FALLBACK_UNCONFIGURED, now);
-            return Outcome.FALLBACK;
-        }
-
-        ImRateLimiter.AcquireResult token = rateLimiter.tryAcquire();
-        if (!token.allowed()) {
-            LocalDateTime next = now.plusNanos(token.waitMillis() * 1_000_000L)
-                    .plusNanos(jitter.randomRateDelayMillis() * 1_000_000L);
-            mapper.markRateLimited(candidate.getNotificationId(), leaseUntil, next,
-                    "IM 发送频率受限，已顺延", now);
-            return Outcome.DELAYED;
-        }
-
-        try {
-            jitter.sleepBeforeSend();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("IM 出站发送前抖动被中断 notificationId={}，本轮中止",
-                    candidate.getNotificationId());
-            return Outcome.SKIPPED;
-        }
-
-        // 发送与状态写入必须分开捕获：markSent 抛异常时消息已经送达，不能再走
-        // “发送失败 → 重试/降级”分支，否则会把已送达消息当失败重发。
-        try {
-            oneBotApiClient.sendPrivateMsg(targetUid, candidate.getContent());
-        } catch (RuntimeException e) {
-            return handleSendFailure(candidate, leaseUntil, now, e);
-        }
-        int updated = mapper.markSent(candidate.getNotificationId(), leaseUntil, now);
-        if (updated != 1) {
-            log.warn("IM 已发送但状态更新未生效，租约到期后可能重复 notificationId={}",
-                    candidate.getNotificationId());
-        }
-        return Outcome.SENT;
+        return dispatchViaOfficialBot(candidate, leaseUntil, now);
     }
 
     /**
@@ -303,14 +227,6 @@ public class NotificationOutboundScheduler {
         return Outcome.RETRIED;
     }
 
-    private static Long parseUidOrNull(String raw) {
-        if (raw == null || !raw.matches("\\d{1,19}")) {
-            return null;
-        }
-        long value = Long.parseLong(raw);
-        return value > 0 ? value : null;
-    }
-
     private static String sanitizeError(RuntimeException error) {
         String message;
         if (error instanceof BusinessException businessException) {
@@ -321,7 +237,6 @@ public class NotificationOutboundScheduler {
         } else {
             message = "IM 发送失败（" + error.getClass().getSimpleName() + "）";
         }
-        // 绝不记录请求体、响应体或令牌；异常消息由 OneBotApiClient 已脱敏。
         return message.length() <= MAX_ERROR_LENGTH
                 ? message : message.substring(0, MAX_ERROR_LENGTH - 1) + "…";
     }

@@ -58,13 +58,13 @@ class AgentPendingStoreTest {
     @DisplayName("pending_intent：键名、30 分钟 TTL、JSON 含原文")
     void savesPendingIntent() {
         intentStore.save(USER_ID, new PendingIntent("帮我看看这个", "2026-10-25T12:00:00+08:00",
-                "QQ_ONEBOT", "msg_1", "2001", "2026-10-25T12:00:00+08:00"));
+                "QQ_OFFICIAL", "msg_1", "2001", "2026-10-25T12:00:00+08:00"));
 
         ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(eq(INTENT_KEY), json.capture(), eq(Duration.ofMinutes(30)));
         assertThat(json.getValue())
                 .contains("\"raw_text\":\"帮我看看这个\"")
-                .contains("\"platform\":\"QQ_ONEBOT\"")
+                .contains("\"platform\":\"QQ_OFFICIAL\"")
                 .contains("\"source_msg_id\":\"msg_1\"");
     }
 

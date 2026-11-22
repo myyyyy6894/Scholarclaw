@@ -48,7 +48,6 @@ import org.springframework.stereotype.Service;
 public class CourseService implements UserCourseCountProvider {
 
     private static final String DEFAULT_COURSE_NAME = "未分类课程";
-    private static final String DEFAULT_DESCRIPTION = "系统自动初始化的默认未分类课件归档空间";
     private static final DateTimeFormatter TIMESTAMP_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
 
@@ -253,32 +252,6 @@ public class CourseService implements UserCourseCountProvider {
         }
         // DELETED 与 ALREADY_DELETING 都返回原结果：并发/重复删除幂等。
         return new DeleteCourseVO(courseId);
-    }
-
-    /**
-     * 默认【未分类课程】懒加载（{@code 03} §4.2.1）。
-     *
-     * <p>并发安全由 {@code uk_course_user_default} 唯一索引兜底：插入冲突后重新查询胜出线程
-     * 写入的行；绝不以“先查后插”声称并发安全。
-     */
-    public CourseNamespaceEntity getOrCreateDefaultCourse(Long userId) {
-        CourseNamespaceEntity existing = courseNamespaceMapper.selectActiveDefaultCourse(userId);
-        if (existing != null) {
-            return existing;
-        }
-        try {
-            // 不存在时才进入用户行锁：锁内重查并读取配置，与模型保存/普通建课互斥
-            return courseMutationService.getOrCreateDefaultWithUserLock(userId, config -> {
-                requireValidEmbeddingConfig(config);
-                return buildCourse(userId, DEFAULT_COURSE_NAME, DEFAULT_DESCRIPTION, 1, config);
-            });
-        } catch (DuplicateKeyException e) {
-            CourseNamespaceEntity winner = courseNamespaceMapper.selectActiveDefaultCourse(userId);
-            if (winner != null) {
-                return winner;
-            }
-            throw e;
-        }
     }
 
     /** `userconfig` 的只读端口：`API-USER-003` 的 `existing_course_count`。 */

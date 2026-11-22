@@ -9,7 +9,7 @@
  *
  * <p>子包分工：
  * <ul>
- *   <li>{@code client}：下沉的跨进程通信客户端（Python AI 引擎、OneBot）；</li>
+ *   <li>{@code client}：下沉的跨进程通信客户端（Python AI 引擎）；</li>
  *   <li>{@code config}：Jackson、时区、后续的 Redis/RabbitMQ/线程池/WebClient 配置；</li>
  *   <li>{@code enums}：跨模块共享的锁定枚举词汇表；</li>
  *   <li>{@code event}：进程内领域事件契约；</li>

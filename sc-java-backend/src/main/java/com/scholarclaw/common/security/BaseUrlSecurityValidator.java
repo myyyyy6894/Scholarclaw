@@ -50,7 +50,7 @@ public class BaseUrlSecurityValidator {
     /** 容器名与内部主机名（`04` §4.2.2）：**硬拒绝**。 */
     private static final Set<String> INTERNAL_HOSTS = Set.of(
             "mysql", "redis", "rabbitmq", "chromadb", "sc-java-backend", "sc-python-ai",
-            "sc-mysql", "sc-redis", "sc-rabbitmq", "sc-chromadb", "sc-napcat-onebot");
+            "sc-mysql", "sc-redis", "sc-rabbitmq", "sc-chromadb");
     /** 云元数据主机名（**硬拒绝**）。 */
     private static final Set<String> METADATA_HOSTS = Set.of(
             "metadata.google.internal", "metadata.tencentyun.com");

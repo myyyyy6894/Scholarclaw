@@ -129,13 +129,8 @@ class Smoke:
         # ---- 偏好校验 ----
         self.check("偏好更新", self.request("PUT", "/user/preferences", token=token, body={
             "timezone": "Asia/Shanghai", "dnd_start_time": "23:30",
-            "dnd_end_time": "07:30", "bound_im_platform": None, "bound_im_uid": None,
+            "dnd_end_time": "07:30",
         }), 200)
-
-        self.check("偏好成对校验 → 400", self.request("PUT", "/user/preferences", token=token, body={
-            "timezone": "Asia/Shanghai", "dnd_start_time": "23:30",
-            "dnd_end_time": "07:30", "bound_im_platform": "QQ_ONEBOT", "bound_im_uid": None,
-        }), 400, "VALIDATION_ERROR")
 
         self.check("非法时区 → 400", self.request("PUT", "/user/preferences", token=token, body={
             "timezone": "Mars/Olympus", "dnd_start_time": "23:30", "dnd_end_time": "07:30",

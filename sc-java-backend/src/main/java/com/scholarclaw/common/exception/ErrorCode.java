@@ -75,8 +75,6 @@ public enum ErrorCode {
     // ---------- 409 Conflict：唯一约束与状态机冲突（04 §2.3.2 第 5 类）----------
     USER_ALREADY_EXISTS("USER_ALREADY_EXISTS", HttpStatus.CONFLICT, null,
             "该用户名已被占用，请更换其他用户名。"),
-    IM_ACCOUNT_ALREADY_BOUND("IM_ACCOUNT_ALREADY_BOUND", HttpStatus.CONFLICT, null,
-            "该 IM 账号已被其他账号绑定。"),
     COURSE_NAME_DUPLICATE("COURSE_NAME_DUPLICATE", HttpStatus.CONFLICT, null,
             "已存在同名的活动课程空间，请更换课程名称。"),
     DOC_DUPLICATE_SHA256("DOC_DUPLICATE_SHA256", HttpStatus.CONFLICT, null,

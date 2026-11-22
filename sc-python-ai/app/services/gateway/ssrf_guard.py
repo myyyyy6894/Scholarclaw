@@ -39,7 +39,7 @@ HARD_DENIED_PORTS = frozenset({3306, 6379, 5672, 15672, 8000, 8080})
 HARD_DENIED_HOSTS = frozenset({
     "mysql", "redis", "rabbitmq", "chromadb",
     "sc-java-backend", "sc-python-ai",
-    "sc-mysql", "sc-redis", "sc-rabbitmq", "sc-chromadb", "sc-napcat-onebot",
+    "sc-mysql", "sc-redis", "sc-rabbitmq", "sc-chromadb",
 })
 
 #: 云元数据主机名：**硬拒绝**。

@@ -601,39 +601,6 @@ class UserConfigControllerTest {
     }
 
     @Test
-    @DisplayName("IM 绑定必须成对：只传平台不传账号返回 400")
-    void preferencesRequirePairedImBinding() throws Exception {
-        String body = mockMvc.perform(put("/api/v1/user/preferences")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"timezone":"Asia/Shanghai","dnd_start_time":"23:30",
-                                 "dnd_end_time":"07:30:00","bound_im_platform":"QQ_ONEBOT"}
-                                """))
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-
-        assertThat(body).contains("\"code\":\"VALIDATION_ERROR\"");
-        verify(userConfigService, never()).updatePreferences(anyLong(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    @DisplayName("IM 账号被其他用户占用时由唯一索引冲突映射为 409")
-    void duplicateImBindingMapsToConflict() throws Exception {
-        when(userConfigService.updatePreferences(anyLong(), any(), any(), any(), any(), any()))
-                .thenThrow(new BusinessException(ErrorCode.IM_ACCOUNT_ALREADY_BOUND));
-
-        int status = mockMvc.perform(put("/api/v1/user/preferences")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"timezone":"Asia/Shanghai","dnd_start_time":"23:30",
-                                 "dnd_end_time":"07:30:00","bound_im_platform":"QQ_ONEBOT",
-                                 "bound_im_uid":"24681012"}
-                                """))
-                .andReturn().getResponse().getStatus();
-
-        assertThat(status).isEqualTo(409);
-    }
-
-    @Test
     @DisplayName("销毁 Key 的 target 只接受 ALL/CHAT/EMBEDDING，非法值返回 400")
     void invalidDeleteTargetIsRejected() throws Exception {
         String body = mockMvc.perform(delete("/api/v1/user/model-config/keys").param("target", "BOTH"))

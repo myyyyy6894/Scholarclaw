@@ -35,8 +35,6 @@ public record UserConfigVO(
         String timezone,
         String dndStartTime,
         String dndEndTime,
-        String boundImPlatform,
-        String boundImUid,
         String updatedAt,
         boolean hasByokConfig,
         /** 用户自带的 QQ 官方机器人 AppID（未配置为 null）。 */

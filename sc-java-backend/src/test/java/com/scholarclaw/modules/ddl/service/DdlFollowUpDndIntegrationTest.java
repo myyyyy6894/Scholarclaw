@@ -11,15 +11,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.scholarclaw.common.client.OneBotApiClient;
 import com.scholarclaw.common.im.OfficialBotSender;
 import com.scholarclaw.common.enums.OutboundStatus;
 import com.scholarclaw.modules.ddl.entity.DdlTaskEntity;
 import com.scholarclaw.modules.ddl.mapper.DdlTaskMapper;
 import com.scholarclaw.modules.notification.entity.NotificationLogEntity;
 import com.scholarclaw.modules.notification.mapper.NotificationLogMapper;
-import com.scholarclaw.modules.notification.service.ImPushJitter;
-import com.scholarclaw.modules.notification.service.ImRateLimiter;
 import com.scholarclaw.modules.notification.service.NotificationOutboundPolicy;
 import com.scholarclaw.modules.notification.service.NotificationOutboundScheduler;
 import com.scholarclaw.modules.notification.service.NotificationService;
@@ -56,8 +53,7 @@ class DdlFollowUpDndIntegrationTest {
     private NotificationService notificationService;
     private DdlReminderClaimer claimer;
     private NotificationOutboundScheduler outboundScheduler;
-    private ImRateLimiter rateLimiter;
-    private OneBotApiClient oneBotApiClient;
+    private OfficialBotSender officialBotSender;
     private NotificationLogEntity stored;
 
     @BeforeEach
@@ -78,10 +74,8 @@ class DdlFollowUpDndIntegrationTest {
                 true);
         claimer = new DdlReminderClaimer(ddlMapper, new DdlReminderPolicy(), notificationService);
 
-        rateLimiter = mock(ImRateLimiter.class);
-        oneBotApiClient = mock(OneBotApiClient.class);
-        when(rateLimiter.tryAcquire()).thenReturn(new ImRateLimiter.AcquireResult(true, 0));
-        when(oneBotApiClient.isConfigured()).thenReturn(true);
+        officialBotSender = mock(OfficialBotSender.class);
+        when(officialBotSender.sendProactive(anyLong(), any())).thenReturn(true);
     }
 
     @Test
@@ -117,18 +111,17 @@ class DdlFollowUpDndIntegrationTest {
         NotificationOutboundScheduler atWindow = schedulerAt(DND_END);
 
         assertThat(beforeWindow.dispatchOnce().candidates()).isZero();
-        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), any());
+        verify(officialBotSender, never()).sendProactive(anyLong(), any());
 
         atWindow.dispatchOnce();
 
-        verify(oneBotApiClient).sendPrivateMsg(eq(123456L), any());
+        verify(officialBotSender).sendProactive(eq(USER_ID), any());
         verify(notificationMapper).markSent(eq(NOTIFICATION_ID), any(), eq(DND_END));
     }
 
     private NotificationOutboundScheduler schedulerAt(LocalDateTime now) {
         return new NotificationOutboundScheduler(notificationMapper, userConfigService,
-                new NotificationOutboundPolicy(), rateLimiter, mock(ImPushJitter.class),
-                oneBotApiClient, mock(OfficialBotSender.class),
+                new NotificationOutboundPolicy(), officialBotSender,
                 Clock.fixed(now.atZone(ZONE).toInstant(), ZONE),
                 true, true, 10, 60, 30);
     }
@@ -140,8 +133,10 @@ class DdlFollowUpDndIntegrationTest {
         config.setTimezone("Asia/Shanghai");
         config.setDndStartTime(LocalTime.of(23, 30));
         config.setDndEndTime(LocalTime.of(7, 30));
-        config.setBoundImPlatform("QQ_ONEBOT");
-        config.setBoundImUid("123456");
+        config.setQqbotAppId("app-id");
+        config.setQqbotSecretCipher("cipher");
+        config.setQqbotOpenid("openid");
+        config.setQqbotBindingVerified(1);
         return config;
     }
 

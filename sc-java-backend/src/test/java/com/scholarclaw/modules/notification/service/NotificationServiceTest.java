@@ -84,8 +84,8 @@ class NotificationServiceTest {
         assertThat(entity.getBizId()).isEqualTo(50001L);
         assertThat(entity.getReadStatus()).isEqualTo("UNREAD");
         assertThat(entity.getOutboundStatus()).isEqualTo(OutboundStatus.FALLBACK_WEB_ONLY.name());
-        assertThat(entity.getTargetImPlatform()).isEqualTo("QQ_ONEBOT");
-        assertThat(entity.getTargetImUid()).isEqualTo("123456");
+        assertThat(entity.getTargetImPlatform()).isNull();
+        assertThat(entity.getTargetImUid()).isNull();
         assertThat(entity.getScheduledPushAt()).isNull();
         assertThat(entity.getImErrorMsg()).contains("总开关关闭");
         assertThat(entity.getImRetryCount()).isZero();
@@ -344,8 +344,10 @@ class NotificationServiceTest {
         config.setTimezone("Asia/Shanghai");
         config.setDndStartTime(LocalTime.of(23, 30));
         config.setDndEndTime(LocalTime.of(7, 30));
-        config.setBoundImPlatform("QQ_ONEBOT");
-        config.setBoundImUid("123456");
+        config.setQqbotAppId("app-id");
+        config.setQqbotSecretCipher("cipher");
+        config.setQqbotOpenid("openid");
+        config.setQqbotBindingVerified(1);
         return config;
     }
 

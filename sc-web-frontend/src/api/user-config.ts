@@ -16,7 +16,6 @@ export type ModelProvider = ChatProvider | EmbeddingProvider
  * `API-USER-002` 的请求体表达不了；`BOTH` 仅保留在 Java → Python 内部接口中。
  */
 export type ProbeType = 'CHAT' | 'EMBEDDING'
-export type ImPlatform = 'QQ_ONEBOT' | 'WECOM'
 export type ClearKeysTarget = 'ALL' | 'CHAT' | 'EMBEDDING'
 
 export interface UserConfig {
@@ -53,8 +52,6 @@ export interface UserConfig {
   timezone: string
   dnd_start_time: string
   dnd_end_time: string
-  bound_im_platform: ImPlatform | null
-  bound_im_uid: string | null
   updated_at: string
   /** 仅 `API-USER-003` 返回；`API-USER-001` 无此字段。 */
   existing_course_count?: number
@@ -102,8 +99,6 @@ export interface PreferencesUpdateRequest {
   timezone: string
   dnd_start_time: string
   dnd_end_time: string
-  bound_im_platform: ImPlatform | null
-  bound_im_uid: string | null
 }
 
 export function getUserConfig(): Promise<UserConfig> {

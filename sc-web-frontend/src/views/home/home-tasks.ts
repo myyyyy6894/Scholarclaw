@@ -17,13 +17,13 @@ export const IMPLEMENTED_CAPABILITIES = [
   'DDL 待办工作台：通知提取、待确认收件箱、变更草案决策与任务闭环（TASK-705）',
   'Single Agent Router：斜杠指令与自然语言任务路由（TASK-706）',
   '站内通知中心：未读角标、分页查询、标记已读与 IM 失败保底（TASK-802）',
-  'OneBot 11 入站适配：私聊/群 @ 文本、单层转发、文件课件与去重（TASK-803）',
-  'IM 出站限流与降级：令牌桶、抖动、重试与仅 Web 保底（TASK-804）',
+  'QQ 官方机器人：账号验证、私聊指令与主动提醒',
+  '官方 QQ 出站：免打扰顺延、重试与站内信保底（TASK-804）',
   'DDL 定时提醒：T-24h / T-6h / 逾期 / 跟进与免打扰（TASK-801、TASK-805）',
   '统一 API client：信封解包、错误分类、401 清理会话',
   '登录态管理（Pinia）与浏览器存储封装（只存令牌，不存密钥）',
   '全局错误提示出口（Element Plus ElMessage）',
-  '生产构建已由 sc-web-nginx 容器托管，并反代 /api 与 /webhooks（TASK-104）',
+  '生产构建已由 sc-web-nginx 容器托管，并反代 /api（TASK-104）',
 ]
 
 export const UPCOMING_TASKS: UpcomingTask[] = [

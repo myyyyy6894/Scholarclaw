@@ -37,7 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 会随业务状态一起回滚，下一轮重新领取/回调，绝不出现“业务已标记但站内信丢失”。
  *
  * <p><b>本轮边界：</b>只实现初始状态判定、计划推送时间与站内信查询/已读；真正的
- * 令牌桶限流、重试与 {@code FALLBACK_WEB_ONLY} 出站降级属 TASK-804。
+ * 重试与 {@code FALLBACK_WEB_ONLY} 出站降级属 TASK-804。
  */
 @Service
 public class NotificationService {
@@ -99,8 +99,6 @@ public class NotificationService {
         entity.setContent(content);
         entity.setReadStatus("UNREAD");
         entity.setOutboundStatus(decision.status().name());
-        entity.setTargetImPlatform(decision.targetImPlatform());
-        entity.setTargetImUid(decision.targetImUid());
         entity.setImRetryCount(0);
         entity.setImErrorMsg(decision.imErrorMsg());
         entity.setScheduledPushAt(decision.scheduledPushAt());

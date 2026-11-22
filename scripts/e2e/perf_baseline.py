@@ -3,11 +3,10 @@
 
 测量（不是目标达成声明）：
 1. 普通 API 延迟（100 次 GET /courses）；
-2. OneBot Webhook ACK（NFR-PERF-01 口径：5 QPS × 100 条）；
-3. RAG 30 次 SSE：wall TTFT、`retrieval_cost_ms`、`llm_first_token_ms`（mock 模型）；
-4. 文档 enqueued_at→ready_at 延迟（3 份 20 页合成 PDF，样本很小）。
+2. RAG 30 次 SSE：wall TTFT、`retrieval_cost_ms`、`llm_first_token_ms`（mock 模型）；
+3. 文档 enqueued_at→ready_at 延迟（3 份 20 页合成 PDF，样本很小）。
 
-前置：整栈启动 + mock 模型（`--model-base-url`）与临时白名单 env；OneBot Token 从 `.env` 读取。
+前置：整栈启动 + mock 模型（`--model-base-url`）与临时白名单 env。
 用法：
     sc-python-ai/.venv/bin/python scripts/e2e/perf_baseline.py \
         --base-url http://127.0.0.1 --model-base-url http://<mock-ip>:9000/v1
@@ -20,10 +19,8 @@ import json
 import statistics
 import subprocess
 import sys
-import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import urlparse
@@ -45,7 +42,6 @@ def env_value(name: str) -> str:
 
 
 DB_PASSWORD = env_value("SC_DB_PASSWORD")
-ONEBOT_TOKEN = env_value("SC_ONEBOT_ACCESS_TOKEN")
 
 
 def pct(values: list[float], p: float) -> float:
@@ -236,51 +232,7 @@ def main() -> int:
             raise RuntimeError(f"课程列表失败 {status}")
     result["api_courses_list"] = stats(api_lat)
 
-    # 2. Webhook ACK（NFR-PERF-01 口径）
-    fake_im = "9" + uid[-8:] + "0"
-    status, body = api(client, "PUT", "/api/v1/user/preferences", token, json={
-        "timezone": "Asia/Shanghai", "dnd_start_time": "23:30", "dnd_end_time": "07:30",
-        "bound_im_platform": "QQ_ONEBOT", "bound_im_uid": fake_im})
-    if status != 200:
-        raise RuntimeError(f"绑定 IM 失败 {status} {body}")
-
-    ack_lat: list[float] = []
-    failures = 0
-    lock = threading.Lock()
-
-    def send(index: int) -> None:
-        nonlocal failures
-        target = start_time + index * 0.2
-        delay = target - time.perf_counter()
-        if delay > 0:
-            time.sleep(delay)
-        payload = {
-            "post_type": "message", "message_type": "private", "sub_type": "friend",
-            "message_id": int(time.time() * 1000) + index,
-            "user_id": int(fake_im), "raw_message": "/list",
-            "message": [{"type": "text", "data": {"text": "/list"}}],
-            "time": int(time.time()),
-        }
-        began = time.perf_counter()
-        try:
-            response = client.post(BASE + "/webhooks/onebot/v11", json=payload,
-                                   headers={"Authorization": "Bearer " + ONEBOT_TOKEN})
-            elapsed = (time.perf_counter() - began) * 1000
-            with lock:
-                if response.status_code == 200:
-                    ack_lat.append(elapsed)
-                else:
-                    failures += 1
-        except Exception:
-            with lock:
-                failures += 1
-
-    start_time = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(send, range(100)))
-    result["webhook_ack"] = {**stats(ack_lat), "failures": failures}
-
-    # 3. RAG 检索/SSE（单课程 1 份约 40 页合成 PDF）
+    # 2. RAG 检索/SSE（单课程 1 份约 40 页合成 PDF）
     pages = [f"Page {i}: two phase locking, isolation levels, and recovery "
              f"content for performance baseline page {i}." for i in range(1, 41)]
     doc = upload(client, token, course, "perf-rag.pdf", pages)
@@ -303,7 +255,7 @@ def main() -> int:
                                      if r.get("llm_first_token_ms") is not None]),
     }
 
-    # 4. 解析延迟（3 份 20 页合成 PDF；小样本）
+    # 3. 解析延迟（3 份 20 页合成 PDF；小样本）
     ingest_lat = []
     for index in range(3):
         doc_i = upload(client, token, course, f"perf-ingest-{index}.pdf",

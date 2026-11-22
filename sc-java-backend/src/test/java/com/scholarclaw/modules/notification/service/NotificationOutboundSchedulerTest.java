@@ -13,7 +13,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.scholarclaw.common.client.OneBotApiClient;
 import com.scholarclaw.common.im.OfficialBotSender;
 import com.scholarclaw.common.enums.OutboundStatus;
 import com.scholarclaw.common.exception.BusinessException;
@@ -32,7 +31,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.annotation.Scheduled;
 
-/** TASK-804 出站调度：租约领取、令牌桶、抖动、重试与 FALLBACK_WEB_ONLY。 */
+/** TASK-804 出站调度：租约领取、官方 QQ 投递、重试与 FALLBACK_WEB_ONLY。 */
 class NotificationOutboundSchedulerTest {
 
     private static final long USER_ID = 10001L;
@@ -45,9 +44,7 @@ class NotificationOutboundSchedulerTest {
     private NotificationLogMapper mapper;
     private UserConfigService userConfigService;
     private NotificationOutboundPolicy policy;
-    private ImRateLimiter rateLimiter;
-    private ImPushJitter jitter;
-    private OneBotApiClient oneBotApiClient;
+    private OfficialBotSender officialBotSender;
     private NotificationOutboundScheduler scheduler;
 
     @BeforeEach
@@ -55,20 +52,16 @@ class NotificationOutboundSchedulerTest {
         mapper = mock(NotificationLogMapper.class);
         userConfigService = mock(UserConfigService.class);
         policy = mock(NotificationOutboundPolicy.class);
-        rateLimiter = mock(ImRateLimiter.class);
-        jitter = mock(ImPushJitter.class);
-        oneBotApiClient = mock(OneBotApiClient.class);
+        officialBotSender = mock(OfficialBotSender.class);
         scheduler = new NotificationOutboundScheduler(mapper, userConfigService, policy,
-                rateLimiter, jitter, oneBotApiClient, mock(OfficialBotSender.class),
+                officialBotSender,
                 CLOCK, true, true, 10, 60, 30);
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(new UserConfigEntity()));
         when(mapper.selectOutboundCandidates(NOW, 10))
                 .thenReturn(List.of(candidate(NOTIFICATION_ID, "DDL_T24H", 0)));
         when(mapper.claimOutbound(NOTIFICATION_ID, NOW, LEASE, NOW)).thenReturn(1);
         when(policy.resolve(anyBoolean(), any(), any(), any())).thenReturn(pending());
-        when(rateLimiter.tryAcquire())
-                .thenReturn(new ImRateLimiter.AcquireResult(true, 0));
-        when(oneBotApiClient.isConfigured()).thenReturn(true);
+        when(officialBotSender.sendProactive(anyLong(), anyString())).thenReturn(true);
     }
 
     @Test
@@ -78,7 +71,7 @@ class NotificationOutboundSchedulerTest {
 
         assertThat(summary.candidates()).isEqualTo(1);
         assertThat(summary.sent()).isEqualTo(1);
-        verify(oneBotApiClient).sendPrivateMsg(24681012L, "提醒正文");
+        verify(officialBotSender).sendProactive(USER_ID, "提醒正文");
         verify(mapper).markSent(NOTIFICATION_ID, LEASE, NOW);
     }
 
@@ -90,7 +83,7 @@ class NotificationOutboundSchedulerTest {
         NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
 
         assertThat(summary.sent()).isZero();
-        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), anyString());
+        verify(officialBotSender, never()).sendProactive(anyLong(), anyString());
     }
 
     @Test
@@ -98,13 +91,13 @@ class NotificationOutboundSchedulerTest {
     void fallsBackWhenPolicySaysSo() {
         when(policy.resolve(anyBoolean(), any(), any(), any())).thenReturn(
                 new NotificationOutboundPolicy.Decision(OutboundStatus.FALLBACK_WEB_ONLY,
-                        null, "未绑定 IM 账号，仅站内信", null, null));
+                        null, "未绑定 IM 账号，仅站内信"));
 
         NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
 
         assertThat(summary.fallback()).isEqualTo(1);
         verify(mapper).markFallback(NOTIFICATION_ID, LEASE, "未绑定 IM 账号，仅站内信", NOW);
-        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), anyString());
+        verify(officialBotSender, never()).sendProactive(anyLong(), anyString());
     }
 
     @Test
@@ -113,74 +106,40 @@ class NotificationOutboundSchedulerTest {
         LocalDateTime resume = NOW.plusHours(8);
         when(policy.resolve(anyBoolean(), any(), any(), any())).thenReturn(
                 new NotificationOutboundPolicy.Decision(OutboundStatus.RATE_LIMITED_DELAYED,
-                        resume, null, "QQ_ONEBOT", "24681012"));
+                        resume, null));
 
         NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
 
         assertThat(summary.delayed()).isEqualTo(1);
         verify(mapper).markRateLimited(NOTIFICATION_ID, LEASE, resume, null, NOW);
-        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), anyString());
+        verify(officialBotSender, never()).sendProactive(anyLong(), anyString());
     }
 
     @Test
-    @DisplayName("令牌桶拒绝：顺延到等待时间 + 5~15s 抖动")
-    void delaysWhenRateLimited() {
-        when(rateLimiter.tryAcquire())
-                .thenReturn(new ImRateLimiter.AcquireResult(false, 6000));
-        when(jitter.randomRateDelayMillis()).thenReturn(5000L);
+    void retiredChannelDoesNotRerouteQueuedNotifications() {
+        NotificationLogEntity queued = candidate(NOTIFICATION_ID, "DDL_T24H", 0);
+        queued.setTargetImPlatform("retired-channel");
+        when(mapper.selectOutboundCandidates(NOW, 10)).thenReturn(List.of(queued));
 
-        NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
-
-        assertThat(summary.delayed()).isEqualTo(1);
-        verify(mapper).markRateLimited(eq(NOTIFICATION_ID), eq(LEASE),
-                eq(NOW.plusSeconds(11)), anyString(), eq(NOW));
-        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), anyString());
+        assertThat(scheduler.dispatchOnce().fallback()).isEqualTo(1);
+        verify(officialBotSender, never()).sendProactive(anyLong(), anyString());
     }
 
     @Test
-    @DisplayName("OneBot 未配置：直接降级，不消耗令牌、不抖动")
-    void fallsBackWhenOneBotUnconfigured() {
-        when(oneBotApiClient.isConfigured()).thenReturn(false);
+    void fallsBackWhenOfficialBotCannotDeliver() {
+        when(officialBotSender.sendProactive(USER_ID, "提醒正文")).thenReturn(false);
 
-        NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
-
-        assertThat(summary.fallback()).isEqualTo(1);
-        verify(rateLimiter, never()).tryAcquire();
+        assertThat(scheduler.dispatchOnce().fallback()).isEqualTo(1);
         verify(mapper).markFallback(eq(NOTIFICATION_ID), eq(LEASE), anyString(), eq(NOW));
-    }
-
-    @Test
-    @DisplayName("不支持的 IM 平台：FALLBACK_WEB_ONLY")
-    void fallsBackForUnsupportedPlatform() {
-        when(policy.resolve(anyBoolean(), any(), any(), any())).thenReturn(
-                new NotificationOutboundPolicy.Decision(OutboundStatus.PENDING_IM, NOW,
-                        null, "WECOM", "123456"));
-
-        scheduler.dispatchOnce();
-
-        verify(mapper).markFallback(eq(NOTIFICATION_ID), eq(LEASE), anyString(), eq(NOW));
-        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), anyString());
-    }
-
-    @Test
-    @DisplayName("目标 QQ 格式非法：FALLBACK_WEB_ONLY")
-    void fallsBackForInvalidTargetUid() {
-        when(policy.resolve(anyBoolean(), any(), any(), any())).thenReturn(
-                new NotificationOutboundPolicy.Decision(OutboundStatus.PENDING_IM, NOW,
-                        null, "QQ_ONEBOT", "not-a-number"));
-
-        scheduler.dispatchOnce();
-
-        verify(mapper).markFallback(eq(NOTIFICATION_ID), eq(LEASE), anyString(), eq(NOW));
-        verify(oneBotApiClient, never()).sendPrivateMsg(anyLong(), anyString());
+        verify(mapper, never()).markSent(anyLong(), any(), any());
     }
 
     @Test
     @DisplayName("首次发送失败：PENDING_IM 重试，计数 +1，30s 后重试")
     void retriesFirstFailure() {
         doThrow(new BusinessException(ErrorCode.INTERNAL_ERROR,
-                "OneBot 回复发送失败，请稍后在 Web 工作台操作。"))
-                .when(oneBotApiClient).sendPrivateMsg(anyLong(), anyString());
+                "官方机器人发送失败，请稍后在 Web 工作台操作。"))
+                .when(officialBotSender).sendProactive(anyLong(), anyString());
 
         NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
 
@@ -197,7 +156,7 @@ class NotificationOutboundSchedulerTest {
                 .thenReturn(List.of(candidate(NOTIFICATION_ID, "DDL_T24H", 2)));
         when(mapper.claimOutbound(NOTIFICATION_ID, NOW, LEASE, NOW)).thenReturn(1);
         doThrow(new BusinessException(ErrorCode.INTERNAL_ERROR, "发送失败"))
-                .when(oneBotApiClient).sendPrivateMsg(anyLong(), anyString());
+                .when(officialBotSender).sendProactive(anyLong(), anyString());
 
         NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
 
@@ -211,8 +170,8 @@ class NotificationOutboundSchedulerTest {
     @DisplayName("失败错误信息脱敏：不含令牌/请求体")
     void sanitizesFailureMessage() {
         doThrow(new BusinessException(ErrorCode.INTERNAL_ERROR,
-                "OneBot 回复发送失败，请稍后在 Web 工作台操作。"))
-                .when(oneBotApiClient).sendPrivateMsg(anyLong(), anyString());
+                "官方机器人发送失败，请稍后在 Web 工作台操作。"))
+                .when(officialBotSender).sendProactive(anyLong(), anyString());
 
         scheduler.dispatchOnce();
 
@@ -252,8 +211,7 @@ class NotificationOutboundSchedulerTest {
         when(mapper.selectOutboundCandidates(now, 10)).thenReturn(List.of(candidate));
         when(mapper.claimOutbound(NOTIFICATION_ID, now, lease, now)).thenReturn(1);
         NotificationOutboundScheduler nanosScheduler = new NotificationOutboundScheduler(
-                mapper, userConfigService, policy, rateLimiter, jitter, oneBotApiClient,
-                mock(OfficialBotSender.class),
+                mapper, userConfigService, policy, officialBotSender,
                 Clock.fixed(nanosNow.atZone(ZONE).toInstant(), ZONE),
                 true, true, 10, 60, 30);
 
@@ -273,7 +231,7 @@ class NotificationOutboundSchedulerTest {
         NotificationOutboundScheduler.DispatchSummary summary = scheduler.dispatchOnce();
 
         assertThat(summary.sent()).isEqualTo(1);
-        verify(oneBotApiClient).sendPrivateMsg(24681012L, "提醒正文");
+        verify(officialBotSender).sendProactive(USER_ID, "提醒正文");
         verify(mapper, never()).markRetry(anyLong(), any(), any(), anyInt(), anyString(), any());
         verify(mapper, never()).markFallback(anyLong(), any(), anyString(), any());
     }
@@ -291,8 +249,8 @@ class NotificationOutboundSchedulerTest {
         assertThat(second.failed()).isEqualTo(1);
         // 消息已实际送达两次：系统行为与“正常路径至少一次投递 + 本地去重”的契约一致，
         // 不能声明严格恰好一次。
-        verify(oneBotApiClient, org.mockito.Mockito.times(2))
-                .sendPrivateMsg(24681012L, "提醒正文");
+        verify(officialBotSender, org.mockito.Mockito.times(2))
+                .sendProactive(USER_ID, "提醒正文");
         verify(mapper, never()).markRetry(anyLong(), any(), any(), anyInt(), anyString(), any());
     }
 
@@ -310,7 +268,7 @@ class NotificationOutboundSchedulerTest {
 
     private static NotificationOutboundPolicy.Decision pending() {
         return new NotificationOutboundPolicy.Decision(OutboundStatus.PENDING_IM, NOW,
-                null, "QQ_ONEBOT", "24681012");
+                null);
     }
 
     private static NotificationLogEntity candidate(long id, String bizType, int retryCount) {

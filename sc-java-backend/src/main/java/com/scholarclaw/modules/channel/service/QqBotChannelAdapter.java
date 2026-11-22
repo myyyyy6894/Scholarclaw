@@ -16,7 +16,7 @@ import org.springframework.stereotype.Service;
 /**
  * QQ 官方机器人入站适配器（用户自带 Bot 模式）。
  *
- * <p>与 OneBot 通道的区别：
+ * <p>官方机器人的接入约束：
  * <ul>
  *   <li><b>没有 sender→账号的全局映射</b>：连接本身就属于某个用户，消息天然归属该用户；</li>
  *   <li>只接受经 Web 一次性挑战确认的私聊 openid；群身份与私聊身份不能直接等同；</li>

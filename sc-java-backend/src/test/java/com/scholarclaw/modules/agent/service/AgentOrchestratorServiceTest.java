@@ -186,7 +186,7 @@ class AgentOrchestratorServiceTest {
     @Test
     @DisplayName("/ddl：以平台消息身份调用提取，不再走自然语言分类")
     void slashDdlUsesPlatformIdentity() {
-        when(ddlExtractionService.extractForPlatform(eq(USER_ID), eq("QQ_ONEBOT"),
+        when(ddlExtractionService.extractForPlatform(eq(USER_ID), eq("QQ_OFFICIAL"),
                 eq("msg_1"), eq("本周五下午五点前交实验报告"), isNull(),
                 eq("2026-10-25T12:00:00+08:00"), eq(false)))
                 .thenReturn(new DdlExtractVO(DdlExtractOutcome.CREATED,
@@ -211,7 +211,7 @@ class AgentOrchestratorServiceTest {
         ArgumentCaptor<PendingIntent> captor = ArgumentCaptor.forClass(PendingIntent.class);
         verify(pendingIntentStore).save(eq(USER_ID), captor.capture());
         assertThat(captor.getValue().rawText()).isEqualTo("帮我看看这个怎么办");
-        assertThat(captor.getValue().platform()).isEqualTo("QQ_ONEBOT");
+        assertThat(captor.getValue().platform()).isEqualTo("QQ_OFFICIAL");
         assertThat(captor.getValue().sourceMsgId()).isEqualTo("msg_1");
         verifyNoInteractions(ddlTaskService, ddlExtractionService);
     }
@@ -220,7 +220,7 @@ class AgentOrchestratorServiceTest {
     @DisplayName("自然语言 DDL_EXTRACT：一次分类后复用 payload 落库")
     void naturalDdlPersistsRoutedPayload() {
         stubRoute("DDL_EXTRACT", 0.9, payload());
-        when(ddlExtractionService.persistRouted(eq(USER_ID), eq("QQ_ONEBOT"), eq("msg_1"),
+        when(ddlExtractionService.persistRouted(eq(USER_ID), eq("QQ_OFFICIAL"), eq("msg_1"),
                 eq("周五下午五点前交操作系统实验二报告"), isNull(), eq(false), any()))
                 .thenReturn(new DdlExtractVO(DdlExtractOutcome.CREATED,
                         taskVO(TASK_ID, "ACTIVE"), null));
@@ -228,7 +228,7 @@ class AgentOrchestratorServiceTest {
         AgentReply reply = service.handle(message("周五下午五点前交操作系统实验二报告"));
 
         assertThat(reply.action()).isEqualTo(AgentToolAction.DDL_EXTRACT);
-        verify(ddlExtractionService).persistRouted(eq(USER_ID), eq("QQ_ONEBOT"),
+        verify(ddlExtractionService).persistRouted(eq(USER_ID), eq("QQ_OFFICIAL"),
                 eq("msg_1"), eq("周五下午五点前交操作系统实验二报告"), isNull(), eq(false), any());
     }
 
@@ -501,8 +501,8 @@ class AgentOrchestratorServiceTest {
     void pendingIntentChoiceOneExtractsStoredText() {
         when(pendingIntentStore.load(USER_ID)).thenReturn(Optional.of(new PendingIntent(
                 "本周五下午五点前交实验报告", "2026-10-25T12:00:00+08:00",
-                "QQ_ONEBOT", "msg_old", "2001", "now")));
-        when(ddlExtractionService.extractForPlatform(eq(USER_ID), eq("QQ_ONEBOT"),
+                "QQ_OFFICIAL", "msg_old", "2001", "now")));
+        when(ddlExtractionService.extractForPlatform(eq(USER_ID), eq("QQ_OFFICIAL"),
                 eq("msg_old"), eq("本周五下午五点前交实验报告"), eq("2001"),
                 eq("2026-10-25T12:00:00+08:00"), eq(false)))
                 .thenReturn(new DdlExtractVO(DdlExtractOutcome.CREATED,
@@ -561,7 +561,7 @@ class AgentOrchestratorServiceTest {
     }
 
     private static AgentInboundMessage message(String rawText) {
-        return new AgentInboundMessage(USER_ID, "QQ_ONEBOT", "msg_1", rawText,
+        return new AgentInboundMessage(USER_ID, "QQ_OFFICIAL", "msg_1", rawText,
                 "2026-10-25T12:00:00+08:00", null, false);
     }
 
@@ -591,7 +591,7 @@ class AgentOrchestratorServiceTest {
                 false,
                 false,
                 false,
-                "QQ_ONEBOT",
+                "QQ_OFFICIAL",
                 null,
                 OffsetDateTime.parse("2026-10-15T11:40:00+08:00"),
                 OffsetDateTime.parse("2026-10-15T11:40:00+08:00"));

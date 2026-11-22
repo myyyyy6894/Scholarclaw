@@ -9,9 +9,6 @@ package com.scholarclaw.common.im;
  */
 public interface OfficialBotSender {
 
-    /** 用户是否配置了可用的官方机器人（凭据齐全）。 */
-    boolean isConfigured(Long userId);
-
     /**
      * 主动推送到用户。
      *

@@ -19,20 +19,17 @@ class NotificationOutboundPolicyTest {
     private final NotificationOutboundPolicy policy = new NotificationOutboundPolicy();
 
     @Test
-    @DisplayName("未绑定 IM：FALLBACK_WEB_ONLY，无计划推送时间")
+    @DisplayName("未验证 IM：FALLBACK_WEB_ONLY，无计划推送时间")
     void unboundUserFallsBackToWeb() {
         UserConfigEntity config = config();
-        config.setBoundImPlatform(null);
-        config.setBoundImUid(null);
+        config.setQqbotBindingVerified(0);
 
         NotificationOutboundPolicy.Decision decision = policy.resolve(
                 true, config, NotificationBizType.DDL_T24H, DAY);
 
         assertThat(decision.status()).isEqualTo(OutboundStatus.FALLBACK_WEB_ONLY);
         assertThat(decision.scheduledPushAt()).isNull();
-        assertThat(decision.imErrorMsg()).contains("未绑定");
-        assertThat(decision.targetImPlatform()).isNull();
-        assertThat(decision.targetImUid()).isNull();
+        assertThat(decision.imErrorMsg()).contains("未验证");
     }
 
     @Test
@@ -44,8 +41,6 @@ class NotificationOutboundPolicyTest {
         assertThat(decision.status()).isEqualTo(OutboundStatus.FALLBACK_WEB_ONLY);
         assertThat(decision.scheduledPushAt()).isNull();
         assertThat(decision.imErrorMsg()).contains("总开关关闭");
-        assertThat(decision.targetImPlatform()).isEqualTo("QQ_ONEBOT");
-        assertThat(decision.targetImUid()).isEqualTo("123456");
     }
 
     @Test
@@ -160,8 +155,10 @@ class NotificationOutboundPolicyTest {
         config.setTimezone("Asia/Shanghai");
         config.setDndStartTime(LocalTime.of(23, 30));
         config.setDndEndTime(LocalTime.of(7, 30));
-        config.setBoundImPlatform("QQ_ONEBOT");
-        config.setBoundImUid("123456");
+        config.setQqbotAppId("app-id");
+        config.setQqbotSecretCipher("cipher");
+        config.setQqbotOpenid("openid");
+        config.setQqbotBindingVerified(1);
         return config;
     }
 }

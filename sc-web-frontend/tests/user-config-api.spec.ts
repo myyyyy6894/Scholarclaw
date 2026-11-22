@@ -60,8 +60,6 @@ const CONFIG = {
   timezone: 'Asia/Shanghai',
   dnd_start_time: '23:30:00',
   dnd_end_time: '07:30:00',
-  bound_im_platform: null,
-  bound_im_uid: null,
   updated_at: '2026-10-20T00:00:00.000+08:00',
 }
 
@@ -156,8 +154,6 @@ describe('user config api', () => {
       timezone: 'Asia/Shanghai',
       dnd_start_time: '23:30:00',
       dnd_end_time: '07:30:00',
-      bound_im_platform: null,
-      bound_im_uid: null,
     })
 
     expect(captured(fetchMock).url).toBe('/api/v1/user/preferences')

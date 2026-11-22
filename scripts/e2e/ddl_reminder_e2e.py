@@ -6,15 +6,11 @@
 2. T-6h：due_at 在 6h 内，扫描后生成 `DDL_T6H`；
 3. 逾期：due_at 推进到过去，任务转 `OVERDUE` 并生成 `DDL_OVERDUE`；
 4. 待确认跟进：两次 `DDL_FOLLOW_UP`，第二次后 `follow_up_at = NULL`，不会出现第三次；
-5. 免打扰：非紧急跟进通知在 DND 窗口内初始为 `RATE_LIMITED_DELAYED`；
-6. T-6h 在 DND 内仍按紧急处理（不为 `RATE_LIMITED_DELAYED`）；
-7. 重复扫描：同一任务同一梯度只产生一条通知。
+5. 未配置 QQ 机器人时的站内信降级与重复扫描防重。
 
 前置（必须由操作者临时设置并在结束后恢复默认 `.env`）：
     SC_DDL_REMINDER_INITIAL_DELAY_MS=1000
     SC_DDL_REMINDER_INTERVAL_MS=3000
-    SC_IM_PUSH_ENABLED=true          # 验证 DND / IM 初始状态
-    SC_ONEBOT_BASE_URL 可指向不可达地址或 mock；本脚本不校验真实发送
 并重启 `sc-java-backend`。脚本会先检查 `.env` 中的提醒周期，过大会给出明确提示。
 
 用法：
@@ -156,27 +152,6 @@ def task_row(task_id: str) -> dict:
             "due_at": parts[4]}
 
 
-def set_preferences(client: httpx.Client, token: str, dnd_start: str, dnd_end: str,
-                    im_uid: str | None) -> None:
-    payload = {
-        "timezone": "Asia/Shanghai",
-        "dnd_start_time": dnd_start,
-        "dnd_end_time": dnd_end,
-        "bound_im_platform": "QQ_ONEBOT" if im_uid else None,
-        "bound_im_uid": im_uid,
-    }
-    status, body, text = api(client, "PUT", "/api/v1/user/preferences", token, json=payload)
-    if status != 200:
-        raise RuntimeError(f"更新偏好失败 {status} {text}")
-
-
-def dnd_window(now: datetime) -> tuple[str, str]:
-    """构造覆盖当前时刻的 3 小时免打扰窗口。"""
-    start = now - timedelta(hours=1)
-    end = now + timedelta(hours=2)
-    return start.strftime("%H:%M"), end.strftime("%H:%M")
-
-
 def main() -> int:
     global BASE
     parser = argparse.ArgumentParser(description="DDL gradient reminder real-stack E2E")
@@ -190,18 +165,10 @@ def main() -> int:
     if interval_ms > 10000:
         print(f"WARN .env 中 SC_DDL_REMINDER_INTERVAL_MS={interval_ms}；"
               f"本脚本建议 3000，否则等待时间约 {timeout:.0f}s/次")
-    if (env_value("SC_IM_PUSH_ENABLED", "false") or "false").lower() != "true":
-        print("WARN SC_IM_PUSH_ENABLED 不是 true；DND/IM 初始状态检查会失败。")
-
     with httpx.Client(timeout=30, trust_env=False) as client:
         user = register(client)
         token = user["token"]
         check("注册用户", bool(user["user_id"]), user)
-        im_uid = "9" + str(int(time.time()))[-8:]
-        dnd_start, dnd_end = dnd_window(datetime.now(TZ))
-        set_preferences(client, token, dnd_start, dnd_end, im_uid)
-        print(f"INFO DND 窗口 {dnd_start} ~ {dnd_end}，绑定 IM {im_uid}")
-
         now = datetime.now(TZ).replace(microsecond=0)
 
         # 1. T-24h：due 在 12h 后（24h 内、6h 外）
@@ -218,9 +185,6 @@ def main() -> int:
         t6 = create_task(client, token, "P9 T-6h", now + timedelta(hours=5))
         note6 = wait_for(lambda: find_notes(client, token, "DDL_T6H", t6), timeout)
         check("T-6h 生成 DDL_T6H", bool(note6), note6)
-        if note6:
-            check("T-6h 紧急通知不被 DND 延迟",
-                  note6[0].get("outbound_status") != "RATE_LIMITED_DELAYED", note6[0])
         time.sleep(interval_ms / 1000.0 * 2 + 2)
         check("T-6h 重复扫描不重复通知",
               len(find_notes(client, token, "DDL_T6H", t6)) == 1,
@@ -266,32 +230,15 @@ def main() -> int:
         check("第 2 次跟进后 follow_up_count=2", row.get("follow_up_count") == 2, row)
         check("第 2 次跟进后 follow_up_at=NULL", row.get("follow_up_at") == "NULL", row)
         if second:
-            check("DND 内非紧急跟进为 RATE_LIMITED_DELAYED",
-                  second[-1].get("outbound_status") == "RATE_LIMITED_DELAYED", second[-1])
-            check("DND 内跟进站内信仍立即落库", bool(second[-1].get("content")), second[-1])
+            check("未配置官方机器人时仅站内信",
+                  second[-1].get("outbound_status") == "FALLBACK_WEB_ONLY", second[-1])
+            check("跟进站内信立即落库", bool(second[-1].get("content")), second[-1])
         time.sleep(interval_ms / 1000.0 * 2 + 2)
         check("第 2 次跟进后不再产生第三次",
               len(find_notes(client, token, "DDL_FOLLOW_UP", follow)) == 2,
               find_notes(client, token, "DDL_FOLLOW_UP", follow))
 
-        # 5. T-6h 在 DND 内提前：due-6h 落在窗口内，仍需立即触发且不延迟
-        window_start, _ = dnd_window(now)
-        start_dt = datetime.strptime(window_start, "%H:%M").replace(
-            year=now.year, month=now.month, day=now.day, tzinfo=TZ)
-        if start_dt > now:
-            start_dt -= timedelta(days=1)
-        due_in_dnd = start_dt + timedelta(hours=6, minutes=30)
-        if due_in_dnd <= now:
-            due_in_dnd += timedelta(days=1)
-        t6_dnd = create_task(client, token, "P9 T-6h DND", due_in_dnd)
-        note_dnd = wait_for(lambda: find_notes(client, token, "DDL_T6H", t6_dnd), timeout)
-        check("DND 内 T-6h 提前触发", bool(note_dnd), note_dnd)
-        if note_dnd:
-            check("DND 内 T-6h 仍按紧急处理",
-                  note_dnd[0].get("outbound_status") != "RATE_LIMITED_DELAYED",
-                  note_dnd[0])
-
-        # 6. 任务状态与提醒位
+        # 5. 任务状态与提醒位
         row24 = task_row(t24)
         check("T-24h 提醒位已置位", (row24.get("reminded_flags", 0) & 1) == 1, row24)
         row6 = task_row(t6)

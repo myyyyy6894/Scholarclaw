@@ -7,13 +7,12 @@
  * 三条约束：
  * 1. 只接受 5~12 位数字，任何其它字符一律丢弃——避免把配置错误渲染成奇怪的号码；
  * 2. 未配置时返回空串，调用方必须整块隐藏，不显示「未配置」占位；
- * 3. 这是**联系方式**，不是 IM 绑定入口：没有运行 NapCat 时加好友收不到 DDL 提醒。
+ * 3. 联系 QQ 用于反馈。提醒由用户在设置中配置的官方机器人发送。
  */
 declare global {
   interface Window {
     __SC_OPERATOR_QQ__?: string
     __SC_PROJECT_URL__?: string
-    __SC_BOT_QQ__?: string
   }
 }
 
@@ -74,17 +73,4 @@ export function normalizeProjectUrl(value?: string): string {
     return ''
   }
   return candidate
-}
-
-/**
- * 机器人 QQ（`SC_BOT_QQ`，非密钥）。
- *
- * 与「维护者 QQ」不是同一个号：维护者用于问题反馈，机器人是真正发提醒的账号，
- * 用户必须先把机器人加为好友才能收到私聊提醒。未配置时返回空串。
- */
-export function readRuntimeBotQq(): string | undefined {
-  if (typeof window === 'undefined') {
-    return undefined
-  }
-  return window.__SC_BOT_QQ__
 }

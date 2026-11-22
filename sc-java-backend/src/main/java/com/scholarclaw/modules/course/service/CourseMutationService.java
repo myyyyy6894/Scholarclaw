@@ -54,29 +54,6 @@ public class CourseMutationService {
     }
 
     /**
-     * 默认课程懒加载与模型保存共用用户级行锁（TASK-506 二轮复核）。
-     *
-     * <p>锁内重新查询默认课程并读取配置，避免在“保存新 Key 但不迁移”的并发窗口里创建
-     * 绑定旧模型的默认课程。
-     */
-    @Transactional(rollbackFor = Exception.class)
-    public CourseNamespaceEntity getOrCreateDefaultWithUserLock(
-            Long userId, Function<UserConfigEntity, CourseNamespaceEntity> factory) {
-        userConfigService.lockForUpdate(userId);
-        CourseNamespaceEntity existing = courseNamespaceMapper.selectActiveDefaultCourse(userId);
-        if (existing != null) {
-            return existing;
-        }
-        UserConfigEntity config = userConfigService.findById(userId)
-                .orElseThrow(() -> new com.scholarclaw.common.exception.BusinessException(
-                        com.scholarclaw.common.exception.ErrorCode.AUTH_UNAUTHORIZED,
-                        "登录状态已失效，请重新登录。"));
-        CourseNamespaceEntity entity = factory.apply(config);
-        courseNamespaceMapper.insert(entity);
-        return courseNamespaceMapper.selectById(entity.getCourseId());
-    }
-
-    /**
      * 建课与用户默认模型保存共用用户级行锁（TASK-506 复核修复）。
      *
      * <p>锁住 `t_user_config` 后再读取并复制 Embedding 三元组，保证不会在“保存新 Key 但不迁移”

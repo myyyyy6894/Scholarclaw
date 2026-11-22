@@ -43,7 +43,6 @@ import {
 } from '@/views/settings/model-config-form'
 import type { ModelConfigFormState, SingleProbeType } from '@/views/settings/model-config-form'
 import { useModelProbeResults } from '@/views/settings/use-model-probe-results'
-import { readRuntimeNapcatWebuiUrl, resolveNapcatWebuiUrl } from '@/views/settings/napcat-entry'
 import {
   createPreferencesForm,
   PreferencesValidationError,
@@ -173,17 +172,6 @@ const EMBEDDING_PROVIDERS: Array<{ value: EmbeddingProvider; label: string }> = 
   { value: 'ZHIPU', label: '智谱 GLM' },
   { value: 'OLLAMA', label: 'Ollama（本地/自建）' },
 ]
-
-const IM_PLATFORMS = [
-  { value: 'QQ_ONEBOT', label: 'QQ（OneBot）' },
-  { value: 'WECOM', label: '企业微信' },
-]
-
-// QQ 扫码登录由独立 NapCat 协议端完成；这里只提供跳转，不代理其登录页。
-const napcatWebuiUrl = resolveNapcatWebuiUrl(
-  import.meta.env.VITE_NAPCAT_WEBUI_URL,
-  readRuntimeNapcatWebuiUrl(),
-)
 
 const chatKeyPlaceholder = computed(() =>
   modelForm.value.hasSavedChatKey
@@ -473,11 +461,6 @@ function goToLogin(): void {
               :label="config?.default_embedding_model ?? '未配置 Embedding'"
               tone="neutral"
             />
-            <TagBadge
-              v-if="config?.bound_im_platform"
-              label="IM 已绑定"
-              tone="primary"
-            />
           </div>
         </div>
         <div class="settings-hero__status">
@@ -718,45 +701,7 @@ function goToLogin(): void {
               </el-form-item>
             </el-col>
           </el-row>
-          <el-row :gutter="16">
-            <el-col :xs="24" :sm="8">
-              <el-form-item label="IM 平台（可选）">
-                <el-select
-                  v-model="prefsForm.imPlatform"
-                  clearable
-                  class="sc-settings__full"
-                  placeholder="不绑定"
-                >
-                  <el-option
-                    v-for="item in IM_PLATFORMS"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="16">
-              <el-form-item label="IM 账号标识（可选）">
-                <el-input v-model="prefsForm.imUid" placeholder="例如 QQ 号 24681012" />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <div class="sc-settings__row">
-            <span class="sc-settings__hint">
-              IM 绑定可选：不绑定也能使用全部 Web 功能，站内通知照常送达；绑定后由部署者运行的机器人 QQ 推送提醒。
-            </span>
-            <el-link
-              type="primary"
-              :href="napcatWebuiUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              打开 NapCat 登录页
-            </el-link>
-          </div>
           <div class="sc-settings__row sc-settings__row--end">
-            <span class="sc-settings__hint">平台与账号必须同时填写或同时留空。</span>
             <el-button type="primary" :loading="savingPrefs" @click="onSavePreferences">
               保存偏好
             </el-button>

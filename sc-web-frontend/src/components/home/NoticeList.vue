@@ -42,6 +42,7 @@ const subtitleText = computed(() => {
 type Tone = 'primary' | 'success' | 'warning' | 'danger' | 'neutral'
 
 const TONE_BY_TYPE: Record<NotificationBizType, Tone> = {
+  SCHEDULE_T20M: 'primary',
   DDL_T24H: 'warning',
   DDL_T6H: 'danger',
   DDL_OVERDUE: 'danger',

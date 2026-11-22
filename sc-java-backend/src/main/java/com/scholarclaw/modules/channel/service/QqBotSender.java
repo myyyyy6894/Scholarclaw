@@ -54,10 +54,18 @@ public class QqBotSender implements OfficialBotSender {
     @Override
     public boolean sendProactive(Long userId, String content) {
         UserConfigEntity config = userConfigService.findById(userId).orElse(null);
+        return sendProactive(config, config == null ? null : config.getQqbotBindingVersion(), content);
+    }
+
+    @Override
+    public boolean sendProactive(Long userId, long bindingVersion, String content) {
+        return sendProactive(userConfigService.findById(userId).orElse(null), bindingVersion, content);
+    }
+
+    private boolean sendProactive(UserConfigEntity config, Long bindingVersion, String content) {
         String openid = config == null ? null : config.getQqbotOpenid();
-        if (config == null || !verifiedFor(config, config.getQqbotAppId(),
-                config.getQqbotBindingVersion(), openid)) {
-            log.debug("用户尚未验证 QQ 身份，跳过主动推送 userId={}", userId);
+        if (config == null || !verifiedFor(config, config.getQqbotAppId(), bindingVersion, openid)) {
+            log.debug("QQ 绑定不可用，跳过主动推送");
             return false;
         }
         Credential credential = credential(config);

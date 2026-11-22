@@ -13,5 +13,11 @@ public record NotificationCreateCommand(
         Long bizId,
         String title,
         String content,
-        String traceId) {
+        String traceId,
+        Long externalDeadlineEpoch) {
+
+    public NotificationCreateCommand(Long userId, NotificationBizType bizType, Long bizId, String title,
+                                     String content, String traceId) {
+        this(userId, bizType, bizId, title, content, traceId, null);
+    }
 }

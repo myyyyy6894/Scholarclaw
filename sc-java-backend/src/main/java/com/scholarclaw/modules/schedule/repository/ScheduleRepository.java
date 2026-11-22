@@ -49,6 +49,10 @@ public class ScheduleRepository {
     public List<Term> terms(long userId) {
         return jdbc.query("SELECT * FROM t_schedule_term WHERE user_id=? ORDER BY is_active DESC, first_monday DESC, term_id DESC", TERM, userId);
     }
+    public Optional<Term> activeTerm(long userId) {
+        return jdbc.query("SELECT * FROM t_schedule_term WHERE user_id=? AND is_active=1", TERM, userId)
+                .stream().findFirst();
+    }
     public Optional<Term> term(long userId, long termId) {
         return jdbc.query("SELECT * FROM t_schedule_term WHERE user_id=? AND term_id=?", TERM, userId, termId).stream().findFirst();
     }

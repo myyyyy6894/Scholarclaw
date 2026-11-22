@@ -8,6 +8,7 @@ import { apiRequest } from '@/api/client'
  */
 
 export type NotificationBizType =
+  | 'SCHEDULE_T20M'
   | 'DDL_T24H'
   | 'DDL_T6H'
   | 'DDL_OVERDUE'

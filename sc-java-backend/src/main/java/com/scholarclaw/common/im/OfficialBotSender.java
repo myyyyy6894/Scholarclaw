@@ -15,4 +15,7 @@ public interface OfficialBotSender {
      * @return 是否真正投递；用户尚未与机器人建立会话（无 openid）时返回 false
      */
     boolean sendProactive(Long userId, String content);
+
+    /** Send only if the binding captured by the notification is still current. */
+    boolean sendProactive(Long userId, long bindingVersion, String content);
 }

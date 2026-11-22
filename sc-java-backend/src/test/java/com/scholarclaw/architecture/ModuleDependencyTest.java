@@ -44,14 +44,14 @@ class ModuleDependencyTest {
             new ModuleRule("userconfig", List.of()),
             new ModuleRule("auth", List.of("userconfig")),
             new ModuleRule("course", List.of("userconfig")),
-            new ModuleRule("schedule", List.of("course", "userconfig")),
+            new ModuleRule("schedule", List.of("course", "userconfig", "notification")),
             new ModuleRule("planning", List.of("schedule", "ddl", "userconfig")),
             new ModuleRule("notification", List.of("userconfig")),
             new ModuleRule("ddl", List.of("course", "userconfig", "notification")),
             new ModuleRule("knowledge", List.of("course", "userconfig", "notification")),
             new ModuleRule("agent", List.of("ddl", "knowledge", "course", "userconfig", "notification")),
             new ModuleRule("channel", List.of("agent", "knowledge", "userconfig")),
-            new ModuleRule("scheduler", List.of("ddl", "knowledge", "course", "userconfig"))
+            new ModuleRule("scheduler", List.of("ddl", "knowledge", "course", "userconfig", "schedule"))
     );
 
     private static JavaClasses productionClasses;

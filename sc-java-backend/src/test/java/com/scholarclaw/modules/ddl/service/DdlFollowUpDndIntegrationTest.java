@@ -123,7 +123,7 @@ class DdlFollowUpDndIntegrationTest {
         return new NotificationOutboundScheduler(notificationMapper, userConfigService,
                 new NotificationOutboundPolicy(), officialBotSender,
                 Clock.fixed(now.atZone(ZONE).toInstant(), ZONE),
-                true, true, 10, 60, 30);
+                true, true, 10, 60, 30, null);
     }
 
     private static UserConfigEntity config() {

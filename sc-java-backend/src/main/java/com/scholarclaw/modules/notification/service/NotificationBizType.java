@@ -9,6 +9,7 @@ package com.scholarclaw.modules.notification.service;
  */
 public enum NotificationBizType {
 
+    SCHEDULE_T20M(false),
     DDL_T24H(false),
     DDL_T6H(true),
     DDL_OVERDUE(false),

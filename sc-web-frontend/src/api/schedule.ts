@@ -144,3 +144,14 @@ export const listOccurrences = (termId: BigIntId, from: string, to: string): Pro
   const query = new URLSearchParams({ term_id: termId, from, to })
   return apiRequest(`/v1/schedule/occurrences?${query}`)
 }
+
+export interface ScheduleReminderPreference {
+  enabled: boolean
+  version: number
+  delivery: 'WEB_QQ' | 'WEB_ONLY_DISABLED' | 'WEB_ONLY_UNVERIFIED'
+}
+const scheduleReminderPath = '/v1/schedule/reminder-preference'
+export const getScheduleReminderPreference = (): Promise<ScheduleReminderPreference> =>
+  apiRequest(scheduleReminderPath)
+export const setScheduleReminderPreference = (enabled: boolean, version: number): Promise<ScheduleReminderPreference> =>
+  apiRequest(scheduleReminderPath, { method: 'PUT', body: { enabled, version } })

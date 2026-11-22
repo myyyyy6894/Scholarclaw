@@ -2,6 +2,7 @@ package com.scholarclaw.modules.notification.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.scholarclaw.common.config.ScTimeZone;
+import com.scholarclaw.common.enums.OutboundStatus;
 import com.scholarclaw.common.exception.BusinessException;
 import com.scholarclaw.common.exception.ErrorCode;
 import com.scholarclaw.common.filter.TraceContext;
@@ -91,8 +92,23 @@ public class NotificationService {
         NotificationOutboundPolicy.Decision decision = outboundPolicy.resolve(
                 imPushEnabled, config, command.bizType(), now);
 
+        if (command.bizType() == NotificationBizType.SCHEDULE_T20M) {
+            if (command.externalDeadlineEpoch() == null || command.bizId() == null) {
+                throw new IllegalArgumentException("课前提醒必须有分组与开课截止时间");
+            }
+            if (decision.scheduledPushAt() != null
+                    && decision.scheduledPushAt().atZone(clock.getZone()).toEpochSecond() >= command.externalDeadlineEpoch()) {
+                decision = new NotificationOutboundPolicy.Decision(OutboundStatus.FALLBACK_WEB_ONLY, null,
+                        "免打扰结束时课程已开始，仅站内信");
+            }
+        }
+
         NotificationLogEntity entity = new NotificationLogEntity();
         entity.setUserId(command.userId());
+        entity.setExternalDeadlineEpoch(command.externalDeadlineEpoch());
+        if (command.bizType() == NotificationBizType.SCHEDULE_T20M && config != null) {
+            entity.setQqBindingVersion(config.getQqbotBindingVersion());
+        }
         entity.setBizType(command.bizType().name());
         entity.setBizId(command.bizId());
         entity.setTitle(title);
@@ -112,6 +128,10 @@ public class NotificationService {
                 entity.getNotificationId(), entity.getUserId(), entity.getBizType(),
                 entity.getOutboundStatus());
         return entity.getNotificationId();
+    }
+
+    public boolean invalidateScheduleOutbound(long userId, long notificationId) {
+        return notificationLogMapper.invalidateScheduleOutbound(userId, notificationId, LocalDateTime.now(clock)) == 1;
     }
 
     /** 由 TASK-801 的 {@code DdlReminderDispatch} 映射后调用；格式化 DDL 提醒卡片文案。 */

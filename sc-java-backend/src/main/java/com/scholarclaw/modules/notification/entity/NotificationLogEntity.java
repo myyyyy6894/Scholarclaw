@@ -29,6 +29,9 @@ public class NotificationLogEntity {
     private Integer imRetryCount;
     private String imErrorMsg;
     private LocalDateTime scheduledPushAt;
+    private Long externalDeadlineEpoch;
+    private Long qqBindingVersion;
+    private Integer scheduleSendStarted;
     private LocalDateTime sentImAt;
     private LocalDateTime readAt;
     private String traceId;
@@ -138,6 +141,12 @@ public class NotificationLogEntity {
     public void setScheduledPushAt(LocalDateTime scheduledPushAt) {
         this.scheduledPushAt = scheduledPushAt;
     }
+
+    public Long getExternalDeadlineEpoch() { return externalDeadlineEpoch; }
+    public void setExternalDeadlineEpoch(Long value) { externalDeadlineEpoch = value; }
+    public Long getQqBindingVersion() { return qqBindingVersion; }
+    public void setQqBindingVersion(Long value) { qqBindingVersion = value; }
+    public Integer getScheduleSendStarted() { return scheduleSendStarted; }
 
     public LocalDateTime getSentImAt() {
         return sentImAt;

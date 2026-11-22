@@ -159,4 +159,24 @@ public interface NotificationLogMapper extends BaseMapper<NotificationLogEntity>
                      @Param("leaseUntil") LocalDateTime leaseUntil,
                      @Param("errorMsg") String errorMsg,
                      @Param("now") LocalDateTime now);
+
+    @Update("""
+            UPDATE t_notification_log
+               SET outbound_status='FALLBACK_WEB_ONLY', scheduled_push_at=NULL,
+                   im_error_msg='课程安排已变化，仅保留站内记录', updated_at=#{now}
+             WHERE user_id=#{userId} AND notification_id=#{id} AND biz_type='SCHEDULE_T20M'
+               AND schedule_send_started=0
+               AND (outbound_status IN ('PENDING_IM','RATE_LIMITED_DELAYED')
+                    OR (outbound_status='FALLBACK_WEB_ONLY' AND im_error_msg='当前课程安排已变化，仅保留站内记录'))
+            """)
+    int invalidateScheduleOutbound(@Param("userId") long userId, @Param("id") long id, @Param("now") LocalDateTime now);
+
+    @Update("""
+            UPDATE t_notification_log SET schedule_send_started=1,updated_at=#{now}
+             WHERE notification_id=#{id} AND biz_type='SCHEDULE_T20M'
+               AND outbound_status IN ('PENDING_IM','RATE_LIMITED_DELAYED')
+               AND schedule_send_started=0 AND scheduled_push_at=#{leaseUntil} AND external_deadline_epoch>#{epoch}
+            """)
+    int startScheduleSend(@Param("id") long id, @Param("leaseUntil") LocalDateTime leaseUntil,
+                          @Param("epoch") long epoch, @Param("now") LocalDateTime now);
 }

@@ -1,5 +1,5 @@
 {
-  "schema_version": "V1.0.14",
+  "schema_version": "V1.0.15",
   "migration_table": "sc_schema_migration",
   "forbidden_tables": [
     "t_ddl_subtask",
@@ -1448,6 +1448,27 @@
             "nullable": false,
             "default": "CURRENT_TIMESTAMP(3)",
             "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+          },
+          {
+            "name": "external_deadline_epoch",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "qq_binding_version",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "schedule_send_started",
+            "type": "tinyint",
+            "nullable": false,
+            "default": "0",
+            "extra": ""
           }
         ],
         "indexes": [
@@ -2387,6 +2408,145 @@
         ],
         "checks": [
           "chk_schedule_import"
+        ]
+      },
+      "t_schedule_reminder_pref": {
+        "columns": [
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "enabled",
+            "type": "tinyint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "version",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "user_id"
+            ]
+          },
+          {
+            "name": "idx_schedule_reminder_pref_enabled",
+            "unique": false,
+            "columns": [
+              "enabled",
+              "user_id"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_reminder_pref"
+        ]
+      },
+      "t_schedule_reminder": {
+        "columns": [
+          {
+            "name": "reminder_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": "auto_increment"
+          },
+          {
+            "name": "user_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "term_id",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "start_epoch",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "schedule_version",
+            "type": "bigint",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "member_keys",
+            "type": "json",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "group_fingerprint",
+            "type": "char(64)",
+            "nullable": false,
+            "default": null,
+            "extra": ""
+          },
+          {
+            "name": "active",
+            "type": "tinyint",
+            "nullable": false,
+            "default": "1",
+            "extra": ""
+          },
+          {
+            "name": "notification_id",
+            "type": "bigint",
+            "nullable": true,
+            "default": null,
+            "extra": ""
+          }
+        ],
+        "indexes": [
+          {
+            "name": "PRIMARY",
+            "unique": true,
+            "columns": [
+              "reminder_id"
+            ]
+          },
+          {
+            "name": "uk_schedule_reminder_start",
+            "unique": true,
+            "columns": [
+              "user_id",
+              "start_epoch"
+            ]
+          },
+          {
+            "name": "idx_schedule_reminder_expiry",
+            "unique": false,
+            "columns": [
+              "start_epoch"
+            ]
+          }
+        ],
+        "checks": [
+          "chk_schedule_reminder"
         ]
       }
     },

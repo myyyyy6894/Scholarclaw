@@ -55,7 +55,7 @@ class NotificationOutboundSchedulerTest {
         officialBotSender = mock(OfficialBotSender.class);
         scheduler = new NotificationOutboundScheduler(mapper, userConfigService, policy,
                 officialBotSender,
-                CLOCK, true, true, 10, 60, 30);
+                CLOCK, true, true, 10, 60, 30, null);
         when(userConfigService.findById(USER_ID)).thenReturn(Optional.of(new UserConfigEntity()));
         when(mapper.selectOutboundCandidates(NOW, 10))
                 .thenReturn(List.of(candidate(NOTIFICATION_ID, "DDL_T24H", 0)));
@@ -213,7 +213,7 @@ class NotificationOutboundSchedulerTest {
         NotificationOutboundScheduler nanosScheduler = new NotificationOutboundScheduler(
                 mapper, userConfigService, policy, officialBotSender,
                 Clock.fixed(nanosNow.atZone(ZONE).toInstant(), ZONE),
-                true, true, 10, 60, 30);
+                true, true, 10, 60, 30, null);
 
         nanosScheduler.dispatchOnce();
 

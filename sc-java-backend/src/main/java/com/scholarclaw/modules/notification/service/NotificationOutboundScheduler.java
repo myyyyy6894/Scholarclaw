@@ -46,6 +46,7 @@ public class NotificationOutboundScheduler {
     private final NotificationOutboundPolicy outboundPolicy;
     private final OfficialBotSender officialBotSender;
     private final Clock clock;
+    private final ScheduleReminderOutboundGuard scheduleGuard;
     private final boolean enabled;
     private final boolean imPushEnabled;
     private final int batchSize;
@@ -66,12 +67,14 @@ public class NotificationOutboundScheduler {
                                          @Value("${sc.notification.outbound.lease-seconds:60}")
                                          long leaseSeconds,
                                          @Value("${sc.notification.outbound.retry-delay-seconds:30}")
-                                         long retryDelaySeconds) {
+                                         long retryDelaySeconds,
+                                         ScheduleReminderOutboundGuard scheduleGuard) {
         this.mapper = mapper;
         this.userConfigService = userConfigService;
         this.outboundPolicy = outboundPolicy;
         this.officialBotSender = officialBotSender;
         this.clock = clock;
+        this.scheduleGuard = scheduleGuard;
         this.enabled = enabled;
         this.imPushEnabled = imPushEnabled;
         this.batchSize = Math.max(1, batchSize);
@@ -165,6 +168,7 @@ public class NotificationOutboundScheduler {
             return Outcome.FALLBACK;
         }
 
+        if (bizType == NotificationBizType.SCHEDULE_T20M) return dispatchSchedule(candidate, leaseUntil);
         UserConfigEntity config = userConfigService.findById(candidate.getUserId()).orElse(null);
         NotificationOutboundPolicy.Decision decision = outboundPolicy.resolve(
                 imPushEnabled, config, bizType, now);
@@ -178,6 +182,62 @@ public class NotificationOutboundScheduler {
             return Outcome.DELAYED;
         }
         return dispatchViaOfficialBot(candidate, leaseUntil, now);
+    }
+
+    private Outcome dispatchSchedule(NotificationLogEntity candidate, LocalDateTime lease) {
+        var id = candidate.getNotificationId();
+        var instant = clock.instant();
+        var now = LocalDateTime.ofInstant(instant, clock.getZone()).truncatedTo(ChronoUnit.MILLIS);
+        long epoch = instant.getEpochSecond();
+        Long deadline = candidate.getExternalDeadlineEpoch();
+        if (Integer.valueOf(1).equals(candidate.getScheduleSendStarted())) {
+            return scheduleFallback(id, lease, "QQ 投递结果未知，仅保留站内信", now);
+        }
+        if (deadline == null || epoch >= deadline) {
+            return scheduleFallback(id, lease, "课程已开始，停止 QQ 投递", now);
+        }
+        var config = userConfigService.findById(candidate.getUserId()).orElse(null);
+        var decision = outboundPolicy.resolve(imPushEnabled, config, NotificationBizType.SCHEDULE_T20M, now);
+        if (decision.status() == OutboundStatus.FALLBACK_WEB_ONLY) {
+            return scheduleFallback(id, lease, decision.imErrorMsg(), now);
+        }
+        if (config == null || candidate.getQqBindingVersion() == null
+                || !candidate.getQqBindingVersion().equals(config.getQqbotBindingVersion())) {
+            return scheduleFallback(id, lease, "QQ 绑定已变化，仅站内信", now);
+        }
+        if (candidate.getBizId() == null || scheduleGuard == null || !scheduleGuard.isCurrent(candidate.getUserId(),
+                candidate.getBizId(), id, instant)) {
+            return scheduleFallback(id, lease, "当前课程安排已变化，仅保留站内记录", now);
+        }
+        if (decision.status() == OutboundStatus.RATE_LIMITED_DELAYED) {
+            if (decision.scheduledPushAt().atZone(clock.getZone()).toEpochSecond() >= deadline) {
+                return scheduleFallback(id, lease, "免打扰结束时课程已开始，仅站内信", now);
+            }
+            mapper.markRateLimited(id, lease, decision.scheduledPushAt(), null, now);
+            return Outcome.DELAYED;
+        }
+        // Mark the start durably before crossing the transport boundary. A lost result never sends again.
+        instant = clock.instant();
+        now = LocalDateTime.ofInstant(instant, clock.getZone()).truncatedTo(ChronoUnit.MILLIS);
+        epoch = instant.getEpochSecond();
+        if (epoch >= deadline) return scheduleFallback(id, lease, "课程已开始，停止 QQ 投递", now);
+        if (now.isAfter(lease) || mapper.startScheduleSend(id, lease, epoch, now) != 1) return Outcome.SKIPPED;
+        long minutes = Math.max(1, (deadline - epoch + 59) / 60);
+        String body = "距离上课约 " + minutes + " 分钟。\n" + candidate.getContent();
+        boolean delivered;
+        try {
+            delivered = officialBotSender.sendProactive(candidate.getUserId(), candidate.getQqBindingVersion(), body);
+        } catch (RuntimeException e) {
+            return scheduleFallback(id, lease, "QQ 投递结果未知，仅保留站内信", now);
+        }
+        if (!delivered) return scheduleFallback(id, lease, "QQ 会话不可用，仅站内信", now);
+        mapper.markSent(id, lease, LocalDateTime.now(clock).truncatedTo(ChronoUnit.MILLIS));
+        return Outcome.SENT;
+    }
+
+    private Outcome scheduleFallback(long id, LocalDateTime lease, String message, LocalDateTime now) {
+        mapper.markFallback(id, lease, message, now);
+        return Outcome.FALLBACK;
     }
 
     /**

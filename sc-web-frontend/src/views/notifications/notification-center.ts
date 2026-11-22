@@ -14,6 +14,7 @@ import type {
  */
 
 export const BIZ_TYPE_LABELS: Record<NotificationBizType, string> = {
+  SCHEDULE_T20M: '课前提醒',
   DDL_T24H: 'T-24h 提醒',
   DDL_T6H: 'T-6h 紧急',
   DDL_OVERDUE: '逾期提醒',
@@ -26,6 +27,7 @@ export const BIZ_TYPE_LABELS: Record<NotificationBizType, string> = {
 export type NotificationTagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
 
 export const BIZ_TYPE_TAG_TYPES: Record<NotificationBizType, NotificationTagType> = {
+  SCHEDULE_T20M: 'primary',
   DDL_T24H: 'warning',
   DDL_T6H: 'danger',
   DDL_OVERDUE: 'danger',

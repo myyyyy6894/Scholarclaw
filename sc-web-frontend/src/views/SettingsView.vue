@@ -5,6 +5,9 @@ import { Bot, KeyRound, ShieldAlert, SlidersHorizontal, UserX } from '@lucide/vu
 import { ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
+import { getScheduleReminderPreference, setScheduleReminderPreference } from '@/api/schedule'
+import type { ScheduleReminderPreference } from '@/api/schedule'
+
 import {
   clearApiKeys,
   connectQqBot,
@@ -72,6 +75,36 @@ const prefsForm = ref<PreferencesFormState>(createPreferencesForm())
 
 const savingModel = ref(false)
 const savingPrefs = ref(false)
+const scheduleReminder = ref<ScheduleReminderPreference | null>(null)
+const reminderBusy = ref(false)
+const reminderError = ref('')
+const reminderDelivery = computed(() => {
+  switch (scheduleReminder.value?.delivery) {
+    case 'WEB_QQ': return '站内通知和已验证的 QQ 私聊。QQ 投递遵守免打扰时间。'
+    case 'WEB_ONLY_UNVERIFIED': return '仅站内通知。验证 QQ 私聊绑定后可同步接收。'
+    case 'WEB_ONLY_DISABLED': return '仅站内通知。当前部署未开启 QQ 主动推送。'
+    default: return ''
+  }
+})
+
+async function loadScheduleReminder(): Promise<void> {
+  reminderError.value = ''
+  try { scheduleReminder.value = await getScheduleReminderPreference() }
+  catch { reminderError.value = '课前提醒设置读取失败。' }
+}
+
+async function toggleScheduleReminder(enabled: boolean | string | number): Promise<void> {
+  const current = scheduleReminder.value
+  if (!current || reminderBusy.value || typeof enabled !== 'boolean') return
+  reminderBusy.value = true
+  try {
+    scheduleReminder.value = await setScheduleReminderPreference(enabled, current.version)
+    notifySuccess(enabled ? '课前提醒已开启。' : '课前提醒已关闭。')
+  } catch (error) {
+    notifyError(error)
+    await loadScheduleReminder()
+  } finally { reminderBusy.value = false }
+}
 
 // ---- QQ 官方机器人（用户自带 Bot）----
 const qqbotAppId = ref('')
@@ -112,6 +145,7 @@ async function onConnectQqBot(): Promise<void> {
     await connectQqBot(appId, secret)
     qqbotSecret.value = ''
     qqbotBindingToken.value = ''
+    void loadScheduleReminder()
     notifySuccess('机器人连接已启动，请获取绑定码并通过 QQ 私聊发送。')
     await loadConfig()
   } catch (error) {
@@ -129,6 +163,7 @@ async function onDisconnectQqBot(): Promise<void> {
   try {
     await disconnectQqBot()
     qqbotBindingToken.value = ''
+    void loadScheduleReminder()
     notifySuccess('机器人已断开，凭据已清除。')
     await loadConfig()
   } catch (error) {
@@ -189,6 +224,7 @@ const hasAnyConfig = computed(() => isModelConfigured(config.value))
 
 onMounted(() => {
   void loadConfig()
+  void loadScheduleReminder()
 })
 
 async function loadConfig(): Promise<void> {
@@ -707,6 +743,14 @@ function goToLogin(): void {
             </el-button>
           </div>
         </el-form>
+
+        <el-divider content-position="left">课前提醒</el-divider>
+        <el-switch v-if="scheduleReminder" :model-value="scheduleReminder.enabled" :loading="reminderBusy"
+          aria-label="提前 20 分钟提醒" active-text="提前 20 分钟提醒" @change="toggleScheduleReminder" />
+        <p v-if="scheduleReminder">按当前学期的实际开课时间发送。{{ reminderDelivery }}</p>
+        <p v-if="reminderError" role="alert">{{ reminderError }}
+          <el-button text type="primary" @click="loadScheduleReminder">重试</el-button>
+        </p>
       </BaseCard>
 
       <BaseCard class="settings-card">

@@ -35,7 +35,7 @@ interface QuickAction {
   description: string
   image: string
   to: RouteLocationRaw
-  tone: 'blue' | 'green' | 'purple' | 'orange' | 'pink'
+  tone: 'blue' | 'green' | 'purple' | 'orange'
 }
 
 const QUICK_ACTIONS: QuickAction[] = [
@@ -48,7 +48,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     title: '知识库',
-    description: '上传课件 · 检索引用',
+    description: '资料管理 · 检索引用',
     image: '/illustrations/feature-knowledge.png',
     to: { name: 'knowledge' },
     tone: 'green',
@@ -66,13 +66,6 @@ const QUICK_ACTIONS: QuickAction[] = [
     image: '/illustrations/feature-ddl.png',
     to: { name: 'ddl' },
     tone: 'orange',
-  },
-  {
-    title: '上传课件',
-    description: 'PDF / MD / TXT',
-    image: '/illustrations/status-loading.png',
-    to: { name: 'knowledge' },
-    tone: 'pink',
   },
 ]
 
@@ -258,7 +251,7 @@ async function openNotice(item: NotificationItem): Promise<void> {
 
 .home__quick {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -288,30 +281,17 @@ async function openNotice(item: NotificationItem): Promise<void> {
   }
 }
 
-@media (max-width: 1023px) {
-  .home__quick {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 900px) {
+  .home__quick {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .home__grid {
     grid-template-columns: 1fr;
   }
 
   .home__rail {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 700px) {
-  .home__quick {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  /* 5 个入口在双列布局下最后一个占满整行，避免留下半行空白。 */
-  .home__quick > :last-child:nth-child(odd) {
-    grid-column: 1 / -1;
   }
 }
 

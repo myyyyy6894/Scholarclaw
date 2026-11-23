@@ -29,18 +29,13 @@ defineProps<{
       </span>
       <h2>{{ greeting }}，{{ userName }}</h2>
       <p>今天也要加油学习呀！你的专属 AI 学术与工程助手，随时为你服务。</p>
-      <div class="hero-banner__actions">
-        <router-link
-          class="hero-banner__primary"
-          :to="{ name: authenticated ? 'rag' : 'login' }"
-        >
-          {{ authenticated ? '开始提问' : '登录 / 注册' }}
-          <ArrowRight :size="15" :stroke-width="1.9" />
-        </router-link>
-        <router-link v-if="authenticated" class="hero-banner__secondary" :to="{ name: 'knowledge' }">
-          上传课件
-        </router-link>
-      </div>
+      <router-link
+        class="hero-banner__primary"
+        :to="{ name: authenticated ? 'rag' : 'login' }"
+      >
+        {{ authenticated ? '开始提问' : '登录 / 注册' }}
+        <ArrowRight :size="15" :stroke-width="1.9" />
+      </router-link>
     </div>
   </section>
 </template>
@@ -122,48 +117,27 @@ defineProps<{
   line-height: 1.7;
 }
 
-.hero-banner__actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 6px;
-}
-
-.hero-banner__primary,
-.hero-banner__secondary {
+.hero-banner__primary {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 36px;
+  margin-top: 6px;
   padding: 0 16px;
   border-radius: var(--sc-radius-button);
-  font-size: var(--sc-font-caption);
-  font-weight: 500;
-  text-decoration: none;
-  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
-}
-
-.hero-banner__primary {
   color: #fff;
   background: var(--sc-primary);
   box-shadow: 0 8px 18px rgba(79, 140, 255, 0.28);
+  font-size: var(--sc-font-caption);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.18s ease, transform 0.18s ease;
 }
 
 .hero-banner__primary:hover {
   background: var(--sc-primary-strong);
   color: #fff;
   transform: translateY(-1px);
-}
-
-.hero-banner__secondary {
-  border: 1px solid var(--sc-border);
-  color: var(--sc-text-secondary);
-  background: var(--sc-surface);
-}
-
-.hero-banner__secondary:hover {
-  border-color: var(--sc-primary);
-  color: var(--sc-primary);
 }
 
 @media (max-width: 900px) {

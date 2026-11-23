@@ -75,18 +75,13 @@ const fileIcon = FileText
           ? '登录后即可查看当前课程的最近课件与解析状态。'
           : courseName === null
             ? '创建课程并上传课件后，最近的文档会显示在这里。'
-            : '当前课程还没有课件，上传 PDF / MD / TXT 后即可检索。'
+            : '当前课程还没有课件。'
       "
       compact
     >
-      <template #action>
-        <router-link
-          class="card-link"
-          :to="{
-            name: authenticated ? (courseName === null ? 'courses' : 'knowledge') : 'login',
-          }"
-        >
-          {{ authenticated ? (courseName === null ? '新建课程' : '上传课件') : '登录 / 注册' }}
+      <template v-if="!authenticated || courseName === null" #action>
+        <router-link class="card-link" :to="{ name: authenticated ? 'courses' : 'login' }">
+          {{ authenticated ? '新建课程' : '登录 / 注册' }}
         </router-link>
       </template>
     </EmptyState>

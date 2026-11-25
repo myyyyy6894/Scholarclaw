@@ -83,6 +83,10 @@ const FAQ = [
     a: '通常是课件还没解析完成（状态不是「就绪」），或问题确实超出课件范围。换一种问法、或补充相关课件后再试。',
   },
   {
+    q: 'QQ 机器人显示在线，为什么私聊没回复？',
+    a: '「在线」表示机器人已连接 QQ。首次使用或更换机器人后，请到「设置 → QQ 提醒」获取绑定码，用自己的 QQ 私聊发送网页给出的完整命令。收到绑定成功的回复后，就可以聊天或查课表了。',
+  },
+  {
     q: '可以在手机上用吗？',
     a: '可以，页面自适应手机。上传大文件建议在电脑上操作。',
   },
@@ -186,20 +190,17 @@ const FAQ = [
       </div>
 
       <div class="guide-block">
-        <h4>QQ 提醒（可选，自带机器人）</h4>
+        <h4>QQ 助手与提醒</h4>
         <p>
-          截止提醒默认走站内通知。想让机器人直接私聊提醒你，需要用自己的 QQ 号创建一个官方机器人：
+          绑定你自己的官方 QQ 机器人后，可以私聊打招呼、闲聊、查课表和管理待办，也可以接收 QQ 提醒。
         </p>
         <ol class="guide-steps-inline">
-          <li>打开 <a href="https://bot.q.qq.com/open" target="_blank" rel="noopener noreferrer">QQ 开放平台</a>，用 QQ 登录并创建机器人</li>
-          <li>在「开发设置」里复制 <code>AppID</code> 与 <code>AppSecret</code></li>
-          <li>回到「设置 → QQ 提醒」，填入并点「连接」</li>
-          <li>用 QQ 私聊这个机器人一次，即完成绑定</li>
+          <li>在 <a href="https://bot.q.qq.com/open" target="_blank" rel="noopener noreferrer">QQ 开放平台</a> 创建机器人，从「开发设置」复制 AppID 和 AppSecret。</li>
+          <li>在 <router-link :to="{ name: 'settings', hash: '#qq-bot' }">设置 → QQ 提醒</router-link> 填写两项凭据，点「连接」。已经显示在线时，可以直接获取绑定码。</li>
+          <li>点「获取绑定码」，用自己的 QQ 私聊机器人，发送网页显示的完整 <code>/绑定</code> 命令。收到绑定成功的回复后，试着发一句「你好」。</li>
         </ol>
         <p class="guide-note">
-          机器人是你自己创建的，只有你能给它发消息，也只有你会收到提醒。
-          AppSecret 在服务端加密保存，页面不会回显。
-          平台对主动消息有配额（每个用户每天 1000 条），日常提醒远够用。
+          绑定码只用一次，用来确认接收课表、待办和提醒的 QQ 身份。AppSecret 会加密保存。
         </p>
         <p v-if="operatorQq" class="guide-note">
           机器人与下方「维护者 QQ」不是同一个号：机器人给你发提醒，维护者用于问题反馈。
@@ -417,6 +418,11 @@ const FAQ = [
   color: var(--sc-text-secondary);
   font-size: var(--sc-font-caption);
   line-height: 1.9;
+}
+
+.guide-steps-inline a {
+  color: var(--sc-primary);
+  text-underline-offset: 3px;
 }
 
 .guide-note {

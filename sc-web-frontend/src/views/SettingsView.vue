@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { Bot, KeyRound, ShieldAlert, SlidersHorizontal, UserX } from '@lucide/vue'
 import { ElMessageBox } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import { getScheduleReminderPreference, setScheduleReminderPreference } from '@/api/schedule'
 import type { ScheduleReminderPreference } from '@/api/schedule'
@@ -61,6 +61,7 @@ import type { PreferencesFormState } from '@/views/settings/preferences-form'
  */
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const loading = ref(true)
@@ -226,6 +227,10 @@ onMounted(() => {
   void loadConfig()
   void loadScheduleReminder()
 })
+
+watch(() => !loading.value && route.hash === '#qq-bot', (showQqBot) => {
+  if (showQqBot) document.getElementById('qq-bot')?.scrollIntoView({ block: 'start' })
+}, { flush: 'post' })
 
 async function loadConfig(): Promise<void> {
   loading.value = true
@@ -753,7 +758,7 @@ function goToLogin(): void {
         </p>
       </BaseCard>
 
-      <BaseCard class="settings-card">
+      <BaseCard id="qq-bot" class="settings-card">
         <template #header>
           <div class="settings-card__heading">
             <span class="settings-card__icon">
@@ -762,8 +767,7 @@ function goToLogin(): void {
             <div>
               <h3>QQ 提醒（自带机器人）</h3>
               <p>
-                在 QQ 开放平台创建你自己的机器人，把 AppID / AppSecret 填在这里，
-                DDL 提醒就能直接发到你的 QQ。
+                连接并绑定自己的 QQ 机器人后，可以私聊聊天、查课表和接收提醒。
               </p>
             </div>
           </div>
@@ -775,7 +779,9 @@ function goToLogin(): void {
           <span v-if="config?.qqbot_app_id" class="sc-settings__hint">
             AppID：{{ config.qqbot_app_id }}
           </span>
-          <span v-if="config?.qqbot_bound" class="sc-settings__hint">· 已完成绑定</span>
+          <el-tag v-if="config?.qqbot_app_id" :type="config.qqbot_bound ? 'success' : 'warning'" size="small">
+            {{ config.qqbot_bound ? '已完成绑定' : '待绑定 QQ' }}
+          </el-tag>
         </div>
 
         <el-alert

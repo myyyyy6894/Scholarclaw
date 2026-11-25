@@ -19,6 +19,7 @@ public enum AgentToolAction {
     TASK_CANCEL,
     KB_INGEST_GUIDE,
     KB_QA_GUIDE,
+    CHAT_REPLY,
     HELP,
     CLARIFY,
     IGNORE

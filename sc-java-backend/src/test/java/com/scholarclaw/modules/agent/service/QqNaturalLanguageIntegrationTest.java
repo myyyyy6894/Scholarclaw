@@ -99,7 +99,9 @@ class QqNaturalLanguageIntegrationTest {
                     var output = mapper.createObjectNode().put("action", item.path("action").asText()).put("confidence", 0.93);
                     output.set("arguments", item.path("arguments"));
                     output.set("missing", item.path("missing"));
-                    output.putArray("evidence").add(text);
+                    var evidence = output.putArray("evidence");
+                    if (item.hasNonNull("chat_reply")) output.set("chat_reply", item.path("chat_reply"));
+                    else evidence.add(text);
                     return output;
                 });
         when(python.postJson(eq(PythonAiEngineClient.ROUTE_AND_EXTRACT_PATH), any(), anyLong(), any(Duration.class)))
@@ -109,6 +111,22 @@ class QqNaturalLanguageIntegrationTest {
                     return mapper.createObjectNode().put("intent", item == null ? "CHITCHAT_HELP" : item.path("legacy").asText())
                             .put("intent_confidence", 0.93);
                 });
+    }
+
+    @Test
+    void verifiedPrivateChatRepliesToGreetingAndEverydayConversation() {
+        var user = owner();
+        adapter.handle(new InboundMessage(user.id(), user.session().appId(), user.session().bindingVersion(),
+                user.session().openid(), "你好", "greeting-smoke", false, null));
+        verify(sender).reply(eq(user.id()), eq(user.session().appId()), eq(user.session().bindingVersion()),
+                eq(user.session().openid()), eq("greeting-smoke"), eq(1), contains("你好"));
+        verifyNoInteractions(python);
+
+        var chat = agent.handle(message(user, "今天有点累，想找人聊聊"));
+        assertThat(chat.action()).isEqualTo(AgentToolAction.CHAT_REPLY);
+        assertThat(chat.replyText()).contains("我听着");
+        assertThat(chat.requiresConfirmation()).isFalse();
+        assertThat(reminders.preference(user.id()).version()).isZero();
     }
 
     @Test

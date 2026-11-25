@@ -149,14 +149,16 @@ public class QqNaturalLanguageService {
                 if (candidates.size() > MAX_CHOICES) yield guide("找到多项相似任务，请提供更完整的标题或任务编号。");
                 yield target(message, user, decision.action(), candidates, date, time, window, null);
             }
-            case IGNORE -> answer(AgentToolAction.IGNORE, "已忽略这条操作请求。", null, false);
+            case CHAT -> new AgentReply(AgentIntent.CHITCHAT_HELP, decision.confidence(), AgentToolAction.CHAT_REPLY,
+                    decision.chatReply(), null, null, false);
+            case IGNORE -> answer(AgentToolAction.IGNORE, "好，这次先不操作。", null, false);
             case UNSUPPORTED -> guide("QQ 目前支持查询课表、当前学期的课前 20 分钟提醒以及待办管理。");
             case CLARIFY -> guide("请说明要查哪一天的课、调整哪项提醒，或修改哪一条待办。");
             case KB_QA -> new AgentReply(AgentIntent.KB_QA, decision.confidence(), AgentToolAction.KB_QA_GUIDE,
                     "请到 Web 工作台的「课程问答」选择课程后提问。", null, null, false);
             case KB_INGEST -> new AgentReply(AgentIntent.KB_INGEST, decision.confidence(), AgentToolAction.KB_INGEST_GUIDE,
                     "请到 Web 工作台的「知识库」上传课件。", null, null, false);
-            default -> guide("可以问「明早第一节在哪」、查看待办或开启课前 20 分钟提醒。也可以使用 /list、/ddl、/edit。");
+            default -> guide("可以和我聊聊天，也可以问「明早第一节在哪」、查看待办或开启课前 20 分钟提醒。快捷指令有 /list、/ddl、/edit。");
         };
     }
 

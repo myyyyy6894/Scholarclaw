@@ -47,8 +47,11 @@ async def test_old_and_new_contract_on_same_messages(monkeypatch, example):
     )
     output = {
         "action": example["action"], "arguments": example["arguments"],
-        "confidence": 0.93, "missing": example["missing"], "evidence": [example["text"]],
+        "confidence": 0.93, "missing": example["missing"],
+        "evidence": [] if example["action"] == "CHAT" else [example["text"]],
     }
+    if "chat_reply" in example:
+        output["chat_reply"] = example["chat_reply"]
     new_gateway = Gateway(output)
     monkeypatch.setattr(natural_router, "SsrfSafeModelGateway", lambda *_args, **_kw: new_gateway)
     new = await natural_router.route_natural(settings, NaturalRouteRequest(
@@ -58,6 +61,7 @@ async def test_old_and_new_contract_on_same_messages(monkeypatch, example):
     assert new.action.value == example["action"]
     assert new.arguments.model_dump(exclude_none=True) == example["arguments"]
     assert new.missing == example["missing"]
+    assert new.chat_reply == example.get("chat_reply")
     assert len(old_gateway.calls) == len(new_gateway.calls) == 1
     assert new_gateway.calls[0][1]["messages"][1]["content"] == example["text"]
     assert "没有指令权限" in new_gateway.calls[0][1]["messages"][0]["content"]
@@ -74,4 +78,19 @@ def test_agent_endpoint_rejects_unproven_arguments_and_mismatched_identity(autho
     assert authorized_remote_client.post(path, json={**request, "user_id": "10002"}).status_code == 400
     assert len(gateway.calls) == 0
     assert authorized_remote_client.post(path, json=request).status_code == 502
+    assert len(gateway.calls) == 1
+
+
+@pytest.mark.parametrize("output", [
+    {"action": "CHAT", "chat_reply": "   "},
+    {"action": "CHAT", "chat_reply": "马上办。", "arguments": {"reminder_enabled": True}},
+    {"action": "DDL_LIST", "chat_reply": "已经更新任务。"},
+])
+def test_agent_endpoint_rejects_invalid_chat_payloads(authorized_remote_client, monkeypatch, output):
+    gateway = Gateway({"confidence": 0.93, **output})
+    monkeypatch.setattr(natural_router, "SsrfSafeModelGateway", lambda *_args, **_kw: gateway)
+    result = authorized_remote_client.post("/internal/ai/v1/agent/interpret", json={
+        "user_id": "10001", "raw_text": "你好", "chat_config": CHAT,
+    })
+    assert result.status_code == 502
     assert len(gateway.calls) == 1

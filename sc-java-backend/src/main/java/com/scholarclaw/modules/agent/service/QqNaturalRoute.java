@@ -19,16 +19,23 @@ import org.springframework.stereotype.Component;
 class QqNaturalRoute {
     enum Action {
         SCHEDULE_QUERY, REMINDER_GET, REMINDER_SET, DDL_LIST, DDL_QUERY, DDL_RESCHEDULE, DDL_DONE, DDL_CANCEL,
-        DDL_CONFIRM, DDL_EXTRACT, KB_QA, KB_INGEST, CLARIFY, HELP, UNSUPPORTED, IGNORE
+        DDL_CONFIRM, DDL_EXTRACT, KB_QA, KB_INGEST, CLARIFY, HELP, CHAT, UNSUPPORTED, IGNORE
     }
     enum ScheduleView { LIST, FIRST, NEXT, CONFLICTS }
     record Decision(Action action, BigDecimal confidence, String taskHint, String date, String time,
-                    String period, ScheduleView scheduleView, Boolean enabled) { }
+                    String period, ScheduleView scheduleView, Boolean enabled, String chatReply) { }
 
     private static final BigDecimal READ_THRESHOLD = new BigDecimal("0.60");
     private static final BigDecimal WRITE_THRESHOLD = new BigDecimal("0.70");
     private static final Logger log = LoggerFactory.getLogger(QqNaturalRoute.class);
     private static final Pattern NEGATIVE = Pattern.compile("不要|别|不必|无需|不想|不用|取消刚才|算了");
+    private static final Pattern NEGATED_OPERATION = Pattern.compile(
+            "(?:不要|别|不必|不用|无需)(?:再)?(?:关|开|取消|停|改|挪|删|标|确认)");
+    private static final Pattern OPERATION_SUBJECT = Pattern.compile("提醒|通知|任务|待办|作业|截止|[Tt][0-9]+");
+    private static final Pattern WITHDRAWAL = Pattern.compile("^(?:取消|算了|放弃|不用了|不要执行)[。！？!?]*$");
+    private static final Pattern GREETING = Pattern.compile(
+            "^(?:你好[呀啊哇哦]?|您好|嗨|哈[喽啰]|hello|hi|hey|在吗|在不在)[。！？!?～~]*$",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern MOVE_TASK = Pattern.compile("^(?:请)?把(.{1,120}?)(?:挪到|改到|改成|推迟到|延到)(.{1,80})[。！？?!]?$");
     private static final Pattern TWENTY = Pattern.compile("提前\\s*(?:20|二十|２０)\\s*分");
     private static final Pattern LEAD = Pattern.compile("提前\\s*(?:[0-9０-９]+|[一二两三四五六七八九十半]+)\\s*(?:分|小时)");
@@ -48,8 +55,8 @@ class QqNaturalRoute {
 
     Decision classify(AgentInboundMessage message, ResolvedUser user) {
         String text = message.rawText().strip();
-        if (Pattern.compile("(?:不要|别|不必|不用|无需)(?:再)?(?:关|开|取消|停|改|挪|删|标|确认)").matcher(text).find()
-                || text.contains("不想收到作业通知")) return decision(Action.IGNORE);
+        if (GREETING.matcher(text).matches()) return greeting();
+        if (isWithdrawal(text)) return decision(Action.IGNORE);
         long start = System.nanoTime();
         try {
             var endpoint = users.resolveChatEndpoint(user.config());
@@ -76,9 +83,20 @@ class QqNaturalRoute {
             throw new IllegalArgumentException("invalid confidence");
         }
         BigDecimal confidence = score.decimalValue();
-        if (confidence.compareTo(mutates(action) ? WRITE_THRESHOLD : READ_THRESHOLD) < 0) return decision(Action.CLARIFY);
         var arguments = data.path("arguments");
         if (!arguments.isObject() || !data.path("evidence").isArray()) throw new IllegalArgumentException("invalid arguments");
+        if (action == Action.CHAT) {
+            String chatReply = data.path("chat_reply").textValue();
+            if (chatReply == null || chatReply.isBlank() || chatReply.length() > 500) {
+                throw new IllegalArgumentException("invalid chat reply");
+            }
+            return chat(confidence, chatReply.strip());
+        }
+        if (action == Action.IGNORE) {
+            return shouldIgnore(text) ? decision(Action.IGNORE)
+                    : chat(confidence, "我在听。你想聊聊什么？");
+        }
+        if (confidence.compareTo(mutates(action) ? WRITE_THRESHOLD : READ_THRESHOLD) < 0) return decision(Action.CLARIFY);
         for (JsonNode element : data.path("evidence")) {
             if (!element.isTextual() || element.textValue().isBlank() || !text.contains(element.textValue())) {
                 throw new IllegalArgumentException("invalid evidence");
@@ -95,7 +113,7 @@ class QqNaturalRoute {
         var enabledValue = arguments.path("reminder_enabled");
         Boolean enabled = enabledValue.isBoolean() ? enabledValue.booleanValue() : null;
         if (action == Action.REMINDER_SET && !canSetReminder(text, enabled)) return decision(Action.UNSUPPORTED);
-        return new Decision(action, confidence, hint, date, time, period, view, enabled);
+        return new Decision(action, confidence, hint, date, time, period, view, enabled, null);
     }
 
     private static String literal(JsonNode args, String key, String text, int max) {
@@ -112,30 +130,52 @@ class QqNaturalRoute {
     }
 
     static Decision fallback(String text) {
-        if (QUOTED_INSTRUCTION.matcher(text).find() || NEGATIVE.matcher(text).find()) return decision(Action.IGNORE);
+        if (GREETING.matcher(text).matches()) return greeting();
+        if (shouldIgnore(text)) return decision(Action.IGNORE);
         String date = QqRelativeTime.dateFragment(text);
         String time = QqRelativeTime.clockFragment(text);
         if (COURSE.matcher(text).find() && text.contains("提醒")) {
             Boolean enabled = REMINDER_OFF.matcher(text).find() ? Boolean.FALSE
                     : REMINDER_ON.matcher(text).find() ? Boolean.TRUE : null;
             if (enabled == null) return decision(Action.REMINDER_GET);
+            if (NEGATIVE.matcher(text).find()) return decision(Action.IGNORE);
             if (!canSetReminder(text, enabled)) return decision(Action.UNSUPPORTED);
-            return new Decision(Action.REMINDER_SET, BigDecimal.ONE, null, null, null, null, null, enabled);
+            return new Decision(Action.REMINDER_SET, BigDecimal.ONE, null, null, null, null, null, enabled, null);
         }
         if (SCHEDULE_READ.matcher(text).find() && (date != null || COURSE.matcher(text).find())) {
             ScheduleView view = text.contains("下节") ? ScheduleView.NEXT
                     : text.contains("第一节") || text.contains("最早") ? ScheduleView.FIRST
                     : Pattern.compile("撞|重叠|冲突").matcher(text).find() ? ScheduleView.CONFLICTS : ScheduleView.LIST;
             return new Decision(Action.SCHEDULE_QUERY, BigDecimal.ONE, null, date, time,
-                    view == ScheduleView.FIRST ? null : QqRelativeTime.periodFragment(text), view, null);
+                    view == ScheduleView.FIRST ? null : QqRelativeTime.periodFragment(text), view, null, null);
         }
         var move = MOVE_TASK.matcher(text);
         if (move.matches()) {
+            if (NEGATIVE.matcher(text).find()) return decision(Action.IGNORE);
             return new Decision(Action.DDL_RESCHEDULE, BigDecimal.ONE, move.group(1).strip(),
-                    QqRelativeTime.dateFragment(move.group(2)), QqRelativeTime.clockFragment(move.group(2)), null, null, null);
+                    QqRelativeTime.dateFragment(move.group(2)), QqRelativeTime.clockFragment(move.group(2)), null, null, null, null);
         }
         if (text.matches(".*(?:待办列表|查看待办|我的任务|有哪些作业).*")) return decision(Action.DDL_LIST);
-        return decision(Action.HELP);
+        if (text.matches(".*(?:你能做什么|你会什么|怎么用|有哪些功能).*")) return decision(Action.HELP);
+        return chat(BigDecimal.ONE, "对话模型暂时没连上。你可以晚点再试，我们再接着聊。");
+    }
+
+    private static boolean shouldIgnore(String text) {
+        return QUOTED_INSTRUCTION.matcher(text).find() || isWithdrawal(text);
+    }
+
+    private static boolean isWithdrawal(String text) {
+        return WITHDRAWAL.matcher(text).matches()
+                || (NEGATED_OPERATION.matcher(text).find() && OPERATION_SUBJECT.matcher(text).find())
+                || text.contains("不想收到作业通知");
+    }
+
+    private static Decision greeting() {
+        return chat(BigDecimal.ONE, "你好呀，我在。今天过得怎么样？");
+    }
+
+    private static Decision chat(BigDecimal confidence, String reply) {
+        return new Decision(Action.CHAT, confidence, null, null, null, null, null, null, reply);
     }
 
     private static boolean canSetReminder(String text, Boolean enabled) {
@@ -148,6 +188,6 @@ class QqNaturalRoute {
     }
 
     private static Decision decision(Action action) {
-        return new Decision(action, BigDecimal.ONE, null, null, null, null, ScheduleView.LIST, null);
+        return new Decision(action, BigDecimal.ONE, null, null, null, null, ScheduleView.LIST, null, null);
     }
 }

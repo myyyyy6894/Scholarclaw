@@ -16,7 +16,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.ddl_extract import DdlPayload
 from app.schemas.probe import ModelEndpointPayload
@@ -55,6 +55,7 @@ class NaturalAction(StrEnum):
     KB_INGEST = "KB_INGEST"
     CLARIFY = "CLARIFY"
     HELP = "HELP"
+    CHAT = "CHAT"
     UNSUPPORTED = "UNSUPPORTED"
     IGNORE = "IGNORE"
 
@@ -86,3 +87,15 @@ class NaturalRouteData(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     missing: list[Literal["task", "date", "exact_time", "scope"]] = Field(default_factory=list, max_length=4)
     evidence: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(default_factory=list, max_length=6)
+    chat_reply: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_chat_reply(self) -> NaturalRouteData:
+        if self.action == NaturalAction.CHAT:
+            if self.chat_reply is None or not self.chat_reply.strip():
+                raise ValueError("chat requires a non-empty reply")
+            if self.arguments.model_dump(exclude_none=True) or self.missing or self.evidence:
+                raise ValueError("chat cannot carry action parameters")
+        elif self.chat_reply is not None:
+            raise ValueError("only chat may include a reply")
+        return self
